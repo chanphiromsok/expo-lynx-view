@@ -1,0 +1,39 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.lynx'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.lynx"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // Lynx runtime + the XElement Behaviors required for <input> / <textarea> and
+  // other extended elements (without these: RuntimeException: "No BehaviorController
+  // defined for class input"). Mirrors lynx-expo-demo/packages/lynx-view.
+  implementation "org.lynxsdk.lynx:lynx:4.0.0"
+  implementation "org.lynxsdk.lynx:lynx-jssdk:4.0.0"
+  implementation "org.lynxsdk.lynx:lynx-trace:4.0.0"
+  implementation "org.lynxsdk.lynx:primjs:4.0.0"
+  implementation "org.lynxsdk.lynx:xelement:4.0.0"
+  implementation "org.lynxsdk.lynx:xelement-input:4.0.0"
+
+  // Log and HTTP services used by LynxEnv.init.
+  implementation "org.lynxsdk.lynx:lynx-service-log:4.0.0"
+  implementation "org.lynxsdk.lynx:lynx-service-http:4.0.0"
+  implementation "com.squareup.okhttp3:okhttp:4.9.0"
+
+  // ponytail: skipping Coil image service registration. Demo bundles
+  // (static.lynx) don't reference images. Add Coil + an ILynxImageService
+  // impl when the Lynx page actually loads images.
+}

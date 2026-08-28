@@ -1,0 +1,13 @@
+name = "lynx-delivery"
+main = "src/index.ts"
+compatibility_date = "2026-08-28"
+
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "lynx-artifacts"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lynx-delivery"
+# Replace this placeholder after `wrangler d1 create lynx-delivery`.
+database_id = "00000000-0000-0000-0000-000000000000"
