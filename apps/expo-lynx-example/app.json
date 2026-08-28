@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "plugins": [
       [
-        "../app.plugin.js",
+        "expo-lynx",
         {
           "bundledResources": [
             "./assets/static.lynx",

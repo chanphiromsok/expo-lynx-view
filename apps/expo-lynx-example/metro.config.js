@@ -4,7 +4,7 @@ const path = require('path');
 
 const config = getDefaultConfig(__dirname);
 const exampleRoot = __dirname;
-const moduleRoot = path.resolve(__dirname, '..');
+const moduleRoot = path.resolve(__dirname, '..', '..', 'packages', 'expo-lynx');
 
 config.watchFolders = [moduleRoot];
 

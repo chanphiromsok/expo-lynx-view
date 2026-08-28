@@ -3,8 +3,8 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
-      "expo-lynx": ["../src/index"],
-      "expo-lynx/*": ["../src/*"]
+      "expo-lynx": ["../../packages/expo-lynx/src/index"],
+      "expo-lynx/*": ["../../packages/expo-lynx/src/*"]
     }
   }
 }
