@@ -1,0 +1,31 @@
+{
+  "name": "expo-lynx-example",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "expo": "~57.0.16",
+    "expo-constants": "~17.0.8",
+    "expo-lynx": "workspace:*",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-webview": "~13.16.0",
+    "react-native-safe-area-context": "~5.7.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "babel-preset-expo": "~57.0.8",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "private": true,
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "../../packages/expo-lynx"
+    }
+  }
+}

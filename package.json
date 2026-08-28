@@ -1,0 +1,17 @@
+{
+  "name": "expo-lynx-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "ios": "pnpm --filter expo-lynx-example ios",
+    "android": "pnpm --filter expo-lynx-example android",
+    "start": "pnpm --filter expo-lynx-example start",
+    "build": "pnpm --filter expo-lynx build",
+    "test": "pnpm --filter expo-lynx test",
+    "lint": "pnpm --filter expo-lynx lint"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "expo-lynx-example",
+    "slug": "expo-lynx-example",
+    "version": "1.0.0",
+    "plugins": [
+      [
+        "../app.plugin.js",
+        {
+          "bundledResources": [
+            "./assets/static.lynx",
+            "./assets/static"
+          ]
+        }
+      ]
+    ],
+    "extra": {
+      "lynxDevBundleHost": "192.168.28.196",
+      "lynxDevBundlePort": 3000,
+      "lynxProdBundleUrl": "https://example.com/main.lynx.bundle"
+    },
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "expo.modules.lynx.example",
+      "appleTeamId": "4QDQZA9V92"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "expo.modules.lynx.example"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
