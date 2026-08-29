@@ -157,9 +157,10 @@ At each managed open the store reconciles the current namespace: abandoned
 `staging/` is removed, incomplete ready directories are discarded, and up to
 four unprotected ready releases (256 MiB total) are retained. Active,
 previous-LKG, pending, and attempting IDs from channel state are protected from
-eviction. Installation reserves archive + expanded bytes using the volume's
-important-usage capacity before downloading, so an insufficient-space failure
-leaves the local embedded/cache fallback usable.
+eviction. Installation reserves archive + expanded bytes plus a 10% (minimum
+10 MiB) working margin using the volume's important-usage capacity before
+downloading, so an insufficient-space failure leaves the local embedded/cache
+fallback usable.
 
 ## Testing workflow
 

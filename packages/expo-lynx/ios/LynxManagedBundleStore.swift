@@ -385,7 +385,13 @@ actor LynxManagedBundleStore {
   private func ensureDiskSpace(requiredBytes: Int64) throws {
     let values = try? rootURL.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
     let available = values?.volumeAvailableCapacityForImportantUsage
-    guard available == nil || Int64(available!) >= requiredBytes else {
+    // Keep a modest reserve beyond the compressed + declared expanded bytes:
+    // APFS metadata and the atomic promotion need working room too.
+    let safetyMargin = max(Int64(10 * 1_024 * 1_024), requiredBytes / 10)
+    let reservation = requiredBytes.addingReportingOverflow(safetyMargin)
+    guard !reservation.overflow,
+      available == nil || Int64(available!) >= reservation.partialValue
+    else {
       throw LynxDeliveryError(stage: .resource, code: "ERR_LYNX_DISK_SPACE", message: "There is not enough free storage to install this Lynx release.")
     }
   }

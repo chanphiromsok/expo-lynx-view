@@ -794,6 +794,15 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
           "feature": context.feature, "channel": context.channel, "phase": "downloaded",
           "releaseId": release.manifestID, "version": release.version, "revision": revision,
         ])
+        // A source replacement cancels its automatic check. The immutable
+        // installation may finish (it is safely deduplicated by the store),
+        // but an obsolete view must not mutate this source's channel pointers.
+        guard !Task.isCancelled else {
+          return [
+            "feature": context.feature, "channel": context.channel, "status": "downloaded",
+            "releaseId": release.manifestID, "version": release.version,
+          ]
+        }
         guard release.manifestID != displayedManifestID,
           !(await LynxManagedChannelState.shared.isFailed(
             manifestID: release.manifestID, feature: context.feature, channel: context.channel
@@ -836,6 +845,12 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       expectedFeature: context.feature,
       expectedChannel: context.channel
     )
+    guard !Task.isCancelled else {
+      return [
+        "feature": context.feature, "channel": context.channel, "status": "downloaded",
+        "releaseId": release.manifestID, "version": release.version,
+      ]
+    }
     guard release.manifestID != displayedManifestID,
       !(await LynxManagedChannelState.shared.isFailed(
         manifestID: release.manifestID, feature: context.feature, channel: context.channel
