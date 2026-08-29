@@ -39,7 +39,7 @@ evict
 ## Requirements
 
 - Monotonic progress/duration and one terminal result per transaction.
-- Correlate native prefetch/install/load without secrets.
+- Correlate native update-check/download/install/load without secrets.
 - Automate valid, corrupt signature/hash, traversal, duplicate, limit bomb,
   incompatible runtime, offline, timeout, process death, candidate failure,
   rollback, and cache eviction.

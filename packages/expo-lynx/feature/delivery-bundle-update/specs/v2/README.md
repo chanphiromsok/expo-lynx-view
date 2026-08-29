@@ -19,8 +19,9 @@ they:
 - share one atomic correctness boundary; or
 - are not independently useful in production.
 
-Examples: ZIP extraction is part of installation, prefetch produces the state
-consumed by activation, and channel reads are the exact output of promotion.
+Examples: ZIP extraction is part of installation, a channel update check can
+produce the pending state consumed by activation only when it finds a new
+release, and channel reads are the exact output of promotion.
 
 Optional optimization and final E2E gates remain separate. A developer should
 be able to read one assigned spec and understand the complete usable result.
@@ -44,8 +45,10 @@ These decisions are frozen for every implementation slice:
   provide domain separation.
 - Full signature/archive/file verification occurs on installation. Cached and
   embedded opens perform bounded structural checks only.
-- RN prefetch cannot replace a mounted view. `next-open` is default;
-  `on-launch` requires a separately healthy candidate view.
+- An RN channel update check cannot replace a mounted view. It requests a ZIP
+  only when the advertised release differs from ready/pending state.
+  `next-open` is default; `on-launch` requires a separately healthy candidate
+  view.
 - Android implementation is deferred to the development roadmap. When it
   resumes, engine reuse is optional and cannot cross feature/release/template
   identity; correctness remains defined with reuse disabled.
@@ -125,7 +128,7 @@ flowchart TB
   S03[S03 public API + channel operations]
   S04[S04 local signed parity server]
   M03[M03 iOS extract + install]
-  M04[M04 RN prefetch + iOS activation]
+  M04[M04 RN update check + iOS activation]
   M05[M05 iOS cache + disk + recovery]
   M06[M06 iOS telemetry + E2E]
   S05[S05 server security + E2E]
@@ -164,7 +167,7 @@ is the iOS telemetry/internal Release gate. Android work is preserved in
 | M01 | [Shared release protocol](./mobile/m01-shared-release-protocol.md) | Exact typed signed payload/archive contract and fixtures |
 | M02 | [Expo resources and trust verification](./mobile/m02-trust-roots-signature-verification.md) | Generated baselines + one public key embedded once; Swift verifies |
 | M03 | [iOS ZIP extraction and installation](./mobile/m03-ios-archive-installation.md) | Signed bounded extract, one-time verification, atomic ready store |
-| M04 | [RN prefetch and iOS activation/recovery](./mobile/m04-prefetch-activation-recovery.md) | Public API, progress, next-open/candidate activation, rollback |
+| M04 | [RN update check and iOS activation/recovery](./mobile/m04-update-check-activation-recovery.md) | Channel check, conditional download, progress, next-open/candidate activation, rollback |
 | M05 | [iOS cache, disk, and recovery](./mobile/m05-ios-cache-disk-recovery.md) | iOS bounded retention and deterministic recovery |
 | M06 | [iOS telemetry and E2E](./mobile/m06-ios-telemetry-e2e.md) | iOS internal Release failure matrix and evidence |
 

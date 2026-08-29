@@ -57,7 +57,8 @@ device/server risk. Do not modify the PR unless separately asked to fix it.
 - [ ] Network, hashing, and extraction stay off the UI/RN thread.
 - [ ] UIKit/LynxView and Android View mutations occur on the platform UI thread.
 - [ ] Cancellation or unmount cannot let stale work replace a newer source.
-- [ ] Concurrent prefetch of the same release is deduplicated.
+- [ ] Concurrent update checks for the same newly advertised release are
+      deduplicated; unchanged/ready/pending releases make no ZIP request.
 - [ ] Staging and final directories cannot expose a partial release.
 - [ ] Active/pending pointers change only after the final release is complete.
 - [ ] Process death during download, extraction, or candidate startup recovers

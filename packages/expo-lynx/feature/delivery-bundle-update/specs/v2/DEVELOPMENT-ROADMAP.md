@@ -19,7 +19,7 @@ M02 iOS resources   S04 local signed server
            ↓
 M03 iOS extract + install
            ↓
-M04 RN prefetch + iOS activation/recovery
+M04 RN update check + conditional download + iOS activation/recovery
 
 Server implementation in parallel:
 S01 → S02 release storage/upload → S03 channel API/operations → S05 server E2E
@@ -30,8 +30,9 @@ S01 → S02 release storage/upload → S03 channel API/operations → S05 server
 - Physical iPhone internal Release loads exact-feature embedded baseline.
 - A signed local/Cloudflare ZIP installs atomically and opens from cache without
   a full rehash.
-- RN prefetch, progress, `next-open`, optional candidate `on-launch`, force
-  timing, rollback, process-death recovery, and terminal splash behavior pass.
+- RN channel update check, conditional download/install only for a new release,
+  `next-open`, optional candidate `on-launch`, force timing, rollback,
+  process-death recovery, and terminal splash behavior pass.
 - Producer CLI, D1/R2 publication, public routes, promotion, rollback, and
   server E2E gates pass.
 - No Android/Kotlin/native Android implementation or Android build evidence is

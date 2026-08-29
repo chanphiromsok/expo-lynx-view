@@ -1,20 +1,23 @@
-# M04 — React Native prefetch, iOS activation, candidate view, and recovery
+# M04 — React Native update check, conditional download, iOS activation, candidate view, and recovery
 
-**Spec:** `feature/delivery-bundle-update/specs/v2/mobile/m04-prefetch-activation-recovery.md`
+**Spec:** `feature/delivery-bundle-update/specs/v2/mobile/m04-update-check-activation-recovery.md`
 
 ## Goal
 
-Expose one understandable React Native prefetch/progress API and connect it to
-the complete iOS open/activation lifecycle: immediate local UI, `next-open` by
+Expose one understandable React Native update-check API and connect it to the
+complete iOS open/activation lifecycle: immediate local UI, a small throttled
+channel check, ZIP download only for a newly advertised release, `next-open` by
 default, optional separate candidate view, health confirmation, process-death
 rollback, and terminal splash callbacks.
 
 ## Why these tasks are merged
 
-Prefetch produces `pendingReleaseId`; activation consumes it. Splitting the API
-from activation left unclear whether prefetch changed the visible view and who
-owned terminal events. One coordinator now owns open, prefetch, install
-observation, activation, and recovery, while React Native owns only product UI.
+The update check produces `pendingReleaseId` only after a channel advertises a
+new release and that release installs successfully; activation consumes it.
+Splitting the check/download API from activation left unclear whether an update
+could change the visible view and who owned terminal events. One coordinator
+now owns open, check, conditional download, install observation, activation,
+and recovery, while React Native owns only product UI.
 
 ## Depends on
 
@@ -33,20 +36,24 @@ observation, activation, and recovery, while React Native owns only product UI.
 ## Public API
 
 ```ts
-prefetchLynxBundle(options: {
+checkForLynxBundleUpdate(options: {
   feature: string;
   channel?: 'stable' | 'beta';
 }): Promise<{
   feature: string;
   channel: string;
-  releaseId: string;
-  version: string;
-  status: 'already-ready' | 'downloaded' | 'pending';
+  releaseId?: string;
+  version?: string;
+  status: 'no-update' | 'downloaded' | 'pending';
 }>;
 ```
 
 React Native passes only feature/channel. Native configuration resolves the
-production endpoint and owns trust, URLs, files, state, and activation.
+production endpoint and owns trust, URLs, files, state, and activation. This
+method first reads the compact channel state with `If-None-Match`; it does not
+mean “download now.” A `304 Not Modified`, an unchanged release ID, or an
+already-ready/pending release returns `no-update` without requesting the ZIP,
+rehashing cached content, or extracting anything.
 
 Progress contains transaction ID, feature/channel/release, phase, normalized
 progress, downloaded/total bytes, and optional stable error. It excludes URLs,
@@ -54,8 +61,8 @@ tokens, headers, private paths, initial data, and bundle content.
 
 ## Coordinator concurrency/threading
 
-- Deduplicate open/prefetch requests for the same resolved release; observers
-  receive the same underlying result.
+- Deduplicate open/update-check requests for the same feature/channel and
+  resolved release; observers receive the same underlying result.
 - Listener removal/unmount does not cancel shared required work unexpectedly.
 - Network, hashing, ZIP, and file work stay off UI and RN JS threads.
 - LynxView mutations and RN event delivery occur on the platform UI thread.
@@ -82,16 +89,25 @@ another feature. Render usable local content before waiting for a channel check.
 Per feature/channel state includes last accepted revision, active, previous LKG,
 pending, attempting, failed immutable IDs, and ETag. Serialize transitions.
 
-### Prefetch
+### Update check and conditional download
 
-- Resolve/check/install through M03 without changing the current view or active
-  pointer.
-- `already-ready` returns quickly without network or hash scan.
-- New verified content becomes `pendingReleaseId` for `next-open`.
+- Read the per-feature/channel check policy (`lastCheckedAt`, ETag, active,
+  pending, and failed immutable IDs) before making a request. The policy may
+  check once per session, after a configured interval, or after an explicit
+  host/API update hint; it must not block the current local open.
+- Send `If-None-Match` when an ETag exists. A `304`, an unchanged release ID,
+  or a release already marked ready/pending returns `no-update`; it does not
+  download a ZIP, repeat archive/file verification, or change the current view
+  or active pointer.
+- Only a verified channel response that advertises a compatible, non-failed,
+  different release can fetch the release envelope and ZIP through M03.
+- A newly verified installed release becomes `pendingReleaseId` for
+  `next-open`. `downloaded` reports installation completed; `pending` reports
+  that the release remains staged for activation.
 
 ### `next-open` — default
 
-- Keep current UI during prefetch/install.
+- Keep current UI during the update check and any conditional download/install.
 - On the next mini-app open, preserve prior LKG and durably write
   `attemptingReleaseId` before rendering the pending candidate.
 - Confirm active only after Lynx main-bundle success plus the documented short
@@ -126,8 +142,12 @@ pending, attempting, failed immutable IDs, and ETag. Serialize transitions.
 
 ## Acceptance criteria
 
-- [ ] RN prefetch observes monotonic phases and two callers perform one install.
-- [ ] Prefetch never reloads/blanks mounted UI or changes active pointer.
+- [ ] RN update check reports `no-update` for `304`, unchanged, ready, and
+      pending releases without a ZIP request or full cached-content hash scan.
+- [ ] Two callers checking the same newly advertised release perform one
+      download/install transaction and observe monotonic install phases.
+- [ ] Update checking/conditional download never reloads or blanks mounted UI
+      or changes the active pointer.
 - [ ] First offline open loads the requested embedded baseline quickly.
 - [ ] `next-open` installs now, keeps current UI, and attempts on next open.
 - [ ] Success promotes candidate and preserves previous rollback LKG.
@@ -146,8 +166,9 @@ pnpm run lint
 pnpm run build
 ```
 
-Also run physical iOS internal Release cases for embedded, cached, duplicate
-prefetch, offline, next-open, on-launch, force, load error, timeout, process
+Also run physical iOS internal Release cases for embedded, cached, channel
+`304`, unchanged release, one newly advertised release, duplicate update
+checks, offline, next-open, on-launch, force, load error, timeout, process
 kill, rapid source change, and safe-area stability. Attach a short candidate
 swap recording and state before/after evidence.
 

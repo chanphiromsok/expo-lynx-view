@@ -26,9 +26,9 @@ does not replace their unit or security tests.
 
 Every managed open must reach exactly one terminal outcome for the visible
 content: `loaded-embedded`, `loaded-cached`, `loaded-remote`, `staged-next-open`,
-`fallback`, or `error`. A prefetch may additionally end in `no-update`,
-`staged`, `skipped-failed-release`, or a categorized failure, but it must not
-replace the mounted view by itself.
+`fallback`, or `error`. A channel update check may additionally end in
+`no-update`, `staged`, `skipped-failed-release`, or a categorized failure, but
+it must not replace the mounted view by itself.
 
 ## Acceptance criteria
 
@@ -41,7 +41,8 @@ replace the mounted view by itself.
 - [ ] The matrix proves signed ZIP install, corrupt/tampered rejection,
       `next-open`, `on-launch`, force timing, rollback, process death, low disk,
       and failed-release loop prevention.
-- [ ] Prefetch leaves the current Lynx view mounted and terminal `onStart` plus
+- [ ] A channel update check leaves the current Lynx view mounted; unchanged
+      state performs no ZIP download; terminal `onStart` plus
       success/fallback/error callbacks are observable by the RN splash screen.
 - [ ] Safe-area and container bounds remain stable during candidate load and
       fallback.

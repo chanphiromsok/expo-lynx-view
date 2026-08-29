@@ -23,7 +23,7 @@ parity target.
 - [M01 — Shared protocol](m01-shared-release-protocol.md).
 - [M02 — Native embedded resources and signature verifier](m02-trust-roots-signature-verification.md).
 - [M03 — Hardened install semantics](m03-ios-archive-installation.md).
-- [M04 — Public API and lifecycle semantics](m04-prefetch-activation-recovery.md).
+- [M04 — Update-check API and lifecycle semantics](m04-update-check-activation-recovery.md).
 - [S04 — Local signed fixture server](../server/s04-local-static-parity.md).
 
 ## Owned files
@@ -49,7 +49,7 @@ parity target.
 
 - Persist active, previous LKG, pending, attempting, failed IDs, last revision,
   and ETag in app-internal storage.
-- Match M04 prefetch return values, progress/error phases, `onLoadStart`,
+- Match M04 update-check return values, progress/error phases, `onLoadStart`,
   `onLoad`, `onError`, terminal behavior, deduplication, and stale-generation
   rejection.
 - Render cached/embedded content before network response.
@@ -96,7 +96,7 @@ verify release signature/type/feature/compatibility
 
 ## Acceptance criteria
 
-- [ ] Same TypeScript source/prefetch API works on iOS and Android.
+- [ ] Same TypeScript source/update-check API works on iOS and Android.
 - [ ] Android internal Release opens embedded/cached content before failed
       network and rejects arbitrary raw HTTP.
 - [ ] Valid signed ZIP installs and loads from app-internal storage.
@@ -104,7 +104,8 @@ verify release signature/type/feature/compatibility
 - [ ] Every M03 malicious fixture fails equivalently.
 - [ ] Kill during download/extract/promotion/candidate attempt exposes no partial
       ready release and recovers LKG/embedded.
-- [ ] Duplicate prefetch performs one transaction and source/unmount races are
+- [ ] Duplicate update checks for a newly advertised release perform one
+      transaction; unchanged releases do not download; source/unmount races are
       safe.
 - [ ] Progress, terminal callbacks, activation, rollback, and safe-area layout
       match documented iOS behavior or an explicit current-open limitation is
@@ -121,9 +122,9 @@ cd apps/expo-lynx-example/android
 ```
 
 Run Android internal Release embedded, cached, signed install, corrupt,
-interrupted, low-disk, duplicate prefetch, next-open, process-death, rapid-source
-change, and offline cases. Record app-internal paths and iOS/Android parity
-differences.
+interrupted, low-disk, duplicate update check, unchanged release, next-open,
+process-death, rapid-source change, and offline cases. Record app-internal
+paths and iOS/Android parity differences.
 
 ## Out of scope
 

@@ -33,7 +33,7 @@ directory ready.
 - malicious ZIP, installer, interruption, and cached-fast-path tests
 - third-party notices if substantial MIT source is ported
 
-M04 owns the RN prefetch surface and view activation. This spec returns a
+M04 owns the RN update-check surface and view activation. This spec returns a
 completed installed release only.
 
 ## Installation transaction
@@ -128,6 +128,6 @@ is not copied into the cache, and is not rehashed per open.
 
 ## Out of scope
 
-- RN prefetch/events and activation/view replacement (M04).
+- RN update-check events and activation/view replacement (M04).
 - Android implementation (M05).
 - TAR variants, deltas, or general archive extraction API.

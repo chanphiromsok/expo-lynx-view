@@ -61,8 +61,10 @@ unchanged `304`.
 2. Start the command and use its LAN IP, never phone `localhost`.
 3. Open the printed URL in mobile Safari/Chrome before debugging native code.
 4. Build/install the internal Release host with local managed delivery enabled.
-5. Open embedded/current content, rebuild/promote, prefetch, and verify the
-   intended M04 lifecycle boundary.
+5. Open embedded/current content, rebuild/promote, run a channel update check,
+   and verify the intended M04 lifecycle boundary: unchanged content does not
+   download; a new release downloads and becomes active at the documented
+   boundary.
 6. Verify cached offline open plus corrupt/interrupted fallback.
 
 Document firewall, VPN, captive/client-isolation, changed-IP, and simulator

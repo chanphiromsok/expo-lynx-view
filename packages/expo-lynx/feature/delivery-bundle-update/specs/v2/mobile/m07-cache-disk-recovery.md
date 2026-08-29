@@ -11,7 +11,7 @@ disk, corruption, and concurrent pruning recover consistently on iOS/Android.
 
 ## Depends on
 
-- [M04 — iOS activation/recovery](m04-prefetch-activation-recovery.md).
+- [M04 — iOS update-check activation/recovery](m04-update-check-activation-recovery.md).
 - [M05 — Android delivery/installation](m05-android-delivery-installation.md).
 - [M06](m06-android-engine-reuse.md) only when reuse is enabled.
 

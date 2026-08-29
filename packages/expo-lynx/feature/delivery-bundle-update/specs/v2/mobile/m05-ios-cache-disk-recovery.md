@@ -7,7 +7,7 @@ death, low disk, stale metadata, eviction, and repeated opens across multiple
 mini-app features.
 
 This slice builds on [M03](./m03-ios-archive-installation.md) and
-[M04](./m04-prefetch-activation-recovery.md). It does not add Android behavior;
+[M04](./m04-update-check-activation-recovery.md). It does not add Android behavior;
 Android cache parity remains in the roadmap.
 
 ## Scope
