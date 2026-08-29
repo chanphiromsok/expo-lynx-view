@@ -46,6 +46,18 @@ describe('LynxSource contract', () => {
     }
   });
 
+  it('accepts a signed channel URL for conditional update checks', () => {
+    const s: LynxSource = {
+      kind: 'managed',
+      feature: 'delivery',
+      channel: 'stable',
+      channelUrl: 'http://127.0.0.1:3017/v1/channels/delivery/stable',
+    };
+    if (s.kind === 'managed') {
+      expect(s.channelUrl).toContain('/v1/channels/delivery/stable');
+    }
+  });
+
   it('omitting channel and activation is valid (defaults applied at runtime)', () => {
     const s: LynxSource = { kind: 'managed', feature: 'delivery' };
     if (s.kind === 'managed') {

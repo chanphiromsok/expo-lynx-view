@@ -22,7 +22,7 @@ const extra = (Constants.expoConfig?.extra ?? {}) as {
 const devHost = "192.168.18.144";
 const devPort = extra.lynxDevBundlePort ?? 3000;
 const DEV_BUNDLE = `http://${devHost}:${devPort}/main.lynx.bundle`;
-const DEV_MANIFEST = `http://${devHost}:${devPort}/manifest.json`;
+const DEV_CHANNEL = `http://${devHost}:${devPort}/v1/channels/delivery/stable`;
 
 type SourceKind = "managed" | "dev" | "embedded";
 
@@ -43,8 +43,8 @@ export default function App() {
           kind: "managed",
           feature: "delivery",
           channel: "stable",
-          activation: "on-launch",
-          manifestUrl: DEV_MANIFEST,
+          activation: "next-open",
+          channelUrl: DEV_CHANNEL,
         }
       : sourceKind === "dev"
         ? { kind: "development", url: DEV_BUNDLE }
@@ -55,38 +55,6 @@ export default function App() {
     setStatus(`Loading ${nextSource} bundle…`);
     setSplashVisible(true);
   };
-  return (
-    <ExpoLynxView
-      source={source}
-      initialData={{ greeting: `Hello from Expo (${sourceKind})` }}
-      onLoad={({ nativeEvent }) => {
-        setStatus(
-          `Loaded ${nativeEvent.version} from ${nativeEvent.source} (${nativeEvent.durationMs} ms)`,
-        );
-
-        // A managed source can render the embedded fallback while its
-        // first remote release is still downloading. Keep the React
-        // Native splash above that temporary render. A verified cache
-        // or downloaded release is the managed success condition.
-        if (sourceKind !== "managed" || nativeEvent.source !== "embedded") {
-          setSplashVisible(false);
-        }
-      }}
-      onLoadStart={({ nativeEvent }) => {
-        setSplashVisible(true);
-        setStatus(`Loading ${nativeEvent.source} bundle…`);
-      }}
-      onError={({ nativeEvent }) => {
-        // The native view has already retained or restored its verified
-        // cache/embedded fallback, so reveal that fallback on failure.
-        setSplashVisible(false);
-        setStatus(`${nativeEvent.stage} error: ${nativeEvent.message}`);
-        console.error("Lynx error", nativeEvent);
-      }}
-      style={styles.lynxView}
-      testID="lynx-view"
-    />
-  );
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <SafeAreaView style={styles.safeArea}>

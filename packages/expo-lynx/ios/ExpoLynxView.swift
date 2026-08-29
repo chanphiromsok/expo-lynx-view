@@ -237,6 +237,7 @@ private struct ExpoLynxSourcePayload: Decodable {
   let feature: String?
   let channel: String?
   let activation: String?
+  let channelUrl: String?
   let manifestUrl: String?
   let url: String?
 }
@@ -245,6 +246,7 @@ private struct ExpoLynxManagedContext {
   let feature: String
   let channel: String
   let activation: String
+  let channelURL: URL?
   let manifestURL: URL?
 }
 
@@ -588,8 +590,21 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       feature: feature,
       channel: channel,
       activation: activation,
+      channelURL: payload.channelUrl.flatMap(URL.init(string:)),
       manifestURL: payload.manifestUrl.flatMap(URL.init(string:))
     )
+    if payload.channelUrl != nil,
+      !["http", "https"].contains(context.channelURL?.scheme?.lowercased())
+    {
+      emitError(
+        url: payload.channelUrl ?? "",
+        feature: feature,
+        stage: .manifest,
+        code: "ERR_LYNX_CHANNEL_URL",
+        message: "The managed Lynx channel URL must use HTTP or HTTPS."
+      )
+      return
+    }
     if payload.manifestUrl != nil,
       !["http", "https"].contains(context.manifestURL?.scheme?.lowercased())
     {
@@ -604,13 +619,13 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
 
     #if !DEBUG && !LYNX_ALLOW_LOCAL_MANAGED_RELEASE
-      if context.manifestURL?.scheme?.lowercased() == "http" {
+      if [context.channelURL, context.manifestURL].contains(where: { $0?.scheme?.lowercased() == "http" }) {
         // The local development key is not enough to make cleartext LAN
         // transport distributable. An internal Release build must opt in at
         // compile time; signatures and archive verification remain mandatory.
         loadEmbedded(feature: feature, generation: generation)
         emitError(
-          url: context.manifestURL?.absoluteString ?? "",
+          url: context.channelURL?.absoluteString ?? context.manifestURL?.absoluteString ?? "",
           feature: feature,
           stage: .manifest,
           code: "ERR_LYNX_LOCAL_HTTP_FORBIDDEN",
@@ -663,45 +678,77 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       }
 
       guard !Task.isCancelled, generation == self.loadGeneration else { return }
-      guard let manifestURL = context.manifestURL else {
+      guard context.channelURL != nil || context.manifestURL != nil else {
         self.emitError(
           url: "",
           feature: feature,
           stage: .manifest,
           code: "ERR_LYNX_MANIFEST_URL_REQUIRED",
-          message: "A managed Lynx source requires a manifest URL to check for releases."
+          message: "A managed Lynx source requires a channel URL to check for releases."
         )
         return
       }
 
       do {
-        let release = try await LynxManagedBundleStore.shared.install(
-          releaseEnvelopeURL: manifestURL,
-          expectedFeature: feature
-        )
-        guard !Task.isCancelled, generation == self.loadGeneration,
-          release.manifestID != displayedManifestID
-        else { return }
-        guard !(await LynxManagedChannelState.shared.isFailed(
-          manifestID: release.manifestID,
-          feature: feature,
-          channel: channel
-        )) else { return }
-
-        if activation == "on-launch" {
-          await LynxManagedChannelState.shared.beginAttempt(
-            manifestID: release.manifestID,
-            feature: feature,
-            channel: channel
+        if let channelURL = context.channelURL {
+          var knownReleaseIDs = state.failedManifestIDs
+          [state.activeManifestID, state.pendingManifestID].compactMap { $0 }.forEach {
+            knownReleaseIDs.append($0)
+          }
+          let result = try await LynxManagedBundleStore.shared.checkForUpdate(
+            channelEnvelopeURL: channelURL,
+            expectedFeature: feature,
+            expectedChannel: channel,
+            eTag: state.lastETag,
+            knownReleaseIDs: Set(knownReleaseIDs)
           )
-          self.loadManagedRelease(
-            release,
-            context: context,
-            candidate: true,
-            downloaded: true,
-            generation: generation
+          switch result {
+          case let .noUpdate(eTag, revision):
+            await LynxManagedChannelState.shared.recordChannelCheck(
+              eTag: eTag,
+              revision: revision,
+              feature: feature,
+              channel: channel
+            )
+          case let .downloaded(release, eTag, revision):
+            await LynxManagedChannelState.shared.recordChannelCheck(
+              eTag: eTag,
+              revision: revision,
+              feature: feature,
+              channel: channel
+            )
+            guard !Task.isCancelled, generation == self.loadGeneration,
+              release.manifestID != displayedManifestID,
+              !(await LynxManagedChannelState.shared.isFailed(
+                manifestID: release.manifestID,
+                feature: feature,
+                channel: channel
+              ))
+            else { return }
+            // Never replace a mounted mini-app from an update response. A
+            // signed on-launch request also stages here until a separate
+            // candidate-view implementation can preserve live UI safely.
+            await LynxManagedChannelState.shared.stage(
+              manifestID: release.manifestID,
+              feature: feature,
+              channel: channel
+            )
+          }
+        } else if let manifestURL = context.manifestURL {
+          // Keep the direct signed-envelope route for existing Debug/local
+          // fixtures. Production callers should use channelUrl above.
+          let release = try await LynxManagedBundleStore.shared.install(
+            releaseEnvelopeURL: manifestURL,
+            expectedFeature: feature
           )
-        } else {
+          guard !Task.isCancelled, generation == self.loadGeneration,
+            release.manifestID != displayedManifestID,
+            !(await LynxManagedChannelState.shared.isFailed(
+              manifestID: release.manifestID,
+              feature: feature,
+              channel: channel
+            ))
+          else { return }
           await LynxManagedChannelState.shared.stage(
             manifestID: release.manifestID,
             feature: feature,
@@ -711,7 +758,11 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       } catch is CancellationError {
         return
       } catch {
-        self.emitDeliveryError(error, fallbackURL: manifestURL.absoluteString, feature: feature)
+        self.emitDeliveryError(
+          error,
+          fallbackURL: context.channelURL?.absoluteString ?? context.manifestURL?.absoluteString ?? "",
+          feature: feature
+        )
       }
     }
   }

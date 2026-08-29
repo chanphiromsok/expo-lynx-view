@@ -18,13 +18,18 @@ enum LynxSignatureVerifierFixtureTest {
       expectedFeature: "shopping",
       publicKeyPEM: publicKey
     )
+    let channel = try LynxChannelPayload.decodeVerified(
+      channelPayload,
+      expectedFeature: "shopping",
+      expectedChannel: "stable"
+    )
     let releasePayload = try LynxSignatureVerifier.verify(
       envelopeData: releaseEnvelope,
       expectedType: "lynx-release",
       expectedFeature: "shopping",
       publicKeyPEM: publicKey
     )
-    guard !channelPayload.isEmpty, !releasePayload.isEmpty else {
+    guard channel.releaseId == "shopping-2026.08.29.1", !releasePayload.isEmpty else {
       fatalError("Expected non-empty signed payloads")
     }
 

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct LynxManagedRelease: Sendable {
@@ -7,12 +8,18 @@ struct LynxManagedRelease: Sendable {
   let bundleURL: URL
 }
 
+enum LynxChannelUpdateResult: Sendable {
+  case noUpdate(eTag: String?, revision: Int?)
+  case downloaded(release: LynxManagedRelease, eTag: String?, revision: Int)
+}
+
 actor LynxManagedBundleStore {
   static let shared = LynxManagedBundleStore()
 
   private let fileManager = FileManager.default
   private let rootURL: URL
   private var v2Installs: [String: Task<LynxManagedRelease, Error>] = [:]
+  private var channelChecks: [String: Task<LynxChannelUpdateResult, Error>] = [:]
 
   init(rootURL: URL? = nil) {
     if let rootURL {
@@ -27,7 +34,14 @@ actor LynxManagedBundleStore {
   }
 
   func installedRelease(feature: String, manifestID: String) throws -> LynxManagedRelease? {
-    guard isSafeFeature(feature), isSHA256(manifestID) else { return nil }
+    guard isSafeFeature(feature) else { return nil }
+    // V2 release IDs are opaque signed identifiers, not legacy manifest
+    // hashes. Prefer the V2 completion marker before considering the legacy
+    // manifest layout so a staged signed release can reopen cheaply.
+    if let installed = try installedV2Release(feature: feature, releaseID: manifestID) {
+      return installed
+    }
+    guard isSHA256(manifestID) else { return nil }
     let releaseURL = readyURL(feature: feature, manifestID: manifestID)
     let manifestURL = releaseURL.appendingPathComponent("manifest.json")
     let bundleURL = releaseURL.appendingPathComponent("main.lynx.bundle")
@@ -127,17 +141,117 @@ actor LynxManagedBundleStore {
   func install(releaseEnvelopeURL: URL, expectedFeature: String) async throws -> LynxManagedRelease {
     let (envelope, response) = try await URLSession.shared.data(for: noCacheURLRequest(releaseEnvelopeURL))
     try validateHTTPResponse(response, url: releaseEnvelopeURL)
+    return try await install(
+      releaseEnvelopeData: envelope,
+      releaseEnvelopeURL: releaseEnvelopeURL,
+      expectedFeature: expectedFeature
+    )
+  }
+
+  /// Installation still owns the expensive cryptographic, archive, and file
+  /// verification. Channel checks call this only after a signed pointer has
+  /// identified a different immutable release.
+  func install(
+    releaseEnvelopeData: Data,
+    releaseEnvelopeURL: URL,
+    expectedFeature: String
+  ) async throws -> LynxManagedRelease {
     let payload = try LynxReleasePayload.decodeVerified(
-      LynxSignatureVerifier.verifyEmbedded(envelopeData: envelope, expectedType: "lynx-release", expectedFeature: expectedFeature),
+      LynxSignatureVerifier.verifyEmbedded(envelopeData: releaseEnvelopeData, expectedType: "lynx-release", expectedFeature: expectedFeature),
       expectedFeature: expectedFeature
     )
     let key = "\(expectedFeature)/\(payload.releaseId)"
     if let installed = try installedV2Release(feature: expectedFeature, releaseID: payload.releaseId) { return installed }
     if let task = v2Installs[key] { return try await task.value }
-    let task = Task { [self] in try await performV2Install(payload: payload, envelope: envelope, envelopeURL: releaseEnvelopeURL) }
+    let task = Task { [self] in try await performV2Install(payload: payload, envelope: releaseEnvelopeData, envelopeURL: releaseEnvelopeURL) }
     v2Installs[key] = task
     defer { v2Installs[key] = nil }
     return try await task.value
+  }
+
+  /// Reads the small signed channel envelope with ETag revalidation. A ZIP is
+  /// requested only when its immutable release ID is not already active,
+  /// pending, or failed for this feature/channel.
+  func checkForUpdate(
+    channelEnvelopeURL: URL,
+    expectedFeature: String,
+    expectedChannel: String,
+    eTag: String?,
+    knownReleaseIDs: Set<String>
+  ) async throws -> LynxChannelUpdateResult {
+    let key = "\(expectedFeature)/\(expectedChannel)/\(channelEnvelopeURL.absoluteString)"
+    if let task = channelChecks[key] { return try await task.value }
+    let task = Task { [self] in
+      try await performChannelCheck(
+        channelEnvelopeURL: channelEnvelopeURL,
+        expectedFeature: expectedFeature,
+        expectedChannel: expectedChannel,
+        eTag: eTag,
+        knownReleaseIDs: knownReleaseIDs
+      )
+    }
+    channelChecks[key] = task
+    defer { channelChecks[key] = nil }
+    return try await task.value
+  }
+
+  private func performChannelCheck(
+    channelEnvelopeURL: URL,
+    expectedFeature: String,
+    expectedChannel: String,
+    eTag: String?,
+    knownReleaseIDs: Set<String>
+  ) async throws -> LynxChannelUpdateResult {
+    var request = noCacheURLRequest(channelEnvelopeURL)
+    if let eTag, !eTag.isEmpty { request.setValue(eTag, forHTTPHeaderField: "If-None-Match") }
+    let (channelEnvelope, response) = try await URLSession.shared.data(for: request)
+    guard let httpResponse = response as? HTTPURLResponse else {
+      throw LynxDeliveryError(stage: .download, code: "ERR_LYNX_HTTP_0", message: "The Lynx channel response was not HTTP.")
+    }
+    if httpResponse.statusCode == 304 {
+      return .noUpdate(eTag: httpResponse.value(forHTTPHeaderField: "ETag") ?? eTag, revision: nil)
+    }
+    try validateHTTPResponse(httpResponse, url: channelEnvelopeURL)
+    let channel = try LynxChannelPayload.decodeVerified(
+      LynxSignatureVerifier.verifyEmbedded(
+        envelopeData: channelEnvelope,
+        expectedType: "lynx-channel",
+        expectedFeature: expectedFeature
+      ),
+      expectedFeature: expectedFeature,
+      expectedChannel: expectedChannel
+    )
+    let responseETag = httpResponse.value(forHTTPHeaderField: "ETag")
+    guard !knownReleaseIDs.contains(channel.releaseId) else {
+      return .noUpdate(eTag: responseETag, revision: channel.revision)
+    }
+
+    let releaseEnvelopeURL = try resolveRemoteURL(channel.manifestUrl, relativeTo: channelEnvelopeURL)
+    let (releaseEnvelope, releaseResponse) = try await URLSession.shared.data(
+      for: noCacheURLRequest(releaseEnvelopeURL)
+    )
+    try validateHTTPResponse(releaseResponse, url: releaseEnvelopeURL)
+    let releaseHash = SHA256.hash(data: releaseEnvelope).map { String(format: "%02x", $0) }.joined()
+    guard releaseHash == channel.manifestSha256 else {
+      throw LynxDeliveryError(
+        stage: .checksum,
+        code: "ERR_LYNX_CHANNEL_MANIFEST_SHA256",
+        message: "The release envelope does not match the signed channel pointer."
+      )
+    }
+    let release = try await install(
+      releaseEnvelopeData: releaseEnvelope,
+      releaseEnvelopeURL: releaseEnvelopeURL,
+      expectedFeature: expectedFeature
+    )
+    guard release.manifestID == channel.releaseId else {
+      throw LynxDeliveryError(
+        stage: .manifest,
+        code: "ERR_LYNX_CHANNEL_RELEASE_ID",
+        message: "The signed channel release ID does not match the signed release envelope."
+      )
+    }
+    return .downloaded(release: release, eTag: responseETag, revision: channel.revision)
   }
 
   private func performV2Install(payload: LynxReleasePayload, envelope: Data, envelopeURL: URL) async throws -> LynxManagedRelease {

@@ -47,7 +47,9 @@ server.listen(port, host, () => {
   const bases = Object.values(networkInterfaces()).flat().filter((entry) => entry?.family === 'IPv4' && !entry.internal).map((entry) => `http://${entry.address}:${port}`);
   console.log(`Release: ${feature}/${releaseId} (${packed.report.archiveSha256})`);
   console.log(`Simulator envelope: http://127.0.0.1:${port}/manifest.json`);
+  console.log(`Simulator channel:  http://127.0.0.1:${port}/v1/channels/${feature}/${channel}`);
   for (const base of bases) console.log(`Device envelope:    ${base}/manifest.json`);
+  for (const base of bases) console.log(`Device channel:     ${base}/v1/channels/${feature}/${channel}`);
   console.log(`Channel route: /v1/channels/${feature}/${channel}`);
 });
 process.on('exit', () => { if (existsSync(packed.outputDirectory)) rmSync(packed.outputDirectory, { recursive: true, force: true }); });

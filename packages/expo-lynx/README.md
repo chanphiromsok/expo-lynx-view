@@ -109,7 +109,25 @@ pnpm rebuild:lynx-remote
 
 It runs `npm run build` in `/Users/phirom/Desktop/lynx-source`, refreshes the ignored `.local-lynx-server/` files, and leaves an already-running `pnpm serve:lynx-remote` process serving the new bundle. Reload or reopen the managed mini-app to fetch the new manifest. Set `LYNX_SOURCE_DIR` when the Lynx source lives elsewhere.
 
-The local manifest path is deliberately Debug-only and may have an empty signature. Production managed delivery still requires the next step: replace `manifestUrl` with a signed channel pointer and embedded public-key verification before using Cloudflare R2.
+For signed V2 delivery, use the printed channel route as `channelUrl`. The
+native view first renders the current cache or embedded baseline, then sends a
+small ETag revalidation request. A `304` or an unchanged release ID does not
+download a ZIP, extract files, or rehash cached content. Only a signed channel
+pointer to a new release downloads and installs the ZIP; that release activates
+on the next mini-app open.
+
+```tsx
+const source: LynxSource = {
+  kind: 'managed',
+  feature: 'delivery',
+  channel: 'stable',
+  channelUrl: 'http://127.0.0.1:3000/v1/channels/delivery/stable',
+};
+```
+
+`manifestUrl` remains a Debug/local compatibility escape hatch for a direct
+signed release envelope. Production delivery should use a signed channel
+pointer and the embedded public-key verifier before using Cloudflare R2.
 
 For a one-off internal Release build against the LAN server, set
 `LYNX_ALLOW_LOCAL_MANAGED_RELEASE=1` while installing the example app's Pods:

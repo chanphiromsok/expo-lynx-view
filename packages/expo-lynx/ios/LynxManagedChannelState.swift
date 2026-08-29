@@ -6,6 +6,9 @@ struct LynxManagedState: Codable, Sendable {
   var pendingManifestID: String?
   var attemptingManifestID: String?
   var failedManifestIDs: [String]
+  var lastCheckedAt: String? = nil
+  var lastETag: String? = nil
+  var lastRevision: Int? = nil
 
   static let empty = LynxManagedState(failedManifestIDs: [])
 }
@@ -73,6 +76,19 @@ actor LynxManagedChannelState {
 
   func isFailed(manifestID: String, feature: String, channel: String) -> Bool {
     read(feature: feature, channel: channel).failedManifestIDs.contains(manifestID)
+  }
+
+  func recordChannelCheck(
+    eTag: String?,
+    revision: Int?,
+    feature: String,
+    channel: String
+  ) {
+    var state = read(feature: feature, channel: channel)
+    state.lastCheckedAt = ISO8601DateFormatter().string(from: Date())
+    if let eTag { state.lastETag = eTag }
+    if let revision { state.lastRevision = revision }
+    write(state, feature: feature, channel: channel)
   }
 
   private func read(feature: String, channel: String) -> LynxManagedState {

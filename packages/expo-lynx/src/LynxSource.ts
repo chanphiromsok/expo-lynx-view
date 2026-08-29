@@ -24,7 +24,9 @@ export type LynxSource =
       feature: LynxFeatureName;
       channel?: 'stable' | 'beta';
       activation?: ActivationMode;
-      /** Debug-only direct manifest endpoint for local/static-server testing. */
+      /** Signed channel-envelope endpoint used for ETag update checks. */
+      channelUrl?: string;
+      /** Debug-only direct signed release-envelope endpoint for local testing. */
       manifestUrl?: string;
     }
   | { kind: 'development'; url: string };

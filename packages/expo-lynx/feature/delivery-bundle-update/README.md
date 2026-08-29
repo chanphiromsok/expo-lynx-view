@@ -10,7 +10,7 @@ Production delivery for a Lynx view embedded in Expo/React Native.
 3. It checks a signed Cloudflare channel pointer once.
 4. A new immutable ZIP release downloads from R2 into transaction staging.
 5. Native verifies signatures, compatibility, archive limits, paths, sizes, and SHA-256 once during installation.
-6. The release activates through a candidate (`on-launch`) or on the next mini-app open (`next-open`).
+6. The release is staged and activates on the next mini-app open (`next-open`).
 7. A failed candidate rolls back to the previous last-known-good bundle.
 
 No background timer. No mid-session swap. No arbitrary production URL from React Native.
@@ -34,7 +34,8 @@ work.
 ## Current implementation sequence
 
 Use the [V2 work order](./specs/v2/README.md) for all new ZIP,
-RSA-SHA256 signing, prefetch, caching, activation, D1, R2, promotion, and
+RSA-SHA256 signing, channel update checks, conditional download, caching,
+activation, D1, R2, promotion, and
 rollback work. The active milestone contains 6 iOS mobile specs and 5
 producer/server specs. Android delivery and engine reuse remain preserved in
 the [development roadmap](./specs/v2/DEVELOPMENT-ROADMAP.md) and are not active
