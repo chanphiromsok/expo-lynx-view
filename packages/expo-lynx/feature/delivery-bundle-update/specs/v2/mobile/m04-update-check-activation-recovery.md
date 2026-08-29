@@ -36,19 +36,8 @@ and recovery, while React Native owns only product UI.
 ## Current iOS public API
 
 ```ts
-type ManagedLynxSource = {
-  kind: 'managed';
-  feature: LynxFeatureName;
-  channel?: 'stable' | 'beta';
-  activation?: 'next-open' | 'on-launch';
-  /** Signed channel envelope; required by the current iOS implementation. */
-  channelUrl?: string;
-  /** Debug/local direct signed release envelope only. */
-  manifestUrl?: string;
-};
-
-type ExpoLynxViewRef = {
-  checkForUpdate(): Promise<{
+type ExpoLynxModule = {
+  checkForUpdate(options: { feature: LynxFeatureName; channel?: 'stable' | 'beta' }): Promise<{
     feature: string;
     channel: 'stable' | 'beta';
     releaseId?: string;
@@ -58,15 +47,17 @@ type ExpoLynxViewRef = {
 };
 ```
 
-`checkForUpdate()` is deliberately **view-scoped**. It uses the mounted view's
-already-validated managed source and does not accept a URL, public key, or
-release ID from the imperative JS call. This matches the iOS implementation and
-prevents a second API from overriding the source being rendered.
+`ExpoLynx.checkForUpdate()` is deliberately **module-scoped**. It accepts only
+the canonical feature/channel pair and resolves the endpoint from the native
+build-time `ExpoLynxDeliveryChannels` map. It does not accept a URL, public
+key, or release ID from JavaScript, so no imperative call can override the
+source being rendered.
 
-The application supplies `channelUrl` today because the Worker endpoint is not
-yet injected by native build configuration. For production, that value must be
-build/config controlled rather than user or remote-page input. `manifestUrl` is
-only a local Debug compatibility route and is not the Worker contract.
+The Expo plugin validates `deliveryChannels` against the embedded feature
+registry and writes it into `Info.plist`. A managed production source needs
+only `feature`, `channel`, and optional activation. `channelUrl` and
+`manifestUrl` are Debug/internal-LAN compatibility routes only and are not the
+Worker contract.
 
 The result shape is:
 

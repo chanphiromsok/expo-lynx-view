@@ -5,6 +5,13 @@ public final class ExpoLynxModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ExpoLynx")
 
+    AsyncFunction("checkForUpdate") { (feature: String, channel: String?) async throws -> [String: Any] in
+      let selectedChannel = channel ?? "stable"
+      return try await LynxManagedDeliveryCoordinator.shared
+        .checkForUpdate(feature: feature, channel: selectedChannel)
+        .modulePayload()
+    }
+
     OnCreate {
 #if !DEBUG
       // Lynx defaults to emitting native Info logs through NSLog in Release.
@@ -72,9 +79,6 @@ public final class ExpoLynxModule: Module {
         view.reload()
       }
 
-      AsyncFunction("checkForUpdate") { (view: ExpoLynxView) async throws -> [String: Any] in
-        try await view.checkForManagedUpdate()
-      }
     }
   }
 }

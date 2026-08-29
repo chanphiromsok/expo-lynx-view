@@ -8,7 +8,12 @@
         "expo-lynx",
         {
           "embeddedBundlesPath": "./generated/expo-lynx/embedded",
-          "publicKeyPath": "./keys/lynx/updates.public.pem"
+          "publicKeyPath": "./keys/lynx/updates.public.pem",
+          "deliveryChannels": {
+            "delivery": {
+              "stable": "http://192.168.18.144:3000/v1/channels/delivery/stable"
+            }
+          }
         }
       ]
     ],

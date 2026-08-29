@@ -130,7 +130,39 @@ test('requires exactly one V2 baseline tree and key, without legacy duplicate re
     {
       embeddedBundlesPath: './generated',
       publicKeyPath: './keys/updates.public.pem',
+      deliveryChannels: undefined,
     }
+  );
+});
+
+test('validates canonical build-time channel URLs against the embedded registry', () => {
+  const options = {
+    deliveryChannels: {
+      shopping: {
+        stable: 'https://delivery.example.com/v1/channels/shopping/stable',
+      },
+    },
+  };
+  assert.deepEqual(_internal.normalizeDeliveryChannels(options.deliveryChannels, ['shopping']), {
+    shopping: {
+      stable: 'https://delivery.example.com/v1/channels/shopping/stable',
+    },
+  });
+  assert.throws(
+    () =>
+      _internal.normalizeDeliveryChannels(
+        { shopping: { stable: 'https://delivery.example.com/v1/channels/other/stable' } },
+        ['shopping']
+      ),
+    /canonical channel URL/
+  );
+  assert.throws(
+    () =>
+      _internal.normalizeDeliveryChannels(
+        { unknown: { stable: 'https://delivery.example.com/v1/channels/unknown/stable' } },
+        ['shopping']
+      ),
+    /not in the embedded registry/
   );
 });
 
@@ -178,9 +210,17 @@ test('materializes one iOS-only baseline namespace and emits trust configuration
   const infoPlist = _internal.applyV2InfoPlist({}, root, {
     embeddedBundlesPath: './generated/expo-lynx/embedded',
     publicKeyPath: './keys/release.public.pem',
+    deliveryChannels: {
+      shopping: {
+        stable: 'https://delivery.example.com/v1/channels/shopping/stable',
+      },
+    },
   });
   assert.match(infoPlist[_internal.INFO_PLIST_PUBLIC_KEY], /BEGIN PUBLIC KEY/);
   assert.match(infoPlist[_internal.INFO_PLIST_PUBLIC_KEY_FINGERPRINT], /^[A-Za-z0-9_-]{43}$/);
+  assert.deepEqual(infoPlist[_internal.INFO_PLIST_DELIVERY_CHANNELS], {
+    shopping: { stable: 'https://delivery.example.com/v1/channels/shopping/stable' },
+  });
 });
 
 test('reuses the existing Xcode folder reference on repeated prebuilds', () => {

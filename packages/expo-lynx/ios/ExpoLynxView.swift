@@ -422,29 +422,6 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     scheduleLoad()
   }
 
-  /// Revalidate the channel for the currently configured managed source. The
-  /// call is intentionally independent of rendering: it cannot reload, hide,
-  /// or swap the mounted LynxView.
-  func checkForManagedUpdate() async throws -> [String: Any] {
-    guard let context = managedContext else {
-      throw LynxDeliveryError(
-        stage: .manifest,
-        code: "ERR_LYNX_UPDATE_SOURCE",
-        message: "checkForUpdate requires a configured managed Lynx source."
-      )
-    }
-    let state = await LynxManagedChannelState.shared.recover(
-      feature: context.feature,
-      channel: context.channel
-    )
-    do {
-      return try await performManagedUpdateCheck(context: context, state: state)
-    } catch {
-      emitUpdateError(error, context: context)
-      throw error
-    }
-  }
-
   private func scheduleLoad() {
     loadGeneration += 1
     hasLoadedTemplate = false
@@ -627,16 +604,9 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       return
     }
 
-    let context = ExpoLynxManagedContext(
-      feature: feature,
-      channel: channel,
-      activation: activation,
-      channelURL: payload.channelUrl.flatMap(URL.init(string:)),
-      manifestURL: payload.manifestUrl.flatMap(URL.init(string:))
-    )
-    managedContext = context
+    let suppliedChannelURL = payload.channelUrl.flatMap(URL.init(string:))
     if payload.channelUrl != nil,
-      !["http", "https"].contains(context.channelURL?.scheme?.lowercased())
+      !["http", "https"].contains(suppliedChannelURL?.scheme?.lowercased())
     {
       emitError(
         url: payload.channelUrl ?? "",
@@ -647,6 +617,33 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       )
       return
     }
+    let channelURL: URL?
+    if let suppliedChannelURL {
+      // This remains a narrow Debug/internal-LAN compatibility override. A
+      // production managed source omits it and resolves the build-time map.
+      channelURL = suppliedChannelURL
+    } else if payload.manifestUrl == nil {
+      do {
+        channelURL = try LynxManagedDeliveryConfiguration.channelURL(
+          feature: feature,
+          channel: channel
+        )
+      } catch {
+        loadEmbedded(feature: feature, generation: generation)
+        emitDeliveryError(error, fallbackURL: "", feature: feature)
+        return
+      }
+    } else {
+      channelURL = nil
+    }
+    let context = ExpoLynxManagedContext(
+      feature: feature,
+      channel: channel,
+      activation: activation,
+      channelURL: channelURL,
+      manifestURL: payload.manifestUrl.flatMap(URL.init(string:))
+    )
+    managedContext = context
     if payload.manifestUrl != nil,
       !["http", "https"].contains(context.manifestURL?.scheme?.lowercased())
     {
@@ -661,17 +658,17 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
 
     #if !DEBUG && !LYNX_ALLOW_LOCAL_MANAGED_RELEASE
-      if [context.channelURL, context.manifestURL].contains(where: { $0?.scheme?.lowercased() == "http" }) {
-        // The local development key is not enough to make cleartext LAN
-        // transport distributable. An internal Release build must opt in at
-        // compile time; signatures and archive verification remain mandatory.
+      if payload.channelUrl != nil || payload.manifestUrl != nil {
+        // A distributable build resolves delivery endpoints only from its
+        // plugin-generated Info.plist map. Per-view URLs are a Debug/internal
+        // LAN escape hatch and must not become a production control surface.
         loadEmbedded(feature: feature, generation: generation)
         emitError(
-          url: context.channelURL?.absoluteString ?? context.manifestURL?.absoluteString ?? "",
+          url: "",
           feature: feature,
           stage: .manifest,
-          code: "ERR_LYNX_LOCAL_HTTP_FORBIDDEN",
-          message: "Cleartext managed delivery is allowed only in an internal Release build."
+          code: "ERR_LYNX_MANAGED_OVERRIDE_FORBIDDEN",
+          message: "Managed URL overrides are allowed only in Debug or an internal Release build."
         )
         return
       }

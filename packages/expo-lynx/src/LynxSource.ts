@@ -24,7 +24,7 @@ export type LynxSource =
       feature: LynxFeatureName;
       channel?: 'stable' | 'beta';
       activation?: ActivationMode;
-      /** Signed channel-envelope endpoint used for ETag update checks. */
+      /** Debug/internal-LAN override. Production uses the native build-time channel map. */
       channelUrl?: string;
       /** Debug-only direct signed release-envelope endpoint for local testing. */
       manifestUrl?: string;

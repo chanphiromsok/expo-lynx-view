@@ -72,9 +72,4 @@ export type ExpoLynxViewProps = ExpoLynxViewBaseProps &
 
 export type ExpoLynxViewRef = {
   reload(): Promise<void>;
-  /**
-   * Explicitly revalidates this managed source's signed channel. The native
-   * side owns its configured endpoint, ETag, trust roots, and cache.
-   */
-  checkForUpdate(): Promise<LynxBundleUpdateResult>;
 };

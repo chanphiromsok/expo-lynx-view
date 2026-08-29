@@ -115,25 +115,46 @@ pnpm rebuild:lynx-remote
 
 It runs `npm run build` in `/Users/phirom/Desktop/lynx-source`, refreshes the ignored `.local-lynx-server/` files, and leaves an already-running `pnpm serve:lynx-remote` process serving the new bundle. Reload or reopen the managed mini-app to fetch the new manifest. Set `LYNX_SOURCE_DIR` when the Lynx source lives elsewhere.
 
-For signed V2 delivery, use the printed channel route as `channelUrl`. The
-native view first renders the current cache or embedded baseline, then sends a
-small ETag revalidation request. A `304` or an unchanged release ID does not
-download a ZIP, extract files, or rehash cached content. Only a signed channel
-pointer to a new release downloads and installs the ZIP; that release activates
-on the next mini-app open.
+For signed V2 delivery, configure every production channel in the Expo plugin.
+Prebuild writes this map into `Info.plist`, and native code resolves the
+endpoint from feature/channel. The native view first renders the current cache
+or embedded baseline, then sends a small ETag revalidation request. A `304` or
+an unchanged release ID does not download a ZIP, extract files, or rehash
+cached content. Only a signed channel pointer to a new release downloads and
+installs the ZIP; that release activates on the next mini-app open.
+
+```json
+{
+  "expo": {
+    "plugins": [
+      [
+        "expo-lynx",
+        {
+          "embeddedBundlesPath": "./generated/expo-lynx/embedded",
+          "publicKeyPath": "./keys/lynx/updates.public.pem",
+          "deliveryChannels": {
+            "delivery": {
+              "stable": "https://delivery.example.com/v1/channels/delivery/stable"
+            }
+          }
+        }
+      ]
+    ]
+  }
+}
+```
 
 ```tsx
 const source: LynxSource = {
   kind: 'managed',
   feature: 'delivery',
   channel: 'stable',
-  channelUrl: 'http://127.0.0.1:3000/v1/channels/delivery/stable',
 };
 ```
 
-`manifestUrl` remains a Debug/local compatibility escape hatch for a direct
-signed release envelope. Production delivery should use a signed channel
-pointer and the embedded public-key verifier before using Cloudflare R2.
+`channelUrl` and `manifestUrl` remain Debug/local compatibility escape hatches.
+Production delivery should use the build-time signed-channel map and embedded
+public-key verifier before using Cloudflare R2.
 
 For a one-off internal Release build against the LAN server, set
 `LYNX_ALLOW_LOCAL_MANAGED_RELEASE=1` while installing the example app's Pods:
@@ -174,21 +195,19 @@ const [showSplash, setShowSplash] = useState(true);
 
 Position `MiniAppSplash` absolutely over the native view and let it accept pointer events if it should block interaction until the mini-app is ready. On a managed cache hit, `onLoad` reports `source: "cache"`; after a first successful remote install it reports `source: "download"`.
 
-The view exposes `reload()` and a non-blocking signed-channel check through its
-ref. `checkForUpdate()` uses the currently configured managed source, so the
-imperative API cannot override the endpoint, public key, or channel state. Its
-result is `no-update` or `pending`; `pending` means the verified release is
-ready for the next open, not that the visible mini-app changed.
+The module exposes a non-blocking signed-channel check by feature/channel. Its
+endpoint comes from the build-time native map, so the imperative API cannot
+override the endpoint, public key, or channel state. Its result is `no-update`
+or `pending`; `pending` means the verified release is ready for the next open,
+not that the visible mini-app changed. The view ref retains only `reload()`.
 
 ```tsx
-import { useRef } from 'react';
-import { ExpoLynxView, type ExpoLynxViewRef } from 'expo-lynx';
+import ExpoLynx, { ExpoLynxView } from 'expo-lynx';
 
-const lynxRef = useRef<ExpoLynxViewRef>(null);
-
-await lynxRef.current?.reload();
-
-const result = await lynxRef.current?.checkForUpdate();
+const result = await ExpoLynx.checkForUpdate({
+  feature: 'delivery',
+  channel: 'stable',
+});
 // { feature: 'delivery', channel: 'stable', status: 'no-update' | 'pending', ... }
 ```
 
@@ -198,7 +217,6 @@ URLs, headers, local paths, and bundle content:
 
 ```tsx
 <ExpoLynxView
-  ref={lynxRef}
   source={source}
   onUpdate={({ nativeEvent }) => {
     if (nativeEvent.phase === 'staged') {

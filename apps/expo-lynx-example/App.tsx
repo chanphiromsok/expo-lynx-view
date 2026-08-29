@@ -22,7 +22,6 @@ const extra = (Constants.expoConfig?.extra ?? {}) as {
 const devHost = "192.168.18.144";
 const devPort = extra.lynxDevBundlePort ?? 3000;
 const DEV_BUNDLE = `http://${devHost}:${devPort}/main.lynx.bundle`;
-const DEV_CHANNEL = `http://${devHost}:${devPort}/v1/channels/delivery/stable`;
 
 type SourceKind = "managed" | "dev" | "embedded";
 
@@ -44,7 +43,6 @@ export default function App() {
           feature: "delivery",
           channel: "stable",
           activation: "next-open",
-          channelUrl: DEV_CHANNEL,
         }
       : sourceKind === "dev"
         ? { kind: "development", url: DEV_BUNDLE }

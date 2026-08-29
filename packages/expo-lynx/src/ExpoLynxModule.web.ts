@@ -1,5 +1,10 @@
-import { NativeModule, registerWebModule } from 'expo';
+import type { LynxBundleUpdateResult } from './ExpoLynx.types';
+import type { LynxBundleUpdateOptions } from './ExpoLynxModule';
 
-class ExpoLynxModule extends NativeModule {}
+const ExpoLynxModule = {
+  async checkForUpdate(_options: LynxBundleUpdateOptions): Promise<LynxBundleUpdateResult> {
+    throw new Error('expo-lynx: managed bundle delivery is currently implemented on iOS only.');
+  },
+};
 
-export default registerWebModule(ExpoLynxModule, 'ExpoLynx');
+export default ExpoLynxModule;

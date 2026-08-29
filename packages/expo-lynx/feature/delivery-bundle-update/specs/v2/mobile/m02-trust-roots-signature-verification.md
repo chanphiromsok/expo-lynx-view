@@ -51,7 +51,12 @@ development roadmap.
         "expo-lynx",
         {
           "embeddedBundlesPath": "./generated/expo-lynx/embedded",
-          "publicKeyPath": "./keys/lynx/updates.public.pem"
+          "publicKeyPath": "./keys/lynx/updates.public.pem",
+          "deliveryChannels": {
+            "shopping": {
+              "stable": "https://delivery.example.com/v1/channels/shopping/stable"
+            }
+          }
         }
       ]
     ]
@@ -169,6 +174,16 @@ requires Expo prebuild/config generation and a new native host release.
 Repacking a bundle signed by the already trusted private key does not require
 prebuild.
 
+The same prebuild writes validated `deliveryChannels` to
+`ExpoLynxDeliveryChannels` in `Info.plist`. It is a feature/channel map of
+canonical Worker URLs, for example
+`shopping.stable → https://delivery.example.com/v1/channels/shopping/stable`.
+Every configured feature must be present in the validated embedded registry;
+only `stable` and `beta` are accepted; endpoints must be credential-free HTTP(S)
+URLs with the canonical `/v1/channels/<feature>/<channel>` path. Production
+JavaScript calls the module with only feature/channel and never passes this URL.
+Changing the map requires config generation and a new native host build.
+
 ## `embeddedBundlesPath` plugin contract
 
 - Resolve and contain the path with the same Expo-app-root rules as the public
@@ -220,7 +235,7 @@ checks.
    `publicKeyPath` plus `embeddedBundlesPath`.
 4. Run prebuild and confirm the dedicated native resource namespaces exist.
 5. Remove the sample's `bundledResources: ['./assets/static.lynx',
-   './assets/static']` configuration and old duplicate assets.
+'./assets/static']` configuration and old duplicate assets.
 6. M04 replaces the current feature-to-`<feature>.lynx`/generic
    `static.lynx` runtime lookup with exact registry lookup.
 
