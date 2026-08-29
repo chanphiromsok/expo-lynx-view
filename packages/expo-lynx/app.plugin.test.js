@@ -1,0 +1,201 @@
+/* global __dirname */
+
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+
+const { _internal } = require('./app.plugin');
+
+const fixtureRoot = path.join(__dirname, 'feature/delivery-bundle-update/fixtures/v2');
+
+function makeTemporaryEmbeddedTree() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'expo-lynx-plugin-'));
+  const embedded = path.join(root, 'generated/expo-lynx/embedded');
+  const feature = path.join(embedded, 'shopping');
+  fs.mkdirSync(path.join(feature, 'static'), { recursive: true });
+  fs.writeFileSync(path.join(feature, 'main.lynx.bundle'), 'mini-app');
+  fs.writeFileSync(path.join(feature, 'static/logo.txt'), 'logo');
+  const files = ['main.lynx.bundle', 'static/logo.txt'].map((relativePath) => {
+    const content = fs.readFileSync(path.join(feature, relativePath));
+    return {
+      path: relativePath,
+      bytes: content.length,
+      sha256: crypto.createHash('sha256').update(content).digest('hex'),
+    };
+  });
+  fs.writeFileSync(
+    path.join(feature, 'baseline.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      feature: 'shopping',
+      runtimeVersion: 'expo-57',
+      entry: 'main.lynx.bundle',
+      inputFingerprint: 'a'.repeat(64),
+      files,
+    })
+  );
+  fs.writeFileSync(
+    path.join(embedded, 'registry.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      runtimeVersion: 'expo-57',
+      features: {
+        shopping: { baseline: 'shopping/baseline.json', entry: 'shopping/main.lynx.bundle' },
+      },
+    })
+  );
+  return { root, embedded, feature };
+}
+
+test('validates a complete S01 embedded tree and rejects a stale sidecar', () => {
+  const { embedded, feature } = makeTemporaryEmbeddedTree();
+  assert.deepEqual(_internal.validateEmbeddedBundles(embedded).features, ['shopping']);
+  fs.writeFileSync(path.join(feature, 'static/logo.txt'), 'changed');
+  assert.throws(() => _internal.validateEmbeddedBundles(embedded), /stale or incomplete/);
+});
+
+test('normalizes only RSA 3072 SPKI public keys and computes an opaque fingerprint', () => {
+  const publicKey = path.join(fixtureRoot, 'crypto-development/updates.public.pem');
+  const normalized = _internal.normalizePublicKey(publicKey);
+  assert.match(normalized.pem, /^-----BEGIN PUBLIC KEY-----/);
+  assert.match(normalized.fingerprint, /^[A-Za-z0-9_-]{43}$/);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'expo-lynx-pem-'));
+  const privateKey = path.join(root, 'updates.public.pem');
+  const privateMarker = 'PRIVATE KEY';
+  fs.writeFileSync(
+    privateKey,
+    `-----BEGIN ${privateMarker}-----\ninvalid\n-----END ${privateMarker}-----\n`
+  );
+  assert.throws(() => _internal.normalizePublicKey(privateKey), /private key/);
+});
+
+test('resolves prebuild inputs from the Expo app root and rejects lexical or symlink escapes', () => {
+  const { root, embedded } = makeTemporaryEmbeddedTree();
+  const publicKeyDir = path.join(root, 'keys/lynx');
+  fs.mkdirSync(publicKeyDir, { recursive: true });
+  fs.copyFileSync(
+    path.join(fixtureRoot, 'crypto-development/updates.public.pem'),
+    path.join(publicKeyDir, 'updates.public.pem')
+  );
+  assert.equal(
+    _internal.resolveProjectPath(
+      root,
+      './generated/expo-lynx/embedded',
+      'embeddedBundlesPath',
+      'directory'
+    ),
+    fs.realpathSync(embedded)
+  );
+  assert.throws(
+    () => _internal.resolveProjectPath(root, '../outside', 'embeddedBundlesPath', 'directory'),
+    /escapes/
+  );
+  assert.throws(
+    () =>
+      _internal.resolveProjectPath(root, 'https://example.com/key.pem', 'publicKeyPath', 'file'),
+    /relative/
+  );
+
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), 'expo-lynx-external-'));
+  fs.symlinkSync(external, path.join(root, 'escaped'));
+  assert.throws(
+    () => _internal.resolveProjectPath(root, './escaped', 'embeddedBundlesPath', 'directory'),
+    /resolves outside/
+  );
+});
+
+test('requires exactly one V2 baseline tree and key, without legacy duplicate resources', () => {
+  assert.throws(
+    () => _internal.validateV2Options({ embeddedBundlesPath: './generated' }),
+    /configured together/
+  );
+  assert.throws(
+    () =>
+      _internal.validateV2Options({
+        embeddedBundlesPath: './generated',
+        publicKeyPath: './keys/updates.public.pem',
+        bundledResources: ['./assets/static.lynx'],
+      }),
+    /cannot be combined/
+  );
+  assert.deepEqual(
+    _internal.validateV2Options({
+      embeddedBundlesPath: './generated',
+      publicKeyPath: './keys/updates.public.pem',
+    }),
+    {
+      embeddedBundlesPath: './generated',
+      publicKeyPath: './keys/updates.public.pem',
+    }
+  );
+});
+
+test('materializes one iOS-only namespace with a normalized public key and no source-only residue', () => {
+  const { root } = makeTemporaryEmbeddedTree();
+  const keyDirectory = path.join(root, 'keys');
+  fs.mkdirSync(keyDirectory);
+  fs.copyFileSync(
+    path.join(fixtureRoot, 'crypto-development/updates.public.pem'),
+    path.join(keyDirectory, 'release.public.pem')
+  );
+  const nativeRoot = path.join(root, 'ios');
+  const destination = _internal.materializeV2Resources({
+    projectRoot: root,
+    platformProjectRoot: nativeRoot,
+    nativeProjectName: 'Example',
+    options: {
+      embeddedBundlesPath: './generated/expo-lynx/embedded',
+      publicKeyPath: './keys/release.public.pem',
+    },
+  });
+  assert.equal(destination, path.join(nativeRoot, 'Example', _internal.EMBEDDED_DIRECTORY));
+  assert.equal(
+    fs.readFileSync(path.join(destination, 'shopping/main.lynx.bundle'), 'utf8'),
+    'mini-app'
+  );
+  assert.match(
+    fs.readFileSync(path.join(destination, _internal.EMBEDDED_PUBLIC_KEY), 'utf8'),
+    /BEGIN PUBLIC KEY/
+  );
+  const trust = JSON.parse(fs.readFileSync(path.join(destination, 'trust.json'), 'utf8'));
+  assert.deepEqual(
+    {
+      schemaVersion: trust.schemaVersion,
+      algorithm: trust.algorithm,
+      runtimeVersion: trust.runtimeVersion,
+    },
+    {
+      schemaVersion: 1,
+      algorithm: 'RSA-SHA256',
+      runtimeVersion: 'expo-57',
+    }
+  );
+  assert.match(trust.fingerprint, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(fs.existsSync(path.join(destination, 'updates.private.pem')), false);
+});
+
+test('reuses the existing Xcode folder reference on repeated prebuilds', () => {
+  const xcodePath = `Example/${_internal.EMBEDDED_DIRECTORY}`;
+  const reference = {
+    path: `"${xcodePath}"`,
+    explicitFileType: 'folder',
+    fileEncoding: 4,
+  };
+  const project = {
+    hasFile(candidate) {
+      return candidate === xcodePath;
+    },
+    pbxFileReferenceSection() {
+      return { reference };
+    },
+  };
+  const result = _internal.addResource(project, 'Example', xcodePath, true);
+  assert.equal(result, project);
+  assert.equal(reference.lastKnownFileType, 'folder');
+  assert.equal('explicitFileType' in reference, false);
+  assert.equal('fileEncoding' in reference, false);
+});

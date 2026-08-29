@@ -40,3 +40,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# S01 generated native-resource input; regenerate before iOS prebuild.
+/generated/expo-lynx/
