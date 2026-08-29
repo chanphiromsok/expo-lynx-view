@@ -134,7 +134,7 @@ test('requires exactly one V2 baseline tree and key, without legacy duplicate re
   );
 });
 
-test('materializes one iOS-only namespace with a normalized public key and no source-only residue', () => {
+test('materializes one iOS-only baseline namespace and emits trust configuration into Info.plist', () => {
   const { root } = makeTemporaryEmbeddedTree();
   const keyDirectory = path.join(root, 'keys');
   fs.mkdirSync(keyDirectory);
@@ -157,25 +157,16 @@ test('materializes one iOS-only namespace with a normalized public key and no so
     fs.readFileSync(path.join(destination, 'shopping/main.lynx.bundle'), 'utf8'),
     'mini-app'
   );
-  assert.match(
-    fs.readFileSync(path.join(destination, _internal.EMBEDDED_PUBLIC_KEY), 'utf8'),
-    /BEGIN PUBLIC KEY/
-  );
-  const trust = JSON.parse(fs.readFileSync(path.join(destination, 'trust.json'), 'utf8'));
-  assert.deepEqual(
-    {
-      schemaVersion: trust.schemaVersion,
-      algorithm: trust.algorithm,
-      runtimeVersion: trust.runtimeVersion,
-    },
-    {
-      schemaVersion: 1,
-      algorithm: 'RSA-SHA256',
-      runtimeVersion: 'expo-57',
-    }
-  );
-  assert.match(trust.fingerprint, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(fs.existsSync(path.join(destination, 'updates.public.pem')), false);
+  assert.equal(fs.existsSync(path.join(destination, 'trust.json')), false);
   assert.equal(fs.existsSync(path.join(destination, 'updates.private.pem')), false);
+
+  const infoPlist = _internal.applyV2InfoPlist({}, root, {
+    embeddedBundlesPath: './generated/expo-lynx/embedded',
+    publicKeyPath: './keys/release.public.pem',
+  });
+  assert.match(infoPlist[_internal.INFO_PLIST_PUBLIC_KEY], /BEGIN PUBLIC KEY/);
+  assert.match(infoPlist[_internal.INFO_PLIST_PUBLIC_KEY_FINGERPRINT], /^[A-Za-z0-9_-]{43}$/);
 });
 
 test('reuses the existing Xcode folder reference on repeated prebuilds', () => {

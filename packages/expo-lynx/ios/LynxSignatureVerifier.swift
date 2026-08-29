@@ -102,16 +102,12 @@ enum LynxSignatureVerifier {
   }
 
   static func embeddedPublicKeyPEM(bundle: Bundle = .main) throws -> Data {
-    guard let resourceRoot = bundle.resourceURL else {
+    guard let pem = bundle.object(forInfoDictionaryKey: "ExpoLynxPublicKey") as? String,
+      !pem.isEmpty
+    else {
       throw VerificationError.missingEmbeddedPublicKey
     }
-    let url = resourceRoot
-      .appendingPathComponent("ExpoLynxEmbedded.bundle", isDirectory: true)
-      .appendingPathComponent("updates.public.pem", isDirectory: false)
-    guard let data = try? Data(contentsOf: url), !data.isEmpty else {
-      throw VerificationError.missingEmbeddedPublicKey
-    }
-    return data
+    return Data(pem.utf8)
   }
 
   private static func decodeBase64URL(_ value: String) throws -> Data {

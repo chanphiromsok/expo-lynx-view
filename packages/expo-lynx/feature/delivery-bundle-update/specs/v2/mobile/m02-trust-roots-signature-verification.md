@@ -10,9 +10,10 @@ Give an Expo app two simple native-build inputs:
    declared mini-app; and
 2. one app-wide RSA public key used to authenticate every remote Lynx update.
 
-The Expo config plugin validates and embeds both inputs for iOS. Swift verifies
-signed V2 envelopes with the public key before executable remote bytes are
-trusted. The plugin never accepts a private key. Android integration is
+The Expo config plugin validates the baseline as an iOS folder resource and
+writes the public key into generated `Info.plist`. Swift verifies signed V2
+envelopes with that public key before executable remote bytes are trusted. The
+plugin never accepts a private key. Android integration is
 preserved in the development roadmap, not implemented by this spec.
 
 ## Depends on
@@ -160,9 +161,13 @@ the restricted CI/KMS/secret workflow in S01, not on a developer laptop.
 - Missing/invalid public key is a Release prebuild failure. Local unsigned
   development remains possible only behind the explicit internal/Debug guard.
 
-Changing the public-key file or its path requires Expo prebuild/config
-generation and a new native host release. Repacking a bundle signed by the
-already trusted private key does not require prebuild.
+During iOS prebuild, the plugin writes the normalized PEM string to
+`ExpoLynxPublicKey` and its non-secret diagnostic fingerprint to
+`ExpoLynxPublicKeyFingerprint` in the generated app `Info.plist`. It does not
+copy the PEM as an iOS resource file. Changing the public-key file or its path
+requires Expo prebuild/config generation and a new native host release.
+Repacking a bundle signed by the already trusted private key does not require
+prebuild.
 
 ## `embeddedBundlesPath` plugin contract
 
