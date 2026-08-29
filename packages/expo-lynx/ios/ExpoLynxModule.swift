@@ -47,7 +47,7 @@ public final class ExpoLynxModule: Module {
     }
 
     View(ExpoLynxView.self) {
-      Events("onLoadStart", "onLoad", "onError")
+      Events("onLoadStart", "onLoad", "onError", "onUpdate")
 
       Prop("url") { (view: ExpoLynxView, url: String?) in
         view.setSource(url)
@@ -70,6 +70,10 @@ public final class ExpoLynxModule: Module {
 
       AsyncFunction("reload") { (view: ExpoLynxView) in
         view.reload()
+      }
+
+      AsyncFunction("checkForUpdate") { (view: ExpoLynxView) async throws -> [String: Any] in
+        try await view.checkForManagedUpdate()
       }
     }
   }

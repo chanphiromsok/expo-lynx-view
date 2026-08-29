@@ -48,7 +48,13 @@ export function LynxScreen() {
 }
 ```
 
-`source` has three iOS modes: `embedded`, `development`, and `managed`. `development` accepts a raw URL only in Debug builds. The current Debug implementation of `managed` executes only downloaded files whose byte counts and SHA-256 hashes match the manifest, retains a confirmed cached release, and falls back to the embedded bundle when no valid cache is available. Until signed-channel verification is added, Release builds refuse the managed cache and use the embedded bundle. The legacy `url` prop remains available for compatibility, but Release iOS builds reject raw remote URLs.
+`source` has three iOS modes: `embedded`, `development`, and `managed`.
+`development` accepts a raw URL only in Debug builds. A `managed` source loads a
+feature's embedded baseline or confirmed cache immediately, then revalidates its
+signed channel in the background. A new signed ZIP is fully verified during
+installation and staged for the next mini-app open; it never replaces a mounted
+view. The legacy `url` prop remains available for compatibility, but Release
+iOS builds reject raw remote URLs.
 
 For a bundled resource, add the `.lynx` bundle and every Rspeedy sidecar directory to `bundledResources`. Directory structure is preserved, so a template reference such as `static/image/logo.abc123.png` resolves in both the embedded baseline and a managed release.
 
@@ -168,7 +174,11 @@ const [showSplash, setShowSplash] = useState(true);
 
 Position `MiniAppSplash` absolutely over the native view and let it accept pointer events if it should block interaction until the mini-app is ready. On a managed cache hit, `onLoad` reports `source: "cache"`; after a first successful remote install it reports `source: "download"`.
 
-The view exposes a `reload()` method through its ref:
+The view exposes `reload()` and a non-blocking signed-channel check through its
+ref. `checkForUpdate()` uses the currently configured managed source, so the
+imperative API cannot override the endpoint, public key, or channel state. Its
+result is `no-update` or `pending`; `pending` means the verified release is
+ready for the next open, not that the visible mini-app changed.
 
 ```tsx
 import { useRef } from 'react';
@@ -177,6 +187,25 @@ import { ExpoLynxView, type ExpoLynxViewRef } from 'expo-lynx';
 const lynxRef = useRef<ExpoLynxViewRef>(null);
 
 await lynxRef.current?.reload();
+
+const result = await lynxRef.current?.checkForUpdate();
+// { feature: 'delivery', channel: 'stable', status: 'no-update' | 'pending', ... }
+```
+
+Use `onUpdate` to drive a small “checking/downloading/ready next time” status
+without keeping the primary splash screen up. The event intentionally excludes
+URLs, headers, local paths, and bundle content:
+
+```tsx
+<ExpoLynxView
+  ref={lynxRef}
+  source={source}
+  onUpdate={({ nativeEvent }) => {
+    if (nativeEvent.phase === 'staged') {
+      showToast(`Version ${nativeEvent.version} is ready for next open`);
+    }
+  }}
+/>
 ```
 
 Use HTTPS for production resources. Plain HTTP is intended only for the local Debug workflow and requires an App Transport Security local-network exception in the consuming app.

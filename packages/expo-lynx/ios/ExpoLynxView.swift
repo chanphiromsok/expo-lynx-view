@@ -263,6 +263,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   let onLoadStart = EventDispatcher()
   let onLoad = EventDispatcher()
   let onError = EventDispatcher()
+  let onUpdate = EventDispatcher()
 
   private let lynxView: LynxView
   private let templateProvider: ExpoLynxTemplateProvider
@@ -276,6 +277,10 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   private var lastSafeAreaInsets: UIEdgeInsets?
   private var hasPendingUpdate = false
   private var currentTarget: ExpoLynxLoadTarget?
+  // Retain only the validated declarative source configuration. This is the
+  // authority for an explicit JS update check; JS never supplies a URL to the
+  // imperative method.
+  private var managedContext: ExpoLynxManagedContext?
   private var deliveryTask: Task<Void, Never>?
   private var watchdogWorkItem: DispatchWorkItem?
   private var loadStartedAt = Date()
@@ -417,12 +422,36 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     scheduleLoad()
   }
 
+  /// Revalidate the channel for the currently configured managed source. The
+  /// call is intentionally independent of rendering: it cannot reload, hide,
+  /// or swap the mounted LynxView.
+  func checkForManagedUpdate() async throws -> [String: Any] {
+    guard let context = managedContext else {
+      throw LynxDeliveryError(
+        stage: .manifest,
+        code: "ERR_LYNX_UPDATE_SOURCE",
+        message: "checkForUpdate requires a configured managed Lynx source."
+      )
+    }
+    let state = await LynxManagedChannelState.shared.recover(
+      feature: context.feature,
+      channel: context.channel
+    )
+    do {
+      return try await performManagedUpdateCheck(context: context, state: state)
+    } catch {
+      emitUpdateError(error, context: context)
+      throw error
+    }
+  }
+
   private func scheduleLoad() {
     loadGeneration += 1
     hasLoadedTemplate = false
     deliveryTask?.cancel()
     watchdogWorkItem?.cancel()
     currentTarget = nil
+    managedContext = nil
 
     let generation = loadGeneration
     DispatchQueue.main.async { [weak self] in
@@ -442,7 +471,19 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
         )
         switch payload.kind {
         case "embedded":
-          loadEmbedded(feature: payload.feature ?? "default", generation: generation)
+          guard let feature = payload.feature?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !feature.isEmpty
+          else {
+            emitError(
+              url: "",
+              feature: "",
+              stage: .manifest,
+              code: "ERR_LYNX_EMBEDDED_FEATURE",
+              message: "An embedded Lynx source requires a feature name."
+            )
+            return
+          }
+          loadEmbedded(feature: feature, generation: generation)
         case "development":
           loadDevelopment(url: payload.url, generation: generation)
         case "managed":
@@ -593,6 +634,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       channelURL: payload.channelUrl.flatMap(URL.init(string:)),
       manifestURL: payload.manifestUrl.flatMap(URL.init(string:))
     )
+    managedContext = context
     if payload.channelUrl != nil,
       !["http", "https"].contains(context.channelURL?.scheme?.lowercased())
     {
@@ -690,74 +732,15 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       }
 
       do {
-        if let channelURL = context.channelURL {
-          var knownReleaseIDs = state.failedManifestIDs
-          [state.activeManifestID, state.pendingManifestID].compactMap { $0 }.forEach {
-            knownReleaseIDs.append($0)
-          }
-          let result = try await LynxManagedBundleStore.shared.checkForUpdate(
-            channelEnvelopeURL: channelURL,
-            expectedFeature: feature,
-            expectedChannel: channel,
-            eTag: state.lastETag,
-            knownReleaseIDs: Set(knownReleaseIDs)
-          )
-          switch result {
-          case let .noUpdate(eTag, revision):
-            await LynxManagedChannelState.shared.recordChannelCheck(
-              eTag: eTag,
-              revision: revision,
-              feature: feature,
-              channel: channel
-            )
-          case let .downloaded(release, eTag, revision):
-            await LynxManagedChannelState.shared.recordChannelCheck(
-              eTag: eTag,
-              revision: revision,
-              feature: feature,
-              channel: channel
-            )
-            guard !Task.isCancelled, generation == self.loadGeneration,
-              release.manifestID != displayedManifestID,
-              !(await LynxManagedChannelState.shared.isFailed(
-                manifestID: release.manifestID,
-                feature: feature,
-                channel: channel
-              ))
-            else { return }
-            // Never replace a mounted mini-app from an update response. A
-            // signed on-launch request also stages here until a separate
-            // candidate-view implementation can preserve live UI safely.
-            await LynxManagedChannelState.shared.stage(
-              manifestID: release.manifestID,
-              feature: feature,
-              channel: channel
-            )
-          }
-        } else if let manifestURL = context.manifestURL {
-          // Keep the direct signed-envelope route for existing Debug/local
-          // fixtures. Production callers should use channelUrl above.
-          let release = try await LynxManagedBundleStore.shared.install(
-            releaseEnvelopeURL: manifestURL,
-            expectedFeature: feature
-          )
-          guard !Task.isCancelled, generation == self.loadGeneration,
-            release.manifestID != displayedManifestID,
-            !(await LynxManagedChannelState.shared.isFailed(
-              manifestID: release.manifestID,
-              feature: feature,
-              channel: channel
-            ))
-          else { return }
-          await LynxManagedChannelState.shared.stage(
-            manifestID: release.manifestID,
-            feature: feature,
-            channel: channel
-          )
-        }
+        _ = try await self.performManagedUpdateCheck(
+          context: context,
+          state: state,
+          displayedManifestID: displayedManifestID
+        )
       } catch is CancellationError {
         return
       } catch {
+        self.emitUpdateError(error, context: context)
         self.emitDeliveryError(
           error,
           fallbackURL: context.channelURL?.absoluteString ?? context.manifestURL?.absoluteString ?? "",
@@ -765,6 +748,104 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
         )
       }
     }
+  }
+
+  private func performManagedUpdateCheck(
+    context: ExpoLynxManagedContext,
+    state: LynxManagedState,
+    displayedManifestID: String? = nil
+  ) async throws -> [String: Any] {
+    emitUpdate(["feature": context.feature, "channel": context.channel, "phase": "checking"])
+
+    var knownReleaseIDs = state.failedManifestIDs
+    [state.activeManifestID, state.pendingManifestID, state.attemptingManifestID,
+     state.previousManifestID].compactMap { $0 }.forEach { knownReleaseIDs.append($0) }
+
+    if let channelURL = context.channelURL {
+      let result = try await LynxManagedBundleStore.shared.checkForUpdate(
+        channelEnvelopeURL: channelURL,
+        expectedFeature: context.feature,
+        expectedChannel: context.channel,
+        eTag: state.lastETag,
+        knownReleaseIDs: Set(knownReleaseIDs)
+      )
+      switch result {
+      case let .noUpdate(eTag, revision):
+        await LynxManagedChannelState.shared.recordChannelCheck(
+          eTag: eTag, revision: revision, feature: context.feature, channel: context.channel
+        )
+        emitUpdate([
+          "feature": context.feature, "channel": context.channel, "phase": "no-update",
+          "revision": revision as Any,
+        ])
+        return ["feature": context.feature, "channel": context.channel, "status": "no-update"]
+      case let .downloaded(release, eTag, revision):
+        await LynxManagedChannelState.shared.recordChannelCheck(
+          eTag: eTag, revision: revision, feature: context.feature, channel: context.channel
+        )
+        emitUpdate([
+          "feature": context.feature, "channel": context.channel, "phase": "downloaded",
+          "releaseId": release.manifestID, "version": release.version, "revision": revision,
+        ])
+        guard release.manifestID != displayedManifestID,
+          !(await LynxManagedChannelState.shared.isFailed(
+            manifestID: release.manifestID, feature: context.feature, channel: context.channel
+          ))
+        else {
+          emitUpdate([
+            "feature": context.feature, "channel": context.channel, "phase": "no-update",
+            "releaseId": release.manifestID, "version": release.version, "revision": revision,
+          ])
+          return ["feature": context.feature, "channel": context.channel, "status": "no-update"]
+        }
+        // An update check is never allowed to replace the mounted mini-app.
+        // Both declared modes stage today; a future two-view candidate swap can
+        // consume `on-launch` without weakening this safety invariant.
+        await LynxManagedChannelState.shared.stage(
+          manifestID: release.manifestID, feature: context.feature, channel: context.channel
+        )
+        emitUpdate([
+          "feature": context.feature, "channel": context.channel, "phase": "staged",
+          "releaseId": release.manifestID, "version": release.version, "revision": revision,
+        ])
+        return [
+          "feature": context.feature, "channel": context.channel, "status": "pending",
+          "releaseId": release.manifestID, "version": release.version,
+        ]
+      }
+    }
+
+    guard let manifestURL = context.manifestURL else {
+      throw LynxDeliveryError(
+        stage: .manifest,
+        code: "ERR_LYNX_MANIFEST_URL_REQUIRED",
+        message: "A managed Lynx source requires a channel URL to check for releases."
+      )
+    }
+    // Direct signed release envelopes remain a Debug/local compatibility
+    // route. They deliberately have no ETag/revision semantics.
+    let release = try await LynxManagedBundleStore.shared.install(
+      releaseEnvelopeURL: manifestURL, expectedFeature: context.feature
+    )
+    guard release.manifestID != displayedManifestID,
+      !(await LynxManagedChannelState.shared.isFailed(
+        manifestID: release.manifestID, feature: context.feature, channel: context.channel
+      ))
+    else {
+      emitUpdate(["feature": context.feature, "channel": context.channel, "phase": "no-update"])
+      return ["feature": context.feature, "channel": context.channel, "status": "no-update"]
+    }
+    await LynxManagedChannelState.shared.stage(
+      manifestID: release.manifestID, feature: context.feature, channel: context.channel
+    )
+    emitUpdate([
+      "feature": context.feature, "channel": context.channel, "phase": "staged",
+      "releaseId": release.manifestID, "version": release.version,
+    ])
+    return [
+      "feature": context.feature, "channel": context.channel, "status": "pending",
+      "releaseId": release.manifestID, "version": release.version,
+    ]
   }
 
   private func loadManagedRelease(
@@ -966,6 +1047,30 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       code: payload.code,
       message: payload.message
     )
+  }
+
+  private func emitUpdate(_ payload: [String: Any]) {
+    onUpdate(payload)
+  }
+
+  private func emitUpdateError(_ error: Error, context: ExpoLynxManagedContext) {
+    if let deliveryError = error as? LynxDeliveryError {
+      emitUpdate([
+        "feature": context.feature,
+        "channel": context.channel,
+        "phase": "error",
+        "code": deliveryError.code,
+        "message": deliveryError.message,
+      ])
+      return
+    }
+    emitUpdate([
+      "feature": context.feature,
+      "channel": context.channel,
+      "phase": "error",
+      "code": "ERR_LYNX_UPDATE",
+      "message": error.localizedDescription,
+    ])
   }
 
   private func emitError(
