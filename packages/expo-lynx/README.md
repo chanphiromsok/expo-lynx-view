@@ -52,6 +52,28 @@ export function LynxScreen() {
 
 For a bundled resource, add the `.lynx` bundle and every Rspeedy sidecar directory to `bundledResources`. Directory structure is preserved, so a template reference such as `static/image/logo.abc123.png` resolves in both the embedded baseline and a managed release.
 
+### Feature-name autocomplete for V2 embedded bundles
+
+When V2 `embeddedBundlesPath` is configured, Expo prebuild validates its
+`registry.json` and writes a sibling declaration file at
+`generated/expo-lynx/lynx-features.d.ts`. The file augments `expo-lynx` with
+the exact canonical feature IDs. After prebuild, editors autocomplete those IDs
+and TypeScript rejects an unknown `source.feature` value:
+
+```tsx
+const source: LynxSource = {
+  kind: 'managed',
+  feature: 'shopping', // autocomplete comes from the embedded registry
+  channel: 'stable',
+};
+```
+
+The declaration is generated from local, already-validated embedded resources;
+it never reads a remote release or channel response. Keep the generated path in
+your app TypeScript project (the standard Expo `tsconfig` includes it). Before a
+first prebuild, `LynxFeatureName` intentionally falls back to `string` so
+library consumers are not blocked.
+
 ## Local managed-bundle test on iOS
 
 For the end-to-end iOS architecture, callback expectations, Release opt-in,
