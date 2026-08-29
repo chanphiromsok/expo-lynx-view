@@ -100,17 +100,10 @@ export default function App() {
                 setStatus(
                   `Loaded ${nativeEvent.version} from ${nativeEvent.source} (${nativeEvent.durationMs} ms)`,
                 );
-
-                // A managed source can render the embedded fallback while its
-                // first remote release is still downloading. Keep the React
-                // Native splash above that temporary render. A verified cache
-                // or downloaded release is the managed success condition.
-                if (
-                  sourceKind !== "managed" ||
-                  nativeEvent.source !== "embedded"
-                ) {
-                  setSplashVisible(false);
-                }
+                // Embedded content is a usable first-class fallback. A
+                // next-open update may continue staging afterward, but it must
+                // never keep this blocking splash over an interactive mini app.
+                setSplashVisible(false);
               }}
               onLoadStart={({ nativeEvent }) => {
                 setSplashVisible(true);
@@ -122,6 +115,33 @@ export default function App() {
                 setSplashVisible(false);
                 setStatus(`${nativeEvent.stage} error: ${nativeEvent.message}`);
                 console.error("Lynx error", nativeEvent);
+              }}
+              onUpdate={({ nativeEvent }) => {
+                switch (nativeEvent.phase) {
+                  case "checking":
+                    setStatus("Checking for a mini-app update…");
+                    break;
+                  case "no-update":
+                    setStatus("Mini app is up to date");
+                    break;
+                  case "downloaded":
+                    setStatus("Mini-app update downloaded");
+                    break;
+                  case "staged":
+                    setStatus(
+                      nativeEvent.version
+                        ? `Version ${nativeEvent.version} is ready for the next open`
+                        : "Mini-app update is ready for the next open",
+                    );
+                    break;
+                  case "error":
+                    setStatus(
+                      nativeEvent.message
+                        ? `Update failed: ${nativeEvent.message}`
+                        : "Update check failed; current mini app remains available",
+                    );
+                    break;
+                }
               }}
               style={styles.lynxView}
               testID="lynx-view"

@@ -270,9 +270,10 @@ next-launch activation without clearing state.
 | `onUpdate: error`                     | Update failure after usable local content rendered | current UI remains usable                        |
 | `onError`                             | No usable source or a Lynx render/delivery error   | terminal visible-content error                   |
 
-The sample React Native splash deliberately remains visible over an embedded
-`onLoad` while a managed first download is in flight. It is hidden on a cache or
-download success, and on any delivery/render error.
+The sample React Native splash hides on every successful `onLoad`, including an
+embedded fallback. A managed first download/install is non-blocking because it
+stages for the next mini-app open; its `onUpdate` event may update status text
+or a toast but must not keep a blocking splash over usable content.
 
 ## Test matrix
 

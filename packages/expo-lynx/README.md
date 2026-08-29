@@ -172,7 +172,13 @@ endpoints for local testing.
 
 ### React Native splash while a managed bundle loads
 
-`onLoadStart` fires before Lynx starts a selected embedded, cached, development, or downloaded bundle. `onLoad` is the successful Lynx render callback and includes the selected `source`; `onError` reports a failed delivery/render stage. A managed source may load the embedded fallback while it downloads its first release, so keep the splash visible for an `embedded` success when the requested source is still `managed`:
+`onLoadStart` fires before Lynx starts a selected embedded, cached, development,
+or downloaded bundle. `onLoad` is the successful Lynx render callback and
+includes the selected `source`; `onError` reports a failed delivery/render
+stage. A managed source may load its embedded fallback while a new release
+stages for the next open. The embedded fallback is usable UI, so hide the
+blocking splash on every successful `onLoad` and use `onUpdate` for non-blocking
+delivery status:
 
 ```tsx
 const [showSplash, setShowSplash] = useState(true);
@@ -181,11 +187,7 @@ const [showSplash, setShowSplash] = useState(true);
   <ExpoLynxView
     source={source}
     onLoadStart={() => setShowSplash(true)}
-    onLoad={({ nativeEvent }) => {
-      if (source.kind !== 'managed' || nativeEvent.source !== 'embedded') {
-        setShowSplash(false);
-      }
-    }}
+    onLoad={() => setShowSplash(false)}
     onError={() => setShowSplash(false)}
     style={{ flex: 1 }}
   />
@@ -193,7 +195,10 @@ const [showSplash, setShowSplash] = useState(true);
 </View>;
 ```
 
-Position `MiniAppSplash` absolutely over the native view and let it accept pointer events if it should block interaction until the mini-app is ready. On a managed cache hit, `onLoad` reports `source: "cache"`; after a first successful remote install it reports `source: "download"`.
+Position `MiniAppSplash` absolutely over the native view and let it accept
+pointer events until the first usable local mini-app render. On a managed cache
+hit, `onLoad` reports `source: "cache"`; a first remote install stages for the
+next mini-app open and reports its progress through `onUpdate`.
 
 The module exposes a non-blocking signed-channel check by feature/channel. Its
 endpoint comes from the build-time native map, so the imperative API cannot
