@@ -603,10 +603,21 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       return
     }
 
-    #if !DEBUG && LYNX_ALLOW_LOCAL_MANAGED_RELEASE
-      // This switch affects transport only: even an internal Release build
-      // still requires the embedded RSA public key and a valid signed release
-      // envelope. It exists solely because ATS normally blocks HTTP LAN URLs.
+    #if !DEBUG && !LYNX_ALLOW_LOCAL_MANAGED_RELEASE
+      if context.manifestURL?.scheme?.lowercased() == "http" {
+        // The local development key is not enough to make cleartext LAN
+        // transport distributable. An internal Release build must opt in at
+        // compile time; signatures and archive verification remain mandatory.
+        loadEmbedded(feature: feature, generation: generation)
+        emitError(
+          url: context.manifestURL?.absoluteString ?? "",
+          feature: feature,
+          stage: .manifest,
+          code: "ERR_LYNX_LOCAL_HTTP_FORBIDDEN",
+          message: "Cleartext managed delivery is allowed only in an internal Release build."
+        )
+        return
+      }
     #endif
 
     deliveryTask = Task { @MainActor [weak self] in

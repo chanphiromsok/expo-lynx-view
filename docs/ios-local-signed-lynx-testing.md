@@ -25,6 +25,14 @@ npx expo prebuild --platform ios
 baseline, native plugin, or feature map changes. A normal remote release
 rebuild does **not** require prebuild.
 
+For a physical **internal Release** test over local HTTP, add
+`LYNX_ALLOW_LOCAL_MANAGED_RELEASE` to that configuration's
+`SWIFT_ACTIVE_COMPILATION_CONDITIONS` in Xcode, rebuild, and remove it from any
+distributable configuration. The flag changes only the HTTP transport gate: the
+release still verifies the embedded public key, envelope signature, archive,
+CRC, and file hashes. A normal Release build continues to accept signed HTTPS
+only.
+
 ## Rebuild and serve a remote release
 
 Run this at the repository root. It rebuilds the selected feature through the
