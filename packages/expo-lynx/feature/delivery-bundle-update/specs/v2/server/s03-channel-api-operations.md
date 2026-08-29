@@ -35,13 +35,16 @@ Provide equivalents of:
 
 ```text
 GET /v1/channels/:feature/:channel
-GET /v1/releases/:releaseId/manifest.json
-GET /v1/releases/:releaseId/release.zip
+GET /v1/releases/:feature/:releaseId/manifest
+GET /v1/releases/:feature/:releaseId/release.zip
 ```
 
 - Channel response is the exact stored signed `lynx-channel` envelope.
 - Manifest response is the exact stored signed `lynx-release` envelope.
 - Artifact response is the exact immutable ZIP linked by signed metadata.
+- Release routes are feature-scoped because ready release storage is scoped by
+  `<feature>/releases/<releaseId>/…`. The client follows the verified signed
+  relative `manifestUrl`; it does not synthesize either release route.
 - Never return or trust a response-supplied public key.
 - Validate identifiers before queries/object-key construction.
 - Only ready releases and the committed channel head are visible.

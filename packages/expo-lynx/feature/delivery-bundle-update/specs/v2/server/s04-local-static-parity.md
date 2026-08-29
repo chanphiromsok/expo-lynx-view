@@ -45,6 +45,18 @@ Fault modes must include delayed/chunked download, interrupted response,
 corrupt archive, hash mismatch, invalid signature, `404`, server error, and
 unchanged `304`.
 
+The parity route shape is:
+
+```text
+GET /v1/channels/:feature/:channel
+GET /v1/releases/:feature/:releaseId/manifest
+GET /v1/releases/:feature/:releaseId/release.zip
+```
+
+The local implementation may additionally expose short compatibility aliases
+such as `/manifest.json` and `/release.zip`, but those aliases are not used by
+the managed Worker/mobile contract and must not be presented as production API.
+
 ## Local security boundary
 
 - Cleartext/LAN execution and the development key are allowed only in explicit

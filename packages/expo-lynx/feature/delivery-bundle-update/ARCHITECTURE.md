@@ -375,8 +375,8 @@ Device-facing endpoints are equivalent to:
 
 ```text
 GET /v1/channels/:featureId/:channel
-GET /v1/releases/:releaseId/manifest.json
-GET /v1/releases/:releaseId/release.zip
+GET /v1/releases/:featureId/:releaseId/manifest
+GET /v1/releases/:featureId/:releaseId/release.zip
 ```
 
 Channel responses use a short revalidation policy, strong ETag, and `304`.

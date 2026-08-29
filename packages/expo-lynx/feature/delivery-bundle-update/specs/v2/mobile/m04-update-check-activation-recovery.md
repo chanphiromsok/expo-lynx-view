@@ -33,31 +33,84 @@ and recovery, while React Native owns only product UI.
 - activation/watchdog/candidate/state tests
 - example controls/evidence only as needed
 
-## Public API
+## Current iOS public API
 
 ```ts
-checkForLynxBundleUpdate(options: {
-  feature: string;
+type ManagedLynxSource = {
+  kind: 'managed';
+  feature: LynxFeatureName;
   channel?: 'stable' | 'beta';
-}): Promise<{
+  activation?: 'next-open' | 'on-launch';
+  /** Signed channel envelope; required by the current iOS implementation. */
+  channelUrl?: string;
+  /** Debug/local direct signed release envelope only. */
+  manifestUrl?: string;
+};
+
+type ExpoLynxViewRef = {
+  checkForUpdate(): Promise<{
+    feature: string;
+    channel: 'stable' | 'beta';
+    releaseId?: string;
+    version?: string;
+    status: 'no-update' | 'downloaded' | 'pending';
+  }>;
+};
+```
+
+`checkForUpdate()` is deliberately **view-scoped**. It uses the mounted view's
+already-validated managed source and does not accept a URL, public key, or
+release ID from the imperative JS call. This matches the iOS implementation and
+prevents a second API from overriding the source being rendered.
+
+The application supplies `channelUrl` today because the Worker endpoint is not
+yet injected by native build configuration. For production, that value must be
+build/config controlled rather than user or remote-page input. `manifestUrl` is
+only a local Debug compatibility route and is not the Worker contract.
+
+The result shape is:
+
+```ts
+{
   feature: string;
-  channel: string;
+  channel: 'stable' | 'beta';
   releaseId?: string;
   version?: string;
   status: 'no-update' | 'downloaded' | 'pending';
-}>;
+}
 ```
 
-React Native passes only feature/channel. Native configuration resolves the
-production endpoint and owns trust, URLs, files, state, and activation. This
-method first reads the compact channel state with `If-None-Match`; it does not
-mean “download now.” A `304 Not Modified`, an unchanged release ID, or an
-already-ready/pending release returns `no-update` without requesting the ZIP,
-rehashing cached content, or extracting anything.
+The native side owns ETag state, signature verification, files, staging, and
+activation. A `304 Not Modified`, an unchanged release ID, or an already
+ready/pending release returns `no-update` without requesting the ZIP, rehashing
+cached content, or extracting anything. `downloaded` is possible when an
+install finished but automatic staging was cancelled due to a source change;
+`pending` means the installed release was durably staged for the next open.
 
-Progress contains transaction ID, feature/channel/release, phase, normalized
-progress, downloaded/total bytes, and optional stable error. It excludes URLs,
-tokens, headers, private paths, initial data, and bundle content.
+`onUpdate` is the current event surface. Its phases are `checking`,
+`no-update`, `downloaded`, `staged`, and `error`; it carries feature, channel,
+release/version/revision when known, and a bounded error code/message. It
+intentionally excludes URLs, tokens, headers, private paths, initial data, and
+bundle content. Byte-level progress, transaction IDs, and rate-limited transfer
+progress are a future enhancement; the current URLSession install path does not
+pretend to expose byte progress.
+
+## Worker route contract used by mobile
+
+The client fetches the configured channel URL and follows the **signed relative
+`manifestUrl`** inside the verified channel payload. It never constructs a
+release URL from a release ID. The Worker and local parity server therefore use
+this canonical route shape:
+
+```text
+GET /v1/channels/:feature/:channel
+GET /v1/releases/:feature/:releaseId/manifest
+GET /v1/releases/:feature/:releaseId/release.zip
+```
+
+The exact public channel and release envelope bytes are defined by M01. The
+channel's `manifestUrl` may be relative to its channel URL, so a local server
+and the Worker can have different origins without changing the mobile client.
 
 ## Coordinator concurrency/threading
 
@@ -117,7 +170,12 @@ pending, attempting, failed immutable IDs, and ETag. Serialize transitions.
 
 ### `on-launch` / `force`
 
-- Keep the mounted active view visible while a separate candidate LynxView
+**Current implementation status:** accepted source settings are safely treated
+as `next-open`. The Worker may round-trip `activation` and `force`, but current
+iOS does not use either signed field to replace a mounted view.
+
+- Target behavior before enabling current-open activation: keep the mounted
+  active view visible while a separate candidate LynxView
   loads.
 - Candidate receives identical bounds, safe-area/global props, initial data,
   and resource roots.
