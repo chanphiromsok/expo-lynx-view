@@ -54,6 +54,61 @@ The decoded release payload contains `type: 'lynx-release'`, `feature`,
 format/size/hash/expanded limits, and an exact file list. `main.lynx.bundle` is
 required exactly once.
 
+The V2 payload fields are fixed as follows. Unknown fields fail closed in V2;
+adding fields requires a new schema version rather than silent cross-language
+drift.
+
+```ts
+type ChannelPayloadV1 = {
+  type: 'lynx-channel';
+  feature: string;
+  channel: string;
+  revision: number; // positive safe integer
+  releaseId: string;
+  manifestUrl: string; // HTTP(S), or a safe relative URL
+  manifestSha256: string; // lowercase 64-char hex SHA-256
+  runtimeVersion: string;
+  activation: 'next-open' | 'on-launch';
+  force: boolean;
+  issuedAt: string; // UTC ISO-8601
+  expiresAt?: string; // UTC ISO-8601, not before issuedAt
+};
+
+type ReleasePayloadV1 = {
+  type: 'lynx-release';
+  feature: string;
+  releaseId: string;
+  version: string;
+  platform: 'ios' | 'android';
+  compatibility: {
+    runtimeVersion: string;
+    minHostVersion: string;
+    lynxEngineVersion: string;
+  };
+  archive: {
+    format: 'zip';
+    url: string; // HTTP(S), or a safe relative URL
+    sha256: string;
+    bytes: number;
+    uncompressedBytes: number;
+    entryCount: number;
+  };
+  files: Array<{ path: string; bytes: number; sha256: string }>;
+};
+```
+
+V2 archives declare files only, not directories: `entryCount` equals the
+number of `files`, and `uncompressedBytes` equals the sum of their `bytes`.
+All sizes are positive safe integers. `channel` follows
+`^[a-z][a-z0-9-]{0,31}$`; `releaseId` follows
+`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
+
+The structural parser accepts HTTP(S) absolute URLs so the same fixtures work
+against a local LAN static server. Production delivery policy still requires
+HTTPS; M04 applies that policy at the native network boundary. Relative URLs
+are resolved only against the already verified channel/manifest endpoint and
+may not contain traversal, a query, or a fragment.
+
 The explicit signed `type` is mandatory domain separation because V2 uses one
 app-wide signing key for both document kinds. A caller must state the expected
 document type and feature before verified payload data is used. A valid

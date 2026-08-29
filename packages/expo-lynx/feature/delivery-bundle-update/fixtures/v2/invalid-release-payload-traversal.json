@@ -1,0 +1,32 @@
+{
+  "type": "lynx-release",
+  "feature": "shopping",
+  "releaseId": "shopping-2026.08.29.1",
+  "version": "2026.08.29.1",
+  "platform": "ios",
+  "compatibility": {
+    "runtimeVersion": "expo-57",
+    "minHostVersion": "1.0.0",
+    "lynxEngineVersion": "4.0.0"
+  },
+  "archive": {
+    "format": "zip",
+    "url": "releases/shopping-2026.08.29.1/release.zip",
+    "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "bytes": 16,
+    "uncompressedBytes": 20,
+    "entryCount": 2
+  },
+  "files": [
+    {
+      "path": "../main.lynx.bundle",
+      "bytes": 12,
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+      "path": "static/logo.png",
+      "bytes": 8,
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  ]
+}

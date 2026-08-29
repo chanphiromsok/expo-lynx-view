@@ -6,6 +6,7 @@ export * from './ExpoLynx.types';
 export * from './LynxSource';
 export * from './ResolveSource';
 export * from './Manifest';
+export * from './ReleaseProtocol';
 export * from './BundlePaths';
 export * from './ChannelState';
 export * from './Watchdog';

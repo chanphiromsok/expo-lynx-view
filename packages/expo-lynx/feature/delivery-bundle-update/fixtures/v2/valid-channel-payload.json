@@ -1,0 +1,14 @@
+{
+  "type": "lynx-channel",
+  "feature": "shopping",
+  "channel": "stable",
+  "revision": 7,
+  "releaseId": "shopping-2026.08.29.1",
+  "manifestUrl": "releases/shopping-2026.08.29.1/manifest.json",
+  "manifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "runtimeVersion": "expo-57",
+  "activation": "next-open",
+  "force": false,
+  "issuedAt": "2026-08-29T09:00:00.000Z",
+  "expiresAt": "2026-09-05T09:00:00.000Z"
+}

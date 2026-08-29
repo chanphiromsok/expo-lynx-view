@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "RSA-SHA256",
+  "payload": "AQ==",
+  "signature": "AQ"
+}
