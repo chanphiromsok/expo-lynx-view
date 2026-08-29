@@ -11,6 +11,7 @@ import {
 } from '../ReleaseProtocol';
 
 const FIXTURE_DIRECTORY = resolve(__dirname, '../../feature/delivery-bundle-update/fixtures/v2');
+const CRYPTO_FIXTURE_DIRECTORY = resolve(FIXTURE_DIRECTORY, 'crypto-development');
 
 function fixture(name: string): unknown {
   return JSON.parse(readFileSync(resolve(FIXTURE_DIRECTORY, name), 'utf8')) as unknown;
@@ -54,6 +55,20 @@ describe('V2 release protocol', () => {
     });
     expect(parsed(parseUnverifiedEnvelopePayload(channelEnvelope))).toEqual(channelFixture());
     expect(parsed(parseUnverifiedEnvelopePayload(releaseEnvelope))).toEqual(releaseFixture());
+  });
+
+  it('parses the checked-in cryptographic M02 fixture envelopes without changing payload bytes', () => {
+    for (const type of ['channel', 'release']) {
+      const envelope = parsed(
+        parseSignedEnvelope(fixture(`crypto-development/valid-${type}-envelope.json`))
+      );
+      expect(parsed(parseUnverifiedEnvelopePayload(envelope))).toEqual(
+        fixture(`valid-${type}-payload.json`)
+      );
+    }
+    expect(readFileSync(resolve(CRYPTO_FIXTURE_DIRECTORY, 'updates.public.pem'), 'utf8')).toMatch(
+      /BEGIN PUBLIC KEY/
+    );
   });
 
   it('rejects unsupported envelope versions, algorithms, padding, invalid alphabets, and non-canonical base64url', () => {

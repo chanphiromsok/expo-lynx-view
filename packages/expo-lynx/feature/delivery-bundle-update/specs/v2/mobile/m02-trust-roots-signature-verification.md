@@ -20,6 +20,12 @@ preserved in the development roadmap, not implemented by this spec.
 - [M01 — Shared release protocol](m01-shared-release-protocol.md).
 - [S01 — Build, embedded baseline, and signing CLI](../server/s01-build-package-sign.md).
 
+For native verification tests, S01 provides platform-neutral development
+fixtures in `../../fixtures/v2/crypto-development/`: the public SPKI key and
+signed channel/release envelopes. The corresponding private key is deliberately
+not present in the repository. Use the payload bytes embedded in those envelopes
+as the exact verification input; do not parse and reserialize the JSON first.
+
 ## Files
 
 - `packages/expo-lynx/app.plugin.js`
