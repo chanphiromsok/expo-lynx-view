@@ -7,7 +7,8 @@
       [
         "expo-lynx",
         {
-          "bundledResources": ["./assets/static.lynx", "./assets/static"]
+          "embeddedBundlesPath": "./generated/expo-lynx/embedded",
+          "publicKeyPath": "./keys/lynx/updates.public.pem"
         }
       ]
     ],

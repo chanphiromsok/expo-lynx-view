@@ -532,7 +532,15 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   }
 
   private func loadEmbedded(feature: String, generation: Int) {
-    let embeddedName = resolveLocalURL("\(feature).lynx") == nil ? "static.lynx" : "\(feature).lynx"
+    let v2Name = "ExpoLynxEmbedded.bundle/\(feature)/main.lynx.bundle"
+    let embeddedName: String
+    if resolveLocalURL(v2Name) != nil {
+      embeddedName = v2Name
+    } else {
+      // Preserve legacy prebuild output during migration. V2 app configs use
+      // the branch above and never duplicate these bytes in the asset graph.
+      embeddedName = resolveLocalURL("\(feature).lynx") == nil ? "static.lynx" : "\(feature).lynx"
+    }
     loadTarget(
       ExpoLynxLoadTarget(
         url: embeddedName,
@@ -722,13 +730,11 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     source = target.url
     currentTarget = target
     loadStartedAt = Date()
-    if ["cache", "download"].contains(target.source),
-      let bundleURL = URL(string: target.url), bundleURL.isFileURL
-    {
+    if ["cache", "download"].contains(target.source), let bundleURL = URL(string: target.url), bundleURL.isFileURL {
       templateProvider.setLocalResourceRoot(bundleURL.deletingLastPathComponent())
-    } else {
-      templateProvider.setLocalResourceRoot(nil)
-    }
+    } else if target.source == "embedded", let bundleURL = resolveLocalURL(target.url) {
+      templateProvider.setLocalResourceRoot(bundleURL.deletingLastPathComponent())
+    } else { templateProvider.setLocalResourceRoot(nil) }
     onLoadStart(eventPayload(for: target))
     // ponytail: show the new template as soon as a load starts; if it
     // fails, finishWithError hides it again so the stale render isn't

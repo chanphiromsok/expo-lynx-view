@@ -43,3 +43,5 @@ yarn-error.*
 
 # S01 generated native-resource input; regenerate before iOS prebuild.
 /generated/expo-lynx/
+/.local-lynx-keys/
+dist/lynx-releases/
