@@ -7,6 +7,7 @@ enum LynxDeliveryStage: String {
   case download
   case checksum
   case resource
+  case archive
   case lynx
 }
 

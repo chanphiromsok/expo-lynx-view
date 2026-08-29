@@ -595,25 +595,10 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       return
     }
 
-    #if !DEBUG && !LYNX_ALLOW_LOCAL_MANAGED_RELEASE
-      // This first iOS slice intentionally has no production trust root yet.
-      // Never inspect or execute managed cache written by a Debug build: an
-      // unsigned local manifest must not become trusted merely because it was
-      // downloaded into the app container before a Release build was installed.
-      //
-      // Internal local-release builds may opt in explicitly by adding
-      // LYNX_ALLOW_LOCAL_MANAGED_RELEASE to SWIFT_ACTIVE_COMPILATION_CONDITIONS.
-      // Keep that flag out of production configurations: it permits unsigned
-      // HTTP managed endpoints for testing only.
-      loadEmbedded(feature: feature, generation: generation)
-      emitError(
-        url: context.manifestURL?.absoluteString ?? "",
-        feature: feature,
-        stage: .manifest,
-        code: "ERR_LYNX_SIGNED_CHANNEL_REQUIRED",
-        message: "Managed bundle delivery requires a signed channel endpoint in Release builds."
-      )
-      return
+    #if !DEBUG && LYNX_ALLOW_LOCAL_MANAGED_RELEASE
+      // This switch affects transport only: even an internal Release build
+      // still requires the embedded RSA public key and a valid signed release
+      // envelope. It exists solely because ATS normally blocks HTTP LAN URLs.
     #endif
 
     deliveryTask = Task { @MainActor [weak self] in
@@ -672,7 +657,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
 
       do {
         let release = try await LynxManagedBundleStore.shared.install(
-          manifestURL: manifestURL,
+          releaseEnvelopeURL: manifestURL,
           expectedFeature: feature
         )
         guard !Task.isCancelled, generation == self.loadGeneration,

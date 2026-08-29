@@ -12,6 +12,7 @@ actor LynxManagedBundleStore {
 
   private let fileManager = FileManager.default
   private let rootURL: URL
+  private var v2Installs: [String: Task<LynxManagedRelease, Error>] = [:]
 
   init(rootURL: URL? = nil) {
     if let rootURL {
@@ -118,6 +119,53 @@ actor LynxManagedBundleStore {
       )
     }
     return installed
+  }
+
+  /// V2 accepts only an exact signed release envelope. Its archive is never
+  /// trusted until RSA verification, central-directory validation, extraction,
+  /// and per-file hashes have succeeded in an app-private transaction.
+  func install(releaseEnvelopeURL: URL, expectedFeature: String) async throws -> LynxManagedRelease {
+    let (envelope, response) = try await URLSession.shared.data(for: noCacheURLRequest(releaseEnvelopeURL))
+    try validateHTTPResponse(response, url: releaseEnvelopeURL)
+    let payload = try LynxReleasePayload.decodeVerified(
+      LynxSignatureVerifier.verifyEmbedded(envelopeData: envelope, expectedType: "lynx-release", expectedFeature: expectedFeature),
+      expectedFeature: expectedFeature
+    )
+    let key = "\(expectedFeature)/\(payload.releaseId)"
+    if let installed = try installedV2Release(feature: expectedFeature, releaseID: payload.releaseId) { return installed }
+    if let task = v2Installs[key] { return try await task.value }
+    let task = Task { [self] in try await performV2Install(payload: payload, envelope: envelope, envelopeURL: releaseEnvelopeURL) }
+    v2Installs[key] = task
+    defer { v2Installs[key] = nil }
+    return try await task.value
+  }
+
+  private func performV2Install(payload: LynxReleasePayload, envelope: Data, envelopeURL: URL) async throws -> LynxManagedRelease {
+    let featureRoot = rootURL.appendingPathComponent(payload.feature, isDirectory: true)
+    let staging = featureRoot.appendingPathComponent("staging", isDirectory: true).appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let extracted = staging.appendingPathComponent("release", isDirectory: true)
+    let archive = staging.appendingPathComponent("release.zip.part")
+    try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(at: staging) }
+    try await download(from: try resolveRemoteURL(payload.archive.url, relativeTo: envelopeURL), to: archive, expectedBytes: payload.archive.bytes, expectedHash: payload.archive.sha256)
+    let expected = payload.files.map { LynxArchiveExpectedFile(path: $0.path, bytes: $0.bytes, sha256: $0.sha256) }
+    try LynxSafeArchive.extract(archiveURL: archive, to: extracted, expectedFiles: expected)
+    for file in expected { try verify(url: extracted.appendingPathComponent(file.path), expectedBytes: file.bytes, expectedHash: file.sha256) }
+    try envelope.write(to: extracted.appendingPathComponent("release-envelope.json"), options: .atomic)
+    let completion = V2Completion(feature: payload.feature, releaseID: payload.releaseId, version: payload.version, archiveSHA256: payload.archive.sha256)
+    try JSONEncoder().encode(completion).write(to: extracted.appendingPathComponent("completion.json"), options: .atomic)
+    let final = readyURL(feature: payload.feature, manifestID: payload.releaseId)
+    try fileManager.createDirectory(at: final.deletingLastPathComponent(), withIntermediateDirectories: true)
+    if !fileManager.fileExists(atPath: final.path) { try fileManager.moveItem(at: extracted, to: final) }
+    guard let installed = try installedV2Release(feature: payload.feature, releaseID: payload.releaseId) else { throw LynxDeliveryError(stage: .archive, code: "ERR_LYNX_RELEASE_INSTALL", message: "The completed signed Lynx release could not be reopened.") }
+    return installed
+  }
+
+  private func installedV2Release(feature: String, releaseID: String) throws -> LynxManagedRelease? {
+    guard isSafeFeature(feature), releaseID.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", options: .regularExpression) != nil else { return nil }
+    let directory = readyURL(feature: feature, manifestID: releaseID), completionURL = directory.appendingPathComponent("completion.json"), bundleURL = directory.appendingPathComponent("main.lynx.bundle")
+    guard isRegularFile(completionURL), isRegularFile(bundleURL), let completion = try? JSONDecoder().decode(V2Completion.self, from: Data(contentsOf: completionURL)), completion.feature == feature, completion.releaseID == releaseID else { return nil }
+    return LynxManagedRelease(feature: feature, manifestID: releaseID, version: completion.version, bundleURL: bundleURL)
   }
 
   private func readyURL(feature: String, manifestID: String) -> URL {
