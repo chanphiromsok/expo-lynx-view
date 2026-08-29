@@ -680,11 +680,17 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     deliveryTask = Task { @MainActor [weak self] in
       guard let self, generation == self.loadGeneration else { return }
       let state = await LynxManagedChannelState.shared.recover(feature: feature, channel: channel)
+      try? await LynxManagedBundleStore.shared.reconcile(
+        feature: feature,
+        channel: channel,
+        protectedReleaseIDs: state.protectedManifestIDs
+      )
 
       var displayedManifestID: String?
       if let pendingID = state.pendingManifestID,
         let pending = try? await LynxManagedBundleStore.shared.installedRelease(
           feature: feature,
+          channel: channel,
           manifestID: pendingID
         )
       {
@@ -704,6 +710,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       } else if let activeID = state.activeManifestID,
         let active = try? await LynxManagedBundleStore.shared.installedRelease(
           feature: feature,
+          channel: channel,
           manifestID: activeID
         )
       {
@@ -825,7 +832,9 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     // Direct signed release envelopes remain a Debug/local compatibility
     // route. They deliberately have no ETag/revision semantics.
     let release = try await LynxManagedBundleStore.shared.install(
-      releaseEnvelopeURL: manifestURL, expectedFeature: context.feature
+      releaseEnvelopeURL: manifestURL,
+      expectedFeature: context.feature,
+      expectedChannel: context.channel
     )
     guard release.manifestID != displayedManifestID,
       !(await LynxManagedChannelState.shared.isFailed(
@@ -1134,6 +1143,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
         activeID != manifestID,
         let active = try? await LynxManagedBundleStore.shared.installedRelease(
           feature: context.feature,
+          channel: context.channel,
           manifestID: activeID
         )
       {

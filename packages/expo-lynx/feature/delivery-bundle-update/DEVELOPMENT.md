@@ -6,15 +6,22 @@ production Cloudflare R2 rollout.
 
 This is an implementation-state guide, not the target production contract. Use
 [ARCHITECTURE.md](./ARCHITECTURE.md) and [`specs/v2`](./specs/v2/README.md) for
-new implementation decisions. The unpacked unsigned manifest flow below is
-retained only so the current prototype can be tested while V2 lands.
+new implementation decisions. V2 uses signed channel and release envelopes
+with a verified ZIP; the legacy unpacked manifest route is Debug/local
+compatibility only.
 
 ## Scope and current status
 
 The current slice supports one managed feature per `ExpoLynxView` on iOS. A
-React Native screen selects the feature, channel, activation mode, and (for
-local testing) a manifest URL. Native code owns the download, validation,
-filesystem, activation, rollback, and Lynx lifecycle callbacks.
+React Native screen selects the feature, channel, activation mode, and, for
+local testing, a signed channel URL. Native code owns the download, signature
+validation, filesystem, staging, rollback, and Lynx lifecycle callbacks.
+
+`next-open` is the implemented activation behavior. The public `on-launch`
+setting is accepted but is deliberately staged as `next-open` until a separate,
+measured two-view candidate implementation can retain the active mini-app
+through candidate health confirmation. It must not be treated as current-view
+replacement.
 
 The local test manifest is intentionally unsigned (`"signature": ""`). Debug
 builds accept it. An internal Release build can opt in with
@@ -101,16 +108,10 @@ sequenceDiagram
   B->>B: verify byte count and SHA-256
   B->>B: atomically move staging to ready/<manifestID>
 
-  alt activation = on-launch
-    B-->>V: candidate local file URL
-    V->>L: render candidate
-    L-->>V: didLoadFinished
-    V->>S: confirm candidate active
-  else activation = next-open
-    V->>S: stage candidate
-  end
+  Note over V,S: Update checks never replace the mounted view
+  V->>S: stage verified release for next open
 
-  alt checksum, network, Lynx error, or timeout
+  alt checksum, network, archive, or Lynx error
     V->>S: mark candidate failed
     V->>L: restore previous active release or embedded
     V-->>RN: onError
@@ -119,16 +120,22 @@ sequenceDiagram
 
 ### Filesystem and state
 
-Each feature has independent release directories:
+Each signed V2 feature/channel pair has an independent cache namespace:
 
 ```text
-<Application Support>/ExpoLynx/<feature>/
+<Application Support>/ExpoLynx/<feature>/<channel>/
   staging/<uuid>/                 # incomplete transaction; deleted on exit
-  ready/<manifestID>/
-    manifest.json
+  ready/<releaseId>/
+    completion.json               # atomic completed-install marker
+    release-envelope.json
     main.lynx.bundle
     static/...
 ```
+
+The first opening after this cache-layout upgrade moves a valid older V2
+feature-only directory into the requested channel namespace. This is an
+one-time local migration, not a network operation. Legacy unpacked manifests
+remain in their former directory only for the Debug compatibility path.
 
 `LynxManagedChannelState` stores the pointers in `UserDefaults`:
 
@@ -140,9 +147,19 @@ attemptingManifestID   candidate currently being rendered
 failedManifestIDs      candidates not to retry in a boot loop
 ```
 
-`LynxManagedBundleStore` is an actor, so one feature's install transaction is
-serialized. A release is not visible in `ready/` until all declared files have
-been downloaded and verified.
+`LynxManagedBundleStore` is an actor, so each feature/channel/release install
+transaction is serialized. A release is not visible in `ready/` until every
+declared file has been signature, archive, byte-count, and hash verified.
+Cached opens read only `completion.json` and confirm the declared paths exist;
+they deliberately do not rehash the archive or file contents.
+
+At each managed open the store reconciles the current namespace: abandoned
+`staging/` is removed, incomplete ready directories are discarded, and up to
+four unprotected ready releases (256 MiB total) are retained. Active,
+previous-LKG, pending, and attempting IDs from channel state are protected from
+eviction. Installation reserves archive + expanded bytes using the volume's
+important-usage capacity before downloading, so an insufficient-space failure
+leaves the local embedded/cache fallback usable.
 
 ## Testing workflow
 
@@ -240,17 +257,17 @@ next-launch activation without clearing state.
 
 ## Callback expectations
 
-| Event | Meaning | Typical managed sequence |
-|---|---|---|
-| `onLoadStart` | Native is about to render a selected source | embedded, cache, or download |
-| `onLoad` with `source: embedded` | Embedded baseline rendered | first launch while remote downloads |
-| `onLoad` with `source: cache` | Previously verified release rendered | offline/cache hit |
-| `onLoad` with `source: download` | Newly downloaded candidate rendered | `on-launch` success |
-| `onError` with `stage: manifest` | Manifest JSON, URL, feature, or policy failure | no candidate installed |
-| `onError` with `stage: compatibility` | Lynx engine or host version mismatch | release rejected before download |
-| `onError` with `stage: checksum` | Byte count or SHA-256 mismatch | staging transaction discarded |
-| `onError` with `stage: download` | HTTP, connectivity, or timeout failure | current UI retained |
-| `onError` with `stage: lynx` | Lynx render failure or candidate watchdog | previous LKG/embedded restored |
+| Event                                 | Meaning                                        | Typical managed sequence            |
+| ------------------------------------- | ---------------------------------------------- | ----------------------------------- |
+| `onLoadStart`                         | Native is about to render a selected source    | embedded, cache, or download        |
+| `onLoad` with `source: embedded`      | Embedded baseline rendered                     | first launch while remote downloads |
+| `onLoad` with `source: cache`         | Previously verified release rendered           | offline/cache hit                   |
+| `onLoad` with `source: download`      | Newly downloaded candidate rendered            | `on-launch` success                 |
+| `onError` with `stage: manifest`      | Manifest JSON, URL, feature, or policy failure | no candidate installed              |
+| `onError` with `stage: compatibility` | Lynx engine or host version mismatch           | release rejected before download    |
+| `onError` with `stage: checksum`      | Byte count or SHA-256 mismatch                 | staging transaction discarded       |
+| `onError` with `stage: download`      | HTTP, connectivity, or timeout failure         | current UI retained                 |
+| `onError` with `stage: lynx`          | Lynx render failure or candidate watchdog      | previous LKG/embedded restored      |
 
 The sample React Native splash deliberately remains visible over an embedded
 `onLoad` while a managed first download is in flight. It is hidden on a cache or
@@ -261,24 +278,24 @@ download success, and on any delivery/render error.
 Run these manually on a Debug device build, then repeat the relevant cases on
 the internal Release build:
 
-| Case | Setup | Expected result |
-|---|---|---|
-| Fresh install online | No app data; server reachable | Embedded appears, then downloaded release appears |
-| Fresh install offline | Stop server before launch | Embedded appears; error is surfaced; no endless download |
-| Same manifest twice | Relaunch without changing manifest | Existing release is reused; no duplicate files |
-| New `on-launch` release | Rebuild source and refresh server | Candidate renders now and becomes active after `onLoad` |
-| New `next-open` release | Use `activation: next-open` | Candidate stages; current UI remains until next launch |
-| Bad bundle bytes | Change bundle without updating manifest hash | Checksum error; no `ready/<id>` activation |
-| Bad sidecar bytes | Change an image without updating its hash | Checksum error; staging directory is removed |
-| Missing sidecar | Remove a declared resource from server | Download/resource error; previous UI remains |
-| HTTP 404 | Point manifest or file URL at a missing path | Download error; fallback remains usable |
-| Network interruption | Turn Wi-Fi off during install | Bounded error; no partial release becomes active |
-| Candidate Lynx failure | Serve a bundle that fails to render | Candidate marked failed; previous LKG/embedded restored |
-| Process kill | Kill app during candidate activation | Next launch recovers from `attemptingManifestID` |
-| Failed-release retry | Relaunch after candidate failure | Failed manifest ID is skipped; no boot loop |
-| Release guard | Build Release without opt-in | Embedded baseline; managed endpoint is rejected |
-| Local Release opt-in | Build Release with the flag | LAN manifest is eligible for this internal test |
-| Safe area | Rotate/notch device during load and after load | Host and Lynx viewport remain aligned; no visible jump |
+| Case                    | Setup                                          | Expected result                                          |
+| ----------------------- | ---------------------------------------------- | -------------------------------------------------------- |
+| Fresh install online    | No app data; server reachable                  | Embedded appears, then downloaded release appears        |
+| Fresh install offline   | Stop server before launch                      | Embedded appears; error is surfaced; no endless download |
+| Same manifest twice     | Relaunch without changing manifest             | Existing release is reused; no duplicate files           |
+| New `on-launch` release | Rebuild source and refresh server              | Candidate renders now and becomes active after `onLoad`  |
+| New `next-open` release | Use `activation: next-open`                    | Candidate stages; current UI remains until next launch   |
+| Bad bundle bytes        | Change bundle without updating manifest hash   | Checksum error; no `ready/<id>` activation               |
+| Bad sidecar bytes       | Change an image without updating its hash      | Checksum error; staging directory is removed             |
+| Missing sidecar         | Remove a declared resource from server         | Download/resource error; previous UI remains             |
+| HTTP 404                | Point manifest or file URL at a missing path   | Download error; fallback remains usable                  |
+| Network interruption    | Turn Wi-Fi off during install                  | Bounded error; no partial release becomes active         |
+| Candidate Lynx failure  | Serve a bundle that fails to render            | Candidate marked failed; previous LKG/embedded restored  |
+| Process kill            | Kill app during candidate activation           | Next launch recovers from `attemptingManifestID`         |
+| Failed-release retry    | Relaunch after candidate failure               | Failed manifest ID is skipped; no boot loop              |
+| Release guard           | Build Release without opt-in                   | Embedded baseline; managed endpoint is rejected          |
+| Local Release opt-in    | Build Release with the flag                    | LAN manifest is eligible for this internal test          |
+| Safe area               | Rotate/notch device during load and after load | Host and Lynx viewport remain aligned; no visible jump   |
 
 ## Code review findings and production gates
 

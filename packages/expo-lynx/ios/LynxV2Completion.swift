@@ -7,4 +7,7 @@ struct V2Completion: Codable, Sendable {
   let releaseID: String
   let version: String
   let archiveSHA256: String
+  /// Signed archive entries validated during installation. Cached opens only
+  /// check that these paths still exist; they never rehash the completed ZIP.
+  let files: [String]?
 }

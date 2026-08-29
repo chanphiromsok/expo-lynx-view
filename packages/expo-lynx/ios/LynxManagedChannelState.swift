@@ -11,6 +11,15 @@ struct LynxManagedState: Codable, Sendable {
   var lastRevision: Int? = nil
 
   static let empty = LynxManagedState(failedManifestIDs: [])
+
+  var protectedManifestIDs: Set<String> {
+    Set([
+      activeManifestID,
+      previousManifestID,
+      pendingManifestID,
+      attemptingManifestID,
+    ].compactMap { $0 })
+  }
 }
 
 actor LynxManagedChannelState {
