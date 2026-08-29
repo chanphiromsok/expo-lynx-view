@@ -1,58 +1,94 @@
-import Constants from 'expo-constants';
-import { ExpoLynxView } from 'expo-lynx';
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import Constants from "expo-constants";
+import { ExpoLynxView, type LynxSource } from "expo-lynx";
+import { useState } from "react";
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import {
+  initialWindowMetrics,
+  SafeAreaProvider,
+  SafeAreaView,
+} from "react-native-safe-area-context";
 
 const extra = (Constants.expoConfig?.extra ?? {}) as {
   lynxDevBundleHost?: string;
   lynxDevBundlePort?: number;
-  lynxProdBundleUrl?: string;
 };
 
-const devHost = extra.lynxDevBundleHost ?? '127.0.0.1';
+const devHost = "192.168.18.144";
 const devPort = extra.lynxDevBundlePort ?? 3000;
 const DEV_BUNDLE = `http://${devHost}:${devPort}/main.lynx.bundle`;
-const STATIC_BUNDLE = 'static.lynx';
-const PROD_BUNDLE = extra.lynxProdBundleUrl ?? DEV_BUNDLE;
-console.log(PROD_BUNDLE);
+const DEV_MANIFEST = `http://${devHost}:${devPort}/manifest.json`;
 
-type SourceKind = 'dev' | 'static' | 'prod';
+type SourceKind = "managed" | "dev" | "embedded";
 
 const SOURCE_OPTIONS: readonly { kind: SourceKind; label: string }[] = [
-  { kind: 'prod', label: 'Prod (HTTPS CDN)' },
-  { kind: 'dev', label: 'Dev (HTTP LAN)' },
-  { kind: 'static', label: 'Static (bundled)' },
+  { kind: "managed", label: "Managed cache" },
+  { kind: "dev", label: "Direct dev" },
+  { kind: "embedded", label: "Embedded" },
 ];
 
 export default function App() {
-  const [sourceKind, setSourceKind] = useState<SourceKind>('dev');
-  const [status, setStatus] = useState('Loading…');
+  const [sourceKind, setSourceKind] = useState<SourceKind>("managed");
+  const [status, setStatus] = useState("Loading…");
+  const [isSplashVisible, setSplashVisible] = useState(true);
 
-  const source =
-    sourceKind === 'prod' ? PROD_BUNDLE : sourceKind === 'dev' ? DEV_BUNDLE : STATIC_BUNDLE;
+  const source: LynxSource =
+    sourceKind === "managed"
+      ? {
+          kind: "managed",
+          feature: "delivery",
+          channel: "stable",
+          activation: "on-launch",
+          manifestUrl: DEV_MANIFEST,
+        }
+      : sourceKind === "dev"
+        ? { kind: "development", url: DEV_BUNDLE }
+        : { kind: "embedded", feature: "delivery" };
 
   const selectSource = (nextSource: SourceKind) => {
     setSourceKind(nextSource);
     setStatus(`Loading ${nextSource} bundle…`);
+    setSplashVisible(true);
   };
   return (
     <ExpoLynxView
-      url={STATIC_BUNDLE}
+      source={source}
       initialData={{ greeting: `Hello from Expo (${sourceKind})` }}
-      onLoad={() => setStatus(`Loaded ${sourceKind} bundle`)}
-      onLoadStart={() => setStatus(`Loading ${sourceKind} bundle…`)}
+      onLoad={({ nativeEvent }) => {
+        setStatus(
+          `Loaded ${nativeEvent.version} from ${nativeEvent.source} (${nativeEvent.durationMs} ms)`,
+        );
+
+        // A managed source can render the embedded fallback while its
+        // first remote release is still downloading. Keep the React
+        // Native splash above that temporary render. A verified cache
+        // or downloaded release is the managed success condition.
+        if (sourceKind !== "managed" || nativeEvent.source !== "embedded") {
+          setSplashVisible(false);
+        }
+      }}
+      onLoadStart={({ nativeEvent }) => {
+        setSplashVisible(true);
+        setStatus(`Loading ${nativeEvent.source} bundle…`);
+      }}
       onError={({ nativeEvent }) => {
-        setStatus(`Error loading ${sourceKind} bundle: ${nativeEvent.message}`);
-        console.error('Lynx error', nativeEvent);
+        // The native view has already retained or restored its verified
+        // cache/embedded fallback, so reveal that fallback on failure.
+        setSplashVisible(false);
+        setStatus(`${nativeEvent.stage} error: ${nativeEvent.message}`);
+        console.error("Lynx error", nativeEvent);
       }}
       style={styles.lynxView}
       testID="lynx-view"
     />
   );
-
   return (
-    <SafeAreaProvider>
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.container}>
           <Text style={styles.title}>Lynx embedded in Expo</Text>
@@ -65,31 +101,78 @@ export default function App() {
                   accessibilityState={{ selected }}
                   key={kind}
                   onPress={() => selectSource(kind)}
-                  style={[styles.sourceButton, selected && styles.sourceButtonSelected]}
-                  testID={`${kind}-bundle-button`}>
+                  style={[
+                    styles.sourceButton,
+                    selected && styles.sourceButtonSelected,
+                  ]}
+                  testID={`${kind}-bundle-button`}
+                >
                   <Text
-                    style={[styles.sourceButtonText, selected && styles.sourceButtonTextSelected]}>
+                    style={[
+                      styles.sourceButtonText,
+                      selected && styles.sourceButtonTextSelected,
+                    ]}
+                  >
                     {label}
                   </Text>
                 </Pressable>
               );
             })}
           </View>
-          <Text accessibilityLiveRegion="polite" style={styles.status} testID="lynx-status">
+          <Text
+            accessibilityLiveRegion="polite"
+            style={styles.status}
+            testID="lynx-status"
+          >
             {status}
           </Text>
-          <ExpoLynxView
-            url={source}
-            initialData={{ greeting: `Hello from Expo (${sourceKind})` }}
-            onLoad={() => setStatus(`Loaded ${sourceKind} bundle`)}
-            onLoadStart={() => setStatus(`Loading ${sourceKind} bundle…`)}
-            onError={({ nativeEvent }) => {
-              setStatus(`Error loading ${sourceKind} bundle: ${nativeEvent.message}`);
-              console.error('Lynx error', nativeEvent);
-            }}
-            style={styles.lynxView}
-            testID="lynx-view"
-          />
+          <View style={styles.lynxContainer}>
+            <ExpoLynxView
+              source={source}
+              initialData={{ greeting: `Hello from Expo (${sourceKind})` }}
+              onLoad={({ nativeEvent }) => {
+                setStatus(
+                  `Loaded ${nativeEvent.version} from ${nativeEvent.source} (${nativeEvent.durationMs} ms)`,
+                );
+
+                // A managed source can render the embedded fallback while its
+                // first remote release is still downloading. Keep the React
+                // Native splash above that temporary render. A verified cache
+                // or downloaded release is the managed success condition.
+                if (
+                  sourceKind !== "managed" ||
+                  nativeEvent.source !== "embedded"
+                ) {
+                  setSplashVisible(false);
+                }
+              }}
+              onLoadStart={({ nativeEvent }) => {
+                setSplashVisible(true);
+                setStatus(`Loading ${nativeEvent.source} bundle…`);
+              }}
+              onError={({ nativeEvent }) => {
+                // The native view has already retained or restored its verified
+                // cache/embedded fallback, so reveal that fallback on failure.
+                setSplashVisible(false);
+                setStatus(`${nativeEvent.stage} error: ${nativeEvent.message}`);
+                console.error("Lynx error", nativeEvent);
+              }}
+              style={styles.lynxView}
+              testID="lynx-view"
+            />
+            {isSplashVisible ? (
+              <View
+                accessibilityLiveRegion="polite"
+                accessibilityViewIsModal
+                style={styles.splashOverlay}
+                testID="lynx-splash"
+              >
+                <ActivityIndicator color="#18181b" size="large" />
+                <Text style={styles.splashTitle}>Loading mini app…</Text>
+                <Text style={styles.splashMessage}>{status}</Text>
+              </View>
+            ) : null}
+          </View>
         </View>
       </SafeAreaView>
     </SafeAreaProvider>
@@ -99,7 +182,7 @@ export default function App() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#f4f4f5',
+    backgroundColor: "#f4f4f5",
   },
   container: {
     flex: 1,
@@ -107,41 +190,67 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   title: {
-    color: '#18181b',
+    color: "#18181b",
     fontSize: 24,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   sourcePicker: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 8,
   },
   sourceButton: {
     flex: 1,
-    alignItems: 'center',
+    alignItems: "center",
     borderRadius: 12,
-    backgroundColor: '#e4e4e7',
+    backgroundColor: "#e4e4e7",
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
   sourceButtonSelected: {
-    backgroundColor: '#18181b',
+    backgroundColor: "#18181b",
   },
   sourceButtonText: {
-    color: '#3f3f46',
+    color: "#3f3f46",
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   sourceButtonTextSelected: {
-    color: '#fff',
+    color: "#fff",
   },
   status: {
-    color: '#52525b',
+    color: "#52525b",
     fontSize: 14,
+  },
+  lynxContainer: {
+    flex: 1,
+    overflow: "hidden",
+    borderRadius: 16,
+    backgroundColor: "#fff",
   },
   lynxView: {
     flex: 1,
-    overflow: 'hidden',
-    borderRadius: 16,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
+  },
+  splashOverlay: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    padding: 24,
+    backgroundColor: "#fff",
+  },
+  splashTitle: {
+    color: "#18181b",
+    fontSize: 20,
+    fontWeight: "700",
+  },
+  splashMessage: {
+    color: "#71717a",
+    fontSize: 14,
+    textAlign: "center",
   },
 });

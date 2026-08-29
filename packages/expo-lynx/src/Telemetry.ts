@@ -1,6 +1,6 @@
-// PR8 — Telemetry event types + redaction rules
+// Legacy prototype telemetry; V2 migration target: M11 mobile telemetry.
 //
-// Spec: feature/delivery-bundle-update/specs/client/pr-08-telemetry-errors.md
+// Spec: feature/delivery-bundle-update/specs/v2/mobile/m11-mobile-telemetry-e2e.md
 //
 // Telemetry events are emitted by the native side. JS consumes them.
 // This file enforces the "no PII" rule on the JS side: even if a

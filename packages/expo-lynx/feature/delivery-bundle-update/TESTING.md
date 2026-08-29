@@ -1,9 +1,13 @@
 # Testing
 
+For the current iOS implementation and physical-device static-server workflow,
+start with [DEVELOPMENT.md](./DEVELOPMENT.md). This file remains the broader
+cross-platform/production test matrix.
+
 ## Fast checks
 
 ```bash
-cd /Users/phirom/Desktop/expo-lynx
+cd /Users/phirom/Desktop/expo-lynx-monorepo
 pnpm run test
 pnpm run lint
 pnpm run build
@@ -14,7 +18,7 @@ These prove the TypeScript surface and utilities compile. They do **not** prove 
 ## Native build checks
 
 ```bash
-cd /Users/phirom/Desktop/expo-lynx/example
+cd /Users/phirom/Desktop/expo-lynx-monorepo/apps/expo-lynx-example
 pnpm expo prebuild --clean
 
 # iOS
@@ -44,7 +48,7 @@ Record platform, app build, Lynx SDK, runtime version, channel revision, and rel
 | Replayed channel revision | Reject and retain current release |
 | Invalid manifest signature/hash | Reject before activation |
 | Incompatible runtime version | Reject before file download |
-| Missing or bad sidecar | Delete staging; retain current UI |
+| Missing, unexpected, or bad ZIP entry | Delete staging; retain current UI |
 | Network interrupted during download | No partial release appears in `ready/` |
 | Two update checks race | One transaction wins; no duplicate/partial release |
 | Candidate render error | Previous LKG renders |
@@ -53,7 +57,6 @@ Record platform, app build, Lynx SDK, runtime version, channel revision, and rel
 | Failed release returned again | Client skips it; no boot loop |
 | Server rollback | Older target activates from newer channel revision |
 | Cached rollback target | No redundant file download |
-| Kill switch (`keep-current`) | Current release remains active |
 | Release logs | No routine Lynx Debug/Info output |
 | Resource traversal path (`../`) | Manifest rejected |
 | Telemetry with token/query data | Sensitive content absent |

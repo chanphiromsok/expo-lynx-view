@@ -5,12 +5,31 @@ final class ExpoLynxTemplateProvider: NSObject, LynxTemplateProvider,
   LynxTemplateResourceFetcher, LynxGenericResourceFetcher, LynxMediaResourceFetcher
 {
   static let shared = ExpoLynxTemplateProvider()
+  private let resourceRootLock = NSLock()
+  private var localResourceRoot: URL?
+
+  func setLocalResourceRoot(_ url: URL?) {
+    resourceRootLock.lock()
+    localResourceRoot = url
+    resourceRootLock.unlock()
+  }
+
+  private func currentLocalResourceRoot() -> URL? {
+    resourceRootLock.lock()
+    defer { resourceRootLock.unlock() }
+    return localResourceRoot
+  }
 
   func bundledResourceURL(for value: String) -> URL? {
-    if let fileURL = URL(string: value), fileURL.isFileURL,
-      FileManager.default.fileExists(atPath: fileURL.path)
-    {
-      return fileURL
+    guard let resourceRoot = Bundle.main.resourceURL else { return nil }
+
+    if let fileURL = URL(string: value), fileURL.isFileURL {
+      if let localRoot = currentLocalResourceRoot(),
+        let localURL = existingFileURL(fileURL, inside: localRoot)
+      {
+        return localURL
+      }
+      return existingFileURL(fileURL, inside: resourceRoot)
     }
 
     var resourcePath = value
@@ -24,20 +43,37 @@ final class ExpoLynxTemplateProvider: NSObject, LynxTemplateProvider,
       .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     let pathComponents = resourcePath.split(separator: "/", omittingEmptySubsequences: true)
     guard !pathComponents.isEmpty,
-      !pathComponents.contains(where: { $0 == "." || $0 == ".." }),
-      let resourceRoot = Bundle.main.resourceURL
+      !pathComponents.contains(where: { $0 == "." || $0 == ".." })
     else {
       return nil
     }
 
-    let normalizedRoot = resourceRoot.standardizedFileURL
-    let candidate = pathComponents.reduce(normalizedRoot) { partialURL, component in
+    if let localRoot = currentLocalResourceRoot(),
+      let localURL = existingResourceURL(root: localRoot, components: pathComponents)
+    {
+      return localURL
+    }
+
+    return existingResourceURL(root: resourceRoot, components: pathComponents)
+  }
+
+  private func existingResourceURL(root: URL, components: [Substring]) -> URL? {
+    let normalizedRoot = root.standardizedFileURL
+    let candidate = components.reduce(normalizedRoot) { partialURL, component in
       partialURL.appendingPathComponent(String(component), isDirectory: false)
     }.standardizedFileURL
-    let rootPath = normalizedRoot.path.hasSuffix("/") ? normalizedRoot.path : normalizedRoot.path + "/"
+    return existingFileURL(candidate, inside: normalizedRoot)
+  }
 
-    guard candidate.path.hasPrefix(rootPath),
-      FileManager.default.fileExists(atPath: candidate.path)
+  private func existingFileURL(_ fileURL: URL, inside root: URL) -> URL? {
+    let normalizedRoot = root.standardizedFileURL
+    let candidate = fileURL.standardizedFileURL
+    let rootPath =
+      normalizedRoot.path.hasSuffix("/") ? normalizedRoot.path : normalizedRoot.path + "/"
+
+    guard (candidate.path == normalizedRoot.path || candidate.path.hasPrefix(rootPath)),
+      FileManager.default.fileExists(atPath: candidate.path),
+      !candidate.hasDirectoryPath
     else {
       return nil
     }
@@ -84,6 +120,9 @@ final class ExpoLynxTemplateProvider: NSObject, LynxTemplateProvider,
     }
 
     var request = URLRequest(url: remoteURL)
+    // Keep a failed LAN/CDN resource fetch from holding Lynx in a loading
+    // state indefinitely. Managed downloads use the same 15-second bound.
+    request.timeoutInterval = 15
     #if DEBUG
       // Development bundles and HMR assets must never reuse a stale response.
       request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -193,6 +232,31 @@ final class ExpoLynxTemplateProvider: NSObject, LynxTemplateProvider,
   }
 }
 
+private struct ExpoLynxSourcePayload: Decodable {
+  let kind: String
+  let feature: String?
+  let channel: String?
+  let activation: String?
+  let manifestUrl: String?
+  let url: String?
+}
+
+private struct ExpoLynxManagedContext {
+  let feature: String
+  let channel: String
+  let activation: String
+  let manifestURL: URL?
+}
+
+private struct ExpoLynxLoadTarget {
+  let url: String
+  let feature: String
+  let version: String
+  let source: String
+  let managedContext: ExpoLynxManagedContext?
+  let candidateManifestID: String?
+}
+
 final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   let onLoadStart = EventDispatcher()
   let onLoad = EventDispatcher()
@@ -200,6 +264,8 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
 
   private let lynxView: LynxView
   private let templateProvider: ExpoLynxTemplateProvider
+  private var legacySource: String?
+  private var sourceJSON: String?
   private var source = ""
   private var initialDataJSON: String?
   private var loadGeneration = 0
@@ -207,19 +273,21 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   private var lastLayoutSize = CGSize.zero
   private var lastSafeAreaInsets: UIEdgeInsets?
   private var hasPendingUpdate = false
+  private var currentTarget: ExpoLynxLoadTarget?
+  private var deliveryTask: Task<Void, Never>?
+  private var watchdogWorkItem: DispatchWorkItem?
+  private var loadStartedAt = Date()
 
   required init(appContext: AppContext? = nil) {
     // Do not set screen metrics here. Lynx 4 marks screen-metric updates as
     // experimental and does not support multiple views with different metrics.
     // The per-view viewport is updated from this view's bounds in applyLayout.
-    let provider = ExpoLynxTemplateProvider.shared
+    let provider = ExpoLynxTemplateProvider()
     templateProvider = provider
     lynxView = LynxView { builder in
       // Match Lynx Explorer: each view gets a config backed by the provider
       // prepared on LynxEnv, while the fetcher handles remote URL reloads.
-      builder.config = LynxConfig(
-        provider: LynxEnv.sharedInstance().config.templateProvider
-      )
+      builder.config = LynxConfig(provider: provider)
       // Match Lynx Explorer: native URL reloads and lazy bundles use the
       // resource-fetcher pipeline when one is supplied by the host.
       builder.templateResourceFetcher = provider
@@ -253,6 +321,8 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   }
 
   deinit {
+    deliveryTask?.cancel()
+    watchdogWorkItem?.cancel()
     lynxView.removeLifecycleClient(self)
     lynxView.clearForDestroy()
   }
@@ -284,7 +354,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     // Lynx global props are host-owned, and the values are in the same point
     // coordinate space as this LynxView's viewport. Update only on change:
     // each global-props update causes Lynx to re-render the page.
-    lynxView.updateGlobalProps([
+    lynxView.updateGlobalProps(with: [
       "safeAreaTop": insets.top,
       "safeAreaBottom": insets.bottom,
       "safeAreaLeft": insets.left,
@@ -301,13 +371,22 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     )
   }
 
-  func setSource(_ value: String) {
-    let nextSource = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard nextSource != source else {
+  func setSource(_ value: String?) {
+    let nextSource = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard nextSource != legacySource else {
       return
     }
 
-    source = nextSource
+    legacySource = nextSource
+    hasPendingUpdate = true
+  }
+
+  func setSourceJSON(_ value: String?) {
+    guard value != sourceJSON else {
+      return
+    }
+
+    sourceJSON = value
     hasPendingUpdate = true
   }
 
@@ -339,6 +418,9 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   private func scheduleLoad() {
     loadGeneration += 1
     hasLoadedTemplate = false
+    deliveryTask?.cancel()
+    watchdogWorkItem?.cancel()
+    currentTarget = nil
 
     let generation = loadGeneration
     DispatchQueue.main.async { [weak self] in
@@ -350,18 +432,326 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   }
 
   private func loadSource(generation: Int) {
-    guard !source.isEmpty else {
+    if let sourceJSON, !sourceJSON.isEmpty {
+      do {
+        let payload = try JSONDecoder().decode(
+          ExpoLynxSourcePayload.self,
+          from: Data(sourceJSON.utf8)
+        )
+        switch payload.kind {
+        case "embedded":
+          loadEmbedded(feature: payload.feature ?? "default", generation: generation)
+        case "development":
+          loadDevelopment(url: payload.url, generation: generation)
+        case "managed":
+          loadManaged(payload: payload, generation: generation)
+        default:
+          emitError(
+            url: "",
+            feature: payload.feature ?? "",
+            stage: .manifest,
+            code: "ERR_LYNX_SOURCE_KIND",
+            message: "Unsupported Lynx source kind: \(payload.kind)"
+          )
+        }
+      } catch {
+        emitError(
+          url: "",
+          feature: "",
+          stage: .manifest,
+          code: "ERR_LYNX_SOURCE_INVALID",
+          message: "Could not decode the Lynx source configuration: \(error.localizedDescription)"
+        )
+      }
       return
     }
 
-    onLoadStart(["url": source])
+    guard let legacySource, !legacySource.isEmpty else { return }
+    #if DEBUG
+      loadDevelopment(url: legacySource, generation: generation)
+    #else
+      if let remoteURL = URL(string: legacySource),
+        ["http", "https"].contains(remoteURL.scheme?.lowercased())
+      {
+        emitError(
+          url: legacySource,
+          feature: "",
+          stage: .manifest,
+          code: "ERR_LYNX_REMOTE_SOURCE_FORBIDDEN",
+          message: "Raw remote Lynx URLs are forbidden in Release builds."
+        )
+      } else {
+        loadTarget(
+          ExpoLynxLoadTarget(
+            url: legacySource,
+            feature: "",
+            version: "embedded",
+            source: "embedded",
+            managedContext: nil,
+            candidateManifestID: nil
+          ),
+          generation: generation
+        )
+      }
+    #endif
+  }
+
+  private func loadDevelopment(url: String?, generation: Int) {
+    guard let url, !url.isEmpty else {
+      emitError(
+        url: "",
+        feature: "",
+        stage: .manifest,
+        code: "ERR_LYNX_DEVELOPMENT_URL",
+        message: "A development Lynx source requires a URL."
+      )
+      return
+    }
+
+    #if DEBUG
+      loadTarget(
+        ExpoLynxLoadTarget(
+          url: url,
+          feature: "",
+          version: "development",
+          source: "development",
+          managedContext: nil,
+          candidateManifestID: nil
+        ),
+        generation: generation
+      )
+    #else
+      emitError(
+        url: url,
+        feature: "",
+        stage: .manifest,
+        code: "ERR_LYNX_DEVELOPMENT_FORBIDDEN",
+        message: "Development Lynx sources are forbidden in Release builds."
+      )
+    #endif
+  }
+
+  private func loadEmbedded(feature: String, generation: Int) {
+    let embeddedName = resolveLocalURL("\(feature).lynx") == nil ? "static.lynx" : "\(feature).lynx"
+    loadTarget(
+      ExpoLynxLoadTarget(
+        url: embeddedName,
+        feature: feature,
+        version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+          ?? "embedded",
+        source: "embedded",
+        managedContext: nil,
+        candidateManifestID: nil
+      ),
+      generation: generation
+    )
+  }
+
+  private func loadManaged(payload: ExpoLynxSourcePayload, generation: Int) {
+    guard let feature = payload.feature?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !feature.isEmpty
+    else {
+      emitError(
+        url: payload.manifestUrl ?? "",
+        feature: "",
+        stage: .manifest,
+        code: "ERR_LYNX_MANAGED_FEATURE",
+        message: "A managed Lynx source requires a feature name."
+      )
+      return
+    }
+
+    let channel = payload.channel ?? "stable"
+    let activation = payload.activation ?? "next-open"
+    guard ["stable", "beta"].contains(channel),
+      ["next-open", "on-launch"].contains(activation)
+    else {
+      emitError(
+        url: payload.manifestUrl ?? "",
+        feature: feature,
+        stage: .manifest,
+        code: "ERR_LYNX_MANAGED_OPTIONS",
+        message: "The managed Lynx channel or activation mode is invalid."
+      )
+      return
+    }
+
+    let context = ExpoLynxManagedContext(
+      feature: feature,
+      channel: channel,
+      activation: activation,
+      manifestURL: payload.manifestUrl.flatMap(URL.init(string:))
+    )
+    if payload.manifestUrl != nil,
+      !["http", "https"].contains(context.manifestURL?.scheme?.lowercased())
+    {
+      emitError(
+        url: payload.manifestUrl ?? "",
+        feature: feature,
+        stage: .manifest,
+        code: "ERR_LYNX_MANIFEST_URL",
+        message: "The Debug manifest URL must use HTTP or HTTPS."
+      )
+      return
+    }
+
+    #if !DEBUG && !LYNX_ALLOW_LOCAL_MANAGED_RELEASE
+      // This first iOS slice intentionally has no production trust root yet.
+      // Never inspect or execute managed cache written by a Debug build: an
+      // unsigned local manifest must not become trusted merely because it was
+      // downloaded into the app container before a Release build was installed.
+      //
+      // Internal local-release builds may opt in explicitly by adding
+      // LYNX_ALLOW_LOCAL_MANAGED_RELEASE to SWIFT_ACTIVE_COMPILATION_CONDITIONS.
+      // Keep that flag out of production configurations: it permits unsigned
+      // HTTP managed endpoints for testing only.
+      loadEmbedded(feature: feature, generation: generation)
+      emitError(
+        url: context.manifestURL?.absoluteString ?? "",
+        feature: feature,
+        stage: .manifest,
+        code: "ERR_LYNX_SIGNED_CHANNEL_REQUIRED",
+        message: "Managed bundle delivery requires a signed channel endpoint in Release builds."
+      )
+      return
+    #endif
+
+    deliveryTask = Task { @MainActor [weak self] in
+      guard let self, generation == self.loadGeneration else { return }
+      let state = await LynxManagedChannelState.shared.recover(feature: feature, channel: channel)
+
+      var displayedManifestID: String?
+      if let pendingID = state.pendingManifestID,
+        let pending = try? await LynxManagedBundleStore.shared.installedRelease(
+          feature: feature,
+          manifestID: pendingID
+        )
+      {
+        await LynxManagedChannelState.shared.beginAttempt(
+          manifestID: pendingID,
+          feature: feature,
+          channel: channel
+        )
+        displayedManifestID = pendingID
+        self.loadManagedRelease(
+          pending,
+          context: context,
+          candidate: true,
+          downloaded: false,
+          generation: generation
+        )
+      } else if let activeID = state.activeManifestID,
+        let active = try? await LynxManagedBundleStore.shared.installedRelease(
+          feature: feature,
+          manifestID: activeID
+        )
+      {
+        displayedManifestID = activeID
+        self.loadManagedRelease(
+          active,
+          context: context,
+          candidate: false,
+          downloaded: false,
+          generation: generation
+        )
+      } else {
+        self.loadEmbedded(feature: feature, generation: generation)
+      }
+
+      guard !Task.isCancelled, generation == self.loadGeneration else { return }
+      guard let manifestURL = context.manifestURL else {
+        self.emitError(
+          url: "",
+          feature: feature,
+          stage: .manifest,
+          code: "ERR_LYNX_MANIFEST_URL_REQUIRED",
+          message: "A managed Lynx source requires a manifest URL to check for releases."
+        )
+        return
+      }
+
+      do {
+        let release = try await LynxManagedBundleStore.shared.install(
+          manifestURL: manifestURL,
+          expectedFeature: feature
+        )
+        guard !Task.isCancelled, generation == self.loadGeneration,
+          release.manifestID != displayedManifestID
+        else { return }
+        guard !(await LynxManagedChannelState.shared.isFailed(
+          manifestID: release.manifestID,
+          feature: feature,
+          channel: channel
+        )) else { return }
+
+        if activation == "on-launch" {
+          await LynxManagedChannelState.shared.beginAttempt(
+            manifestID: release.manifestID,
+            feature: feature,
+            channel: channel
+          )
+          self.loadManagedRelease(
+            release,
+            context: context,
+            candidate: true,
+            downloaded: true,
+            generation: generation
+          )
+        } else {
+          await LynxManagedChannelState.shared.stage(
+            manifestID: release.manifestID,
+            feature: feature,
+            channel: channel
+          )
+        }
+      } catch is CancellationError {
+        return
+      } catch {
+        self.emitDeliveryError(error, fallbackURL: manifestURL.absoluteString, feature: feature)
+      }
+    }
+  }
+
+  private func loadManagedRelease(
+    _ release: LynxManagedRelease,
+    context: ExpoLynxManagedContext,
+    candidate: Bool,
+    downloaded: Bool,
+    generation: Int
+  ) {
+    loadTarget(
+      ExpoLynxLoadTarget(
+        url: release.bundleURL.absoluteString,
+        feature: release.feature,
+        version: release.version,
+        source: downloaded ? "download" : "cache",
+        managedContext: context,
+        candidateManifestID: candidate ? release.manifestID : nil
+      ),
+      generation: generation
+    )
+  }
+
+  private func loadTarget(_ target: ExpoLynxLoadTarget, generation: Int) {
+    guard generation == loadGeneration else { return }
+    source = target.url
+    currentTarget = target
+    loadStartedAt = Date()
+    if ["cache", "download"].contains(target.source),
+      let bundleURL = URL(string: target.url), bundleURL.isFileURL
+    {
+      templateProvider.setLocalResourceRoot(bundleURL.deletingLastPathComponent())
+    } else {
+      templateProvider.setLocalResourceRoot(nil)
+    }
+    onLoadStart(eventPayload(for: target))
     // ponytail: show the new template as soon as a load starts; if it
     // fails, finishWithError hides it again so the stale render isn't
     // left on screen. The engine has no public wipe-but-stay-alive API;
     // `isHidden` is the only safe way to drop visibility.
     lynxView.isHidden = false
 
-    if let remoteURL = URL(string: source),
+    if let remoteURL = URL(string: target.url),
       ["http", "https"].contains(remoteURL.scheme?.lowercased())
     {
       // Match Lynx Explorer: let Lynx own the remote load so DevTool's
@@ -370,44 +760,53 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       return
     }
 
-    guard let localURL = resolveLocalURL(source) else {
+    guard let localURL = resolveLocalURL(target.url) else {
       lynxView.isHidden = true
       emitError(
-        url: source,
+        url: target.url,
+        feature: target.feature,
+        stage: .resource,
         code: "ERR_LYNX_SOURCE_NOT_FOUND",
         message: "Could not find the Lynx bundle in the app bundle or at the supplied file URL."
       )
       return
     }
 
-    loadLocalURL(localURL, generation: generation)
+    loadLocalURL(localURL, target: target, generation: generation)
+    if target.candidateManifestID != nil {
+      startWatchdog(target: target, generation: generation)
+    }
   }
 
-  private func loadLocalURL(_ url: URL, generation: Int) {
-    let requestedSource = source
+  private func loadLocalURL(_ url: URL, target: ExpoLynxLoadTarget, generation: Int) {
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       do {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
-        self?.render(data, source: requestedSource, generation: generation)
+        self?.render(data, target: target, generation: generation)
       } catch {
-        self?.finishWithError(error, source: requestedSource, generation: generation)
+        self?.finishWithError(error, target: target, generation: generation)
       }
     }
   }
 
-  private func render(_ data: Data, source: String, generation: Int) {
+  private func render(_ data: Data, target: ExpoLynxLoadTarget, generation: Int) {
     DispatchQueue.main.async { [weak self] in
-      guard let self, generation == self.loadGeneration, source == self.source else {
+      guard let self, generation == self.loadGeneration, target.url == self.source else {
         return
       }
 
-      self.lynxView.loadTemplate(data, withURL: source, initData: self.makeTemplateData())
+      self.lynxView.loadTemplate(data, withURL: target.url, initData: self.makeTemplateData())
     }
   }
 
-  private func finishWithError(_ error: Error, source: String, generation: Int) {
+  private func finishWithError(_ error: Error, target: ExpoLynxLoadTarget, generation: Int) {
     DispatchQueue.main.async { [weak self] in
       guard let self, generation == self.loadGeneration else {
+        return
+      }
+
+      if target.candidateManifestID != nil {
+        self.failCandidate(target, error: error, generation: generation)
         return
       }
 
@@ -417,9 +816,11 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       // via loadSource's setSource path.
       self.lynxView.isHidden = true
 
-      let payload = ExpoLynxView.errorPayload(for: error, fallbackURL: source)
+      let payload = ExpoLynxView.errorPayload(for: error, fallbackURL: target.url)
       self.emitError(
-        url: source,
+        url: target.url,
+        feature: target.feature,
+        stage: .lynx,
         code: payload.code,
         message: payload.message
       )
@@ -468,7 +869,8 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       return exactURL
     }
 
-    let normalizedName = value.hasPrefix("bundle://")
+    let normalizedName =
+      value.hasPrefix("bundle://")
       ? String(value.dropFirst("bundle://".count)) : value
     return Bundle.main.url(forResource: normalizedName, withExtension: "bundle")
   }
@@ -481,27 +883,157 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     return LynxTemplateData(json: initialDataJSON, useBoolLiterals: true)
   }
 
-  private func emitError(url: String, code: String, message: String) {
+  private func eventPayload(for target: ExpoLynxLoadTarget) -> [String: Any] {
+    [
+      "url": target.url,
+      "feature": target.feature,
+      "version": target.version,
+      "source": target.source,
+      "durationMs": max(0, Int(Date().timeIntervalSince(loadStartedAt) * 1_000)),
+    ]
+  }
+
+  private func emitDeliveryError(_ error: Error, fallbackURL: String, feature: String) {
+    if let deliveryError = error as? LynxDeliveryError {
+      emitError(
+        url: fallbackURL,
+        feature: feature,
+        stage: deliveryError.stage,
+        code: deliveryError.code,
+        message: deliveryError.message
+      )
+      return
+    }
+
+    let payload = ExpoLynxView.errorPayload(for: error, fallbackURL: fallbackURL)
+    emitError(
+      url: fallbackURL,
+      feature: feature,
+      stage: .download,
+      code: payload.code,
+      message: payload.message
+    )
+  }
+
+  private func emitError(
+    url: String,
+    feature: String,
+    stage: LynxDeliveryStage,
+    code: String,
+    message: String
+  ) {
     onError([
       "url": url,
+      "feature": feature,
+      "stage": stage.rawValue,
       "code": code,
       "message": message,
     ])
   }
 
+  private func startWatchdog(target: ExpoLynxLoadTarget, generation: Int) {
+    watchdogWorkItem?.cancel()
+    let workItem = DispatchWorkItem { [weak self] in
+      guard let self, generation == self.loadGeneration,
+        self.currentTarget?.candidateManifestID == target.candidateManifestID
+      else { return }
+      let error = LynxDeliveryError(
+        stage: .lynx,
+        code: "ERR_LYNX_CANDIDATE_TIMEOUT",
+        message: "The downloaded Lynx release did not finish loading within 15 seconds."
+      )
+      self.failCandidate(target, error: error, generation: generation)
+    }
+    watchdogWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: workItem)
+  }
+
+  private func failCandidate(
+    _ target: ExpoLynxLoadTarget,
+    error: Error,
+    generation: Int
+  ) {
+    guard let manifestID = target.candidateManifestID,
+      let context = target.managedContext
+    else { return }
+
+    watchdogWorkItem?.cancel()
+    emitDeliveryError(error, fallbackURL: target.url, feature: target.feature)
+
+    deliveryTask?.cancel()
+    deliveryTask = Task { @MainActor [weak self] in
+      guard let self, generation == self.loadGeneration else { return }
+      await LynxManagedChannelState.shared.fail(
+        manifestID: manifestID,
+        feature: context.feature,
+        channel: context.channel
+      )
+      let state = await LynxManagedChannelState.shared.recover(
+        feature: context.feature,
+        channel: context.channel
+      )
+      if let activeID = state.activeManifestID,
+        activeID != manifestID,
+        let active = try? await LynxManagedBundleStore.shared.installedRelease(
+          feature: context.feature,
+          manifestID: activeID
+        )
+      {
+        self.loadManagedRelease(
+          active,
+          context: context,
+          candidate: false,
+          downloaded: false,
+          generation: generation
+        )
+      } else {
+        self.loadEmbedded(feature: context.feature, generation: generation)
+      }
+    }
+  }
+
   func lynxView(_ view: LynxView, didLoadFinishedWithUrl url: String) {
+    guard let target = currentTarget else {
+      hasLoadedTemplate = true
+      onLoad(["url": url])
+      return
+    }
+    guard url.isEmpty || url == target.url else { return }
+    watchdogWorkItem?.cancel()
     hasLoadedTemplate = true
-    onLoad(["url": url])
+
+    var payload = eventPayload(for: target)
+    payload["durationMs"] = max(0, Int(Date().timeIntervalSince(loadStartedAt) * 1_000))
+    onLoad(payload)
+
+    if let manifestID = target.candidateManifestID,
+      let context = target.managedContext
+    {
+      Task {
+        await LynxManagedChannelState.shared.confirm(
+          manifestID: manifestID,
+          feature: context.feature,
+          channel: context.channel
+        )
+      }
+    }
   }
 
   func lynxView(_ view: LynxView, didRecieveError error: Error) {
+    let target = currentTarget
     if ExpoLynxView.isMainBundleError(error) {
+      if let target, target.candidateManifestID != nil {
+        failCandidate(target, error: error, generation: loadGeneration)
+        return
+      }
       view.isHidden = true
     }
 
     let payload = ExpoLynxView.errorPayload(for: error, fallbackURL: view.url ?? source)
     emitError(
       url: view.url ?? source,
+      feature: target?.feature ?? "",
+      stage: .lynx,
       code: payload.code,
       message: payload.message
     )

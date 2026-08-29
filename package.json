@@ -12,6 +12,10 @@
     "start": "pnpm --filter expo-lynx-example start",
     "build": "pnpm --filter expo-lynx build",
     "test": "pnpm --filter expo-lynx test",
-    "lint": "pnpm --filter expo-lynx lint"
+    "lint": "pnpm --filter expo-lynx lint",
+    "sync:example-bundle": "node scripts/sync-lynx-example-bundle.mjs",
+    "serve:lynx-local": "node scripts/serve-local-lynx-release.mjs",
+    "serve:lynx-remote": "node scripts/serve-local-lynx-release.mjs --dist ../lynx-source/dist",
+    "rebuild:lynx-remote": "node scripts/rebuild-lynx-remote.mjs"
   }
 }

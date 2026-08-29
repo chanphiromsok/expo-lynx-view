@@ -1,6 +1,6 @@
-// PR5 — Bundle store path layout (TypeScript stub)
+// Legacy prototype paths; V2 migration target: M10 cache and recovery.
 //
-// Spec: feature/delivery-bundle-update/specs/client/pr-05-bundle-store-staging.md
+// Spec: feature/delivery-bundle-update/specs/v2/mobile/m10-cache-disk-recovery.md
 //
 // The atomic-rename logic and actor live in ios/LynxBundleStore.swift
 // (Swift actor). This file holds the pure path-naming helpers so JS

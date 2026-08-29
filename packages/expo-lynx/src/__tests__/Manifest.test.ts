@@ -18,7 +18,7 @@ const SAMPLE_MANIFEST = JSON.stringify({
       bytes: 1245,
     },
   ],
-  signature: 'base64Ed25519Signature==',
+  signature: 'legacyOpaqueSignature==',
 });
 
 describe('parseManifest', () => {
@@ -33,7 +33,7 @@ describe('parseManifest', () => {
     expect(m.bundle.bytes).toBe(321726);
     expect(m.resources).toHaveLength(1);
     expect(m.resources[0].path).toBe('static/image/logo.png');
-    expect(m.signature).toBe('base64Ed25519Signature==');
+    expect(m.signature).toBe('legacyOpaqueSignature==');
   });
 
   it('throws on missing feature', () => {

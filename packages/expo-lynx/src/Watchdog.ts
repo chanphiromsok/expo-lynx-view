@@ -1,6 +1,6 @@
-// PR7 — Watchdog + notifyAppReady state machine
+// Legacy prototype watchdog; V2 migration target: M06 safe activation.
 //
-// Spec: feature/delivery-bundle-update/specs/client/pr-07-lkg-fallback.md
+// Spec: feature/delivery-bundle-update/specs/v2/mobile/m06-safe-activation-recovery.md
 //
 // The native watchdog (LynxCrashWatchdog) lives in iOS/Android. This
 // file holds the state machine that decides what `notifyAppReady()`

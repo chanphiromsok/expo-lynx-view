@@ -38,7 +38,7 @@ import { ExpoLynxView } from 'expo-lynx';
 export function LynxScreen() {
   return (
     <ExpoLynxView
-      url="https://example.com/main.lynx.bundle"
+      source={{ kind: 'embedded', feature: 'delivery' }}
       initialData={{ greeting: 'Hello from Expo' }}
       onLoad={({ nativeEvent }) => console.log('Loaded', nativeEvent.url)}
       onError={({ nativeEvent }) => console.error(nativeEvent.message)}
@@ -48,7 +48,85 @@ export function LynxScreen() {
 }
 ```
 
-`url` accepts an `https://` URL, a `file://` URL, or a resource name copied into the application bundle. For a bundled resource, use either `main.lynx.bundle`, `main.lynx`, or `bundle://main.lynx.bundle`. Add any sidecar asset directories emitted by Rspeedy to `bundledResources` too. Directory structure is preserved, so a template URL such as `/static/image/logo.abc123.png` resolves to `assets/static/image/logo.abc123.png` in release builds.
+`source` has three iOS modes: `embedded`, `development`, and `managed`. `development` accepts a raw URL only in Debug builds. The current Debug implementation of `managed` executes only downloaded files whose byte counts and SHA-256 hashes match the manifest, retains a confirmed cached release, and falls back to the embedded bundle when no valid cache is available. Until signed-channel verification is added, Release builds refuse the managed cache and use the embedded bundle. The legacy `url` prop remains available for compatibility, but Release iOS builds reject raw remote URLs.
+
+For a bundled resource, add the `.lynx` bundle and every Rspeedy sidecar directory to `bundledResources`. Directory structure is preserved, so a template reference such as `static/image/logo.abc123.png` resolves in both the embedded baseline and a managed release.
+
+## Local managed-bundle test on iOS
+
+For the end-to-end iOS architecture, callback expectations, Release opt-in,
+failure matrix, and R2 transition, see
+[`feature/delivery-bundle-update/DEVELOPMENT.md`](./feature/delivery-bundle-update/DEVELOPMENT.md).
+
+The repository includes a zero-dependency static server that copies the example's embedded artifact, enumerates its sidecars, and generates a matching manifest:
+
+```sh
+pnpm serve:lynx-local
+pnpm ios
+```
+
+The example starts in `Managed cache` mode and requests the host configured by `expo.extra.lynxDevBundleHost`. Use `127.0.0.1` for a simulator-only workflow. For a physical iPhone, use one of the LAN addresses printed by the server, then rebuild the development app; that LAN address also works from the simulator.
+
+To serve the latest artifact built by the sibling `/Users/phirom/Desktop/lynx-source` project without replacing the embedded baseline, run:
+
+```sh
+cd /Users/phirom/Desktop/lynx-source
+npm run build
+
+cd /Users/phirom/Desktop/expo-lynx-monorepo
+pnpm serve:lynx-remote
+```
+
+This keeps `assets/static.lynx` unchanged, so the first physical-device test visibly exercises the managed `embedded → download` transition instead of serving the same bytes as both sources.
+
+After changing the Lynx source, use the rebuild helper:
+
+```sh
+pnpm rebuild:lynx-remote
+```
+
+It runs `npm run build` in `/Users/phirom/Desktop/lynx-source`, refreshes the ignored `.local-lynx-server/` files, and leaves an already-running `pnpm serve:lynx-remote` process serving the new bundle. Reload or reopen the managed mini-app to fetch the new manifest. Set `LYNX_SOURCE_DIR` when the Lynx source lives elsewhere.
+
+The local manifest path is deliberately Debug-only and may have an empty signature. Production managed delivery still requires the next step: replace `manifestUrl` with a signed channel pointer and embedded public-key verification before using Cloudflare R2.
+
+For a one-off internal Release build against the LAN server, set
+`LYNX_ALLOW_LOCAL_MANAGED_RELEASE=1` while installing the example app's Pods:
+
+```sh
+cd apps/expo-lynx-example/ios
+LYNX_ALLOW_LOCAL_MANAGED_RELEASE=1 pod install
+```
+
+The Podfile applies the Swift compilation condition to the `ExpoLynx` pod,
+where `ExpoLynxView.swift` is compiled. The native guard is
+`#if !DEBUG && !LYNX_ALLOW_LOCAL_MANAGED_RELEASE`. Do not set this environment
+variable for production pod installs: the flag permits unsigned HTTP managed
+endpoints for local testing.
+
+### React Native splash while a managed bundle loads
+
+`onLoadStart` fires before Lynx starts a selected embedded, cached, development, or downloaded bundle. `onLoad` is the successful Lynx render callback and includes the selected `source`; `onError` reports a failed delivery/render stage. A managed source may load the embedded fallback while it downloads its first release, so keep the splash visible for an `embedded` success when the requested source is still `managed`:
+
+```tsx
+const [showSplash, setShowSplash] = useState(true);
+
+<View style={{ flex: 1 }}>
+  <ExpoLynxView
+    source={source}
+    onLoadStart={() => setShowSplash(true)}
+    onLoad={({ nativeEvent }) => {
+      if (source.kind !== 'managed' || nativeEvent.source !== 'embedded') {
+        setShowSplash(false);
+      }
+    }}
+    onError={() => setShowSplash(false)}
+    style={{ flex: 1 }}
+  />
+  {showSplash ? <MiniAppSplash /> : null}
+</View>;
+```
+
+Position `MiniAppSplash` absolutely over the native view and let it accept pointer events if it should block interaction until the mini-app is ready. On a managed cache hit, `onLoad` reports `source: "cache"`; after a first successful remote install it reports `source: "download"`.
 
 The view exposes a `reload()` method through its ref:
 
@@ -61,7 +139,7 @@ const lynxRef = useRef<ExpoLynxViewRef>(null);
 await lynxRef.current?.reload();
 ```
 
-Use HTTPS for remote bundles. Plain HTTP requires an App Transport Security exception in the consuming app.
+Use HTTPS for production resources. Plain HTTP is intended only for the local Debug workflow and requires an App Transport Security local-network exception in the consuming app.
 
 ## Lynx DevTool development
 

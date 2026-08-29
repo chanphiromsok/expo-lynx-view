@@ -1,6 +1,6 @@
-// PR3 — Manifest contract (TypeScript types only)
+// Legacy prototype manifest; V2 migration target: M01 shared protocol.
 //
-// Spec: feature/delivery-bundle-update/specs/client/pr-03-manifest-sha256.md
+// Spec: feature/delivery-bundle-update/specs/v2/mobile/m01-shared-release-protocol.md
 //
 // Full SHA-256 verification lives in ios/LynxManifest.swift and
 // android/.../LynxManifest.kt. This file holds the JSON contract
@@ -30,7 +30,7 @@ export type Manifest = {
   lynxEngineVersion: string;
   bundle: ManifestBundle;
   resources: ManifestResource[];
-  signature: string; // base64 Ed25519 — verified natively, not in JS
+  signature: string; // Legacy opaque field; V2 replaces this manifest contract.
 };
 
 /**

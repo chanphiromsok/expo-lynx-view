@@ -30,11 +30,23 @@ class ExpoLynxModule : Module() {
     }
 
     View(ExpoLynxView::class) {
+      Events("onLoadStart", "onLoad", "onError")
+
       Prop("url") { view: ExpoLynxView, url: String ->
-        view.loadBundle(url)
+        view.setSource(url)
       }
 
-      Events("onLoadStart", "onLoad", "onError")
+      Prop("initialDataJSON") { view: ExpoLynxView, initialDataJSON: String? ->
+        view.setInitialDataJSON(initialDataJSON)
+      }
+
+      AsyncFunction("reload") { view: ExpoLynxView ->
+        view.reload()
+      }
+
+      OnViewDestroys { view: ExpoLynxView ->
+        view.destroy()
+      }
     }
   }
 }

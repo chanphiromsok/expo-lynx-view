@@ -35,6 +35,17 @@ describe('LynxSource contract', () => {
     }
   });
 
+  it('accepts a Debug-only direct manifest URL for local testing', () => {
+    const s: LynxSource = {
+      kind: 'managed',
+      feature: 'delivery',
+      manifestUrl: 'http://127.0.0.1:3017/manifest.json',
+    };
+    if (s.kind === 'managed') {
+      expect(s.manifestUrl).toContain('manifest.json');
+    }
+  });
+
   it('omitting channel and activation is valid (defaults applied at runtime)', () => {
     const s: LynxSource = { kind: 'managed', feature: 'delivery' };
     if (s.kind === 'managed') {
@@ -68,8 +79,8 @@ describe('LynxLoadEvent', () => {
     expect(e.durationMs).toBe(1234);
   });
 
-  it('source must be one of embedded | cache | download', () => {
-    const sources: LynxLoadEvent['source'][] = ['embedded', 'cache', 'download'];
+  it('source must be one of embedded | cache | download | development', () => {
+    const sources: LynxLoadEvent['source'][] = ['embedded', 'cache', 'download', 'development'];
     sources.forEach((source) => {
       const e: LynxLoadEvent = {
         feature: 'f',

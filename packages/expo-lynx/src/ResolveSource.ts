@@ -1,6 +1,6 @@
-// PR2 — Release-mode source guard (TypeScript stub)
+// Legacy prototype source guard; V2 migration target: M05 prefetch/source API.
 //
-// Spec: feature/delivery-bundle-update/specs/client/pr-02-release-source-guard.md
+// Spec: feature/delivery-bundle-update/specs/v2/mobile/m05-prefetch-progress-api.md
 //
 // The native enforcement lives in ios/ExpoLynxView.swift. This file
 // holds the JS-side contract so the prop type can be narrowed before

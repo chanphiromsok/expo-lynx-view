@@ -1,6 +1,6 @@
-// PR9 — Activation mode behavior
+// Legacy prototype activation helper; V2 migration target: M06.
 //
-// Spec: feature/delivery-bundle-update/specs/client/pr-09-safe-activation.md
+// Spec: feature/delivery-bundle-update/specs/v2/mobile/m06-safe-activation-recovery.md
 //
 // This is a pure decision function: given the staged release and
 // the channel's declared activation mode, decide whether to reload

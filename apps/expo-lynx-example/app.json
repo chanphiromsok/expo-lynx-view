@@ -7,15 +7,12 @@
       [
         "expo-lynx",
         {
-          "bundledResources": [
-            "./assets/static.lynx",
-            "./assets/static"
-          ]
+          "bundledResources": ["./assets/static.lynx", "./assets/static"]
         }
       ]
     ],
     "extra": {
-      "lynxDevBundleHost": "192.168.28.196",
+      "lynxDevBundleHost": "192.168.18.144",
       "lynxDevBundlePort": 3000,
       "lynxProdBundleUrl": "https://example.com/main.lynx.bundle"
     },
@@ -25,7 +22,14 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "expo.modules.lynx.example",
-      "appleTeamId": "4QDQZA9V92"
+      "appleTeamId": "4QDQZA9V92",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Connect to the local Lynx bundle server during development.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSAllowsLocalNetworking": true
+        }
+      }
     },
     "android": {
       "adaptiveIcon": {

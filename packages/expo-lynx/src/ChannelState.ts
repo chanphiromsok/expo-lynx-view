@@ -1,6 +1,6 @@
-// PR6 — Channel state comparison (TypeScript stub)
+// Legacy prototype channel state; V2 migration target: M06 activation/recovery.
 //
-// Spec: feature/delivery-bundle-update/specs/client/pr-06-channel-fetch-signed.md
+// Spec: feature/delivery-bundle-update/specs/v2/mobile/m06-safe-activation-recovery.md
 //
 // The actual UserDefaults / SharedPreferences live in iOS/Android native.
 // This file holds the JS-visible shape + the comparison logic so the

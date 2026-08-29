@@ -49,8 +49,12 @@ public final class ExpoLynxModule: Module {
     View(ExpoLynxView.self) {
       Events("onLoadStart", "onLoad", "onError")
 
-      Prop("url") { (view: ExpoLynxView, url: String) in
+      Prop("url") { (view: ExpoLynxView, url: String?) in
         view.setSource(url)
+      }
+
+      Prop("sourceJSON") { (view: ExpoLynxView, sourceJSON: String?) in
+        view.setSourceJSON(sourceJSON)
       }
 
       Prop("initialDataJSON") { (view: ExpoLynxView, initialDataJSON: String?) in
