@@ -1069,7 +1069,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
         "channel": context.channel,
         "phase": "error",
         "code": deliveryError.code,
-        "message": deliveryError.message,
+        "message": ExpoLynxView.redactedEventMessage(deliveryError.message),
       ])
       return
     }
@@ -1078,7 +1078,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       "channel": context.channel,
       "phase": "error",
       "code": "ERR_LYNX_UPDATE",
-      "message": error.localizedDescription,
+      "message": ExpoLynxView.redactedEventMessage(error.localizedDescription),
     ])
   }
 
@@ -1094,8 +1094,26 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       "feature": feature,
       "stage": stage.rawValue,
       "code": code,
-      "message": message,
+      "message": ExpoLynxView.redactedEventMessage(message),
     ])
+  }
+
+  /// Native errors can contain a failed request URL. Events cross the RN
+  /// boundary and may be forwarded to analytics, so remove query credentials
+  /// and URL user/password components before dispatching them.
+  private static func redactedEventMessage(_ message: String) -> String {
+    let words = message.split(separator: " ", omittingEmptySubsequences: false).map { word -> String in
+      let suffix = word.reversed().prefix { ").,]".contains($0) }
+      let core = String(word.dropLast(suffix.count))
+      guard var components = URLComponents(string: core), components.scheme != nil, components.host != nil else {
+        return String(word)
+      }
+      components.query = nil
+      components.user = nil
+      components.password = nil
+      return (components.string ?? core) + String(suffix.reversed())
+    }
+    return words.joined(separator: " ").prefix(500).description
   }
 
   private func startWatchdog(target: ExpoLynxLoadTarget, generation: Int) {

@@ -229,8 +229,9 @@ fail, investigate the phone-to-Mac network or the installed host binary.
 
 ### 4. Internal Release test against the LAN server
 
-The local manifest is unsigned, so normal Release builds intentionally reject
-it. For a disposable internal test build, apply the opt-in to the `ExpoLynx`
+The local server signs its channel and release envelopes with the internal test
+key. Normal Release builds still intentionally reject its cleartext HTTP URL.
+For a disposable internal test build, apply the opt-in to the `ExpoLynx`
 CocoaPod and build Release:
 
 ```sh
@@ -257,17 +258,16 @@ next-launch activation without clearing state.
 
 ## Callback expectations
 
-| Event                                 | Meaning                                        | Typical managed sequence            |
-| ------------------------------------- | ---------------------------------------------- | ----------------------------------- |
-| `onLoadStart`                         | Native is about to render a selected source    | embedded, cache, or download        |
-| `onLoad` with `source: embedded`      | Embedded baseline rendered                     | first launch while remote downloads |
-| `onLoad` with `source: cache`         | Previously verified release rendered           | offline/cache hit                   |
-| `onLoad` with `source: download`      | Newly downloaded candidate rendered            | `on-launch` success                 |
-| `onError` with `stage: manifest`      | Manifest JSON, URL, feature, or policy failure | no candidate installed              |
-| `onError` with `stage: compatibility` | Lynx engine or host version mismatch           | release rejected before download    |
-| `onError` with `stage: checksum`      | Byte count or SHA-256 mismatch                 | staging transaction discarded       |
-| `onError` with `stage: download`      | HTTP, connectivity, or timeout failure         | current UI retained                 |
-| `onError` with `stage: lynx`          | Lynx render failure or candidate watchdog      | previous LKG/embedded restored      |
+| Event                                 | Meaning                                            | Typical managed sequence                         |
+| ------------------------------------- | -------------------------------------------------- | ------------------------------------------------ |
+| `onLoadStart`                         | Native is about to render selected local content   | embedded or cache                                |
+| `onLoad` with `source: embedded`      | Requested feature's embedded baseline rendered     | fresh/offline open while channel check continues |
+| `onLoad` with `source: cache`         | Previously verified release rendered               | offline/cache hit                                |
+| `onUpdate: checking`                  | Signed-channel revalidation started                | after local content is usable                    |
+| `onUpdate: no-update`                 | ETag `304` or known immutable release              | no ZIP request                                   |
+| `onUpdate: downloaded`, then `staged` | ZIP was verified and is ready for the next open    | current view remains mounted                     |
+| `onUpdate: error`                     | Update failure after usable local content rendered | current UI remains usable                        |
+| `onError`                             | No usable source or a Lynx render/delivery error   | terminal visible-content error                   |
 
 The sample React Native splash deliberately remains visible over an embedded
 `onLoad` while a managed first download is in flight. It is hidden on a cache or
@@ -280,59 +280,74 @@ the internal Release build:
 
 | Case                    | Setup                                          | Expected result                                          |
 | ----------------------- | ---------------------------------------------- | -------------------------------------------------------- |
-| Fresh install online    | No app data; server reachable                  | Embedded appears, then downloaded release appears        |
+| Fresh install online    | No app data; server reachable                  | Embedded appears; signed release stages for next open    |
 | Fresh install offline   | Stop server before launch                      | Embedded appears; error is surfaced; no endless download |
 | Same manifest twice     | Relaunch without changing manifest             | Existing release is reused; no duplicate files           |
-| New `on-launch` release | Rebuild source and refresh server              | Candidate renders now and becomes active after `onLoad`  |
+| New `on-launch` release | Rebuild source and refresh server              | Stages safely for next open (candidate swap is deferred) |
 | New `next-open` release | Use `activation: next-open`                    | Candidate stages; current UI remains until next launch   |
 | Bad bundle bytes        | Change bundle without updating manifest hash   | Checksum error; no `ready/<id>` activation               |
 | Bad sidecar bytes       | Change an image without updating its hash      | Checksum error; staging directory is removed             |
 | Missing sidecar         | Remove a declared resource from server         | Download/resource error; previous UI remains             |
 | HTTP 404                | Point manifest or file URL at a missing path   | Download error; fallback remains usable                  |
 | Network interruption    | Turn Wi-Fi off during install                  | Bounded error; no partial release becomes active         |
-| Candidate Lynx failure  | Serve a bundle that fails to render            | Candidate marked failed; previous LKG/embedded restored  |
+| Pending Lynx failure    | Serve a bundle that fails to render next open  | Pending ID marked failed; previous LKG/embedded restored |
 | Process kill            | Kill app during candidate activation           | Next launch recovers from `attemptingManifestID`         |
 | Failed-release retry    | Relaunch after candidate failure               | Failed manifest ID is skipped; no boot loop              |
 | Release guard           | Build Release without opt-in                   | Embedded baseline; managed endpoint is rejected          |
 | Local Release opt-in    | Build Release with the flag                    | LAN manifest is eligible for this internal test          |
 | Safe area               | Rotate/notch device during load and after load | Host and Lynx viewport remain aligned; no visible jump   |
 
+### Internal Release evidence record
+
+For the final iOS gate, copy this block into the PR or issue for each device
+run. Never include a signed payload, a query string, credentials, private key,
+or app-private cache path.
+
+```text
+App build / git commit:
+Device model / iOS version:
+Lynx SDK and runtime version:
+Feature + channel:
+Channel revision + release ID:
+Server origin (no query string):
+Scenario from matrix:
+Visible terminal outcome (embedded/cache/staged/error):
+Update event phases observed:
+Result (pass/fail) and redacted failure code:
+Screenshot or recording attachment:
+```
+
 ## Code review findings and production gates
 
 ### Implemented safeguards
 
-- Manifest feature, engine version, host minimum version, URL scheme, path,
-  size, and SHA-256 fields are validated before activation.
-- Bundle and sidecar downloads use a staging directory and are atomically
-  promoted only after verification.
-- A verified release is reopened and reverified before it is used from cache.
-- Candidate activation records an attempting ID before rendering and confirms it
-  only after Lynx reports `didLoadFinished`.
-- Failed candidates are recorded and rolled back to the previous active release
-  or embedded baseline.
-- Manifest, bundle, and resource requests have a 15-second timeout so a lost
-  LAN does not leave the host splash visible forever.
-- Safe feature names and relative resource paths prevent filesystem traversal.
+- One embedded public key verifies the signed channel and release envelopes
+  before their URLs or archive metadata are trusted.
+- ZIP extraction validates its central directory, paths, entry count/size/CRC,
+  and declared hashes before atomic promotion.
+- Cache opens read a small completion marker and expected-entry paths only; no
+  healthy open repeats RSA, ZIP, or full-file hashing.
+- Channel requests use ETag revalidation and do not request a ZIP for `304`,
+  known, pending, active, or failed immutable IDs.
+- Feature/channel namespaces, disk reservation, protected-ID retention, and
+  startup reconciliation preserve a usable embedded/cache fallback.
+- Error and update events redact URL credentials/query values and bound message
+  size before crossing the React Native boundary.
 
 ### Blocking before production
 
-- `signature` is parsed but not cryptographically verified. The local manifest
-  can therefore be used only with Debug or the explicit internal Release flag.
-  Implement the V2 app-wide RSA-SHA256 verification, signed document-type and
-  feature checks, native-gated key rotation, replay protection, and embedded
-  public key before production Release delivery.
-- The current API accepts `manifestUrl` from React Native. Move production
-  channel resolution into the native trust boundary so replaceable UI code
-  cannot select an arbitrary executable endpoint.
-- There is no cache quota or pruning policy. A multi-mini-app host needs an LRU
-  or byte-count cap while retaining the active and previous last-known-good
-  releases.
-- Native storage/state has no XCTest coverage in this slice. Add fixtures for
-  malformed manifests, hash failures, interrupted installs, activation, and
-  rollback before relying on the manual matrix alone.
-- Redirect/origin policy and signed channel metadata still need to be defined
-  for the R2/CDN endpoint. HTTPS and a successful status code are not a
-  substitute for verifying the signed release pointer.
+- The physical internal Release matrix is still a required human/device gate.
+  Record both configured features, the exact app build, iOS version, channel
+  revision/release ID, and no-secret server address for every result.
+- `on-launch` currently stages like `next-open`. A two-view candidate swap must
+  be designed, memory-profiled, and tested before that activation option can be
+  enabled.
+- Direct `manifestUrl` exists only for Debug/local compatibility. Production
+  configuration should use the signed channel route exclusively.
+- Add XCTest fault-injection coverage for low disk, torn writes, eviction
+  ordering, and process death before declaring production readiness.
+- Define the final HTTPS redirect/origin policy with the Cloudflare endpoint;
+  signatures remain mandatory regardless of transport success.
 
 ## Production transition
 

@@ -47,3 +47,18 @@ export type LynxErrorEvent = {
   code: string;
   message: string;
 };
+
+export type LynxUpdatePhase = 'checking' | 'no-update' | 'downloaded' | 'staged' | 'error';
+
+/** Privacy-safe, lifecycle-level delivery telemetry for a managed source. */
+export type LynxUpdateEvent = {
+  feature: string;
+  channel: 'stable' | 'beta';
+  phase: LynxUpdatePhase;
+  releaseId?: string;
+  version?: string;
+  revision?: number;
+  code?: string;
+  message?: string;
+  durationMs?: number;
+};

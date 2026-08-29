@@ -7,7 +7,7 @@
 // native caller passes something that looks like a token, the JS
 // receiver drops it before forwarding.
 
-import type { LynxLoadEvent, LynxErrorEvent } from './LynxSource';
+import type { LynxLoadEvent, LynxErrorEvent, LynxUpdateEvent } from './LynxSource';
 
 const FORBIDDEN_SUBSTRINGS = [
   '?token=',
@@ -50,6 +50,30 @@ export function safeErrorEvent(input: LynxErrorEvent): LynxErrorEvent | null {
     stage: input.stage,
     code: input.code,
     message,
+  };
+}
+
+/**
+ * Normalise a native delivery update before it reaches an application-owned
+ * analytics sink. Native events intentionally carry no URL/path fields; this
+ * guard also discards an unexpected secret in an error message.
+ */
+export function safeUpdateEvent(input: LynxUpdateEvent): LynxUpdateEvent | null {
+  if (input.message && containsForbidden(input.message)) return null;
+  return {
+    feature: input.feature,
+    channel: input.channel,
+    phase: input.phase,
+    ...(input.releaseId ? { releaseId: input.releaseId.slice(0, 128) } : {}),
+    ...(input.version ? { version: input.version.slice(0, 128) } : {}),
+    ...(typeof input.revision === 'number' && Number.isSafeInteger(input.revision)
+      ? { revision: Math.max(0, input.revision) }
+      : {}),
+    ...(input.code ? { code: input.code.slice(0, 128) } : {}),
+    ...(input.message ? { message: input.message.slice(0, MAX_MESSAGE_LENGTH) } : {}),
+    ...(typeof input.durationMs === 'number'
+      ? { durationMs: Math.max(0, Math.min(input.durationMs, 60_000)) }
+      : {}),
   };
 }
 

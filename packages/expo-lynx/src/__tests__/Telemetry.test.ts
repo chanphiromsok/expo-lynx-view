@@ -1,4 +1,9 @@
-import { safeLoadEvent, safeErrorEvent, redactUrlForTelemetry } from '../Telemetry';
+import {
+  safeLoadEvent,
+  safeErrorEvent,
+  safeUpdateEvent,
+  redactUrlForTelemetry,
+} from '../Telemetry';
 
 describe('safeLoadEvent', () => {
   it('passes through valid event', () => {
@@ -97,5 +102,40 @@ describe('redactUrlForTelemetry', () => {
     expect(redactUrlForTelemetry('https://api.example.com/foo')).toBe(
       'https://api.example.com/foo'
     );
+  });
+});
+
+describe('safeUpdateEvent', () => {
+  it('keeps structured update fields and bounds timing', () => {
+    expect(
+      safeUpdateEvent({
+        feature: 'delivery',
+        channel: 'stable',
+        phase: 'staged',
+        releaseId: 'delivery-2026.08.29.1',
+        version: '2026.08.29',
+        revision: 4,
+        durationMs: 99_999,
+      })
+    ).toEqual({
+      feature: 'delivery',
+      channel: 'stable',
+      phase: 'staged',
+      releaseId: 'delivery-2026.08.29.1',
+      version: '2026.08.29',
+      revision: 4,
+      durationMs: 60_000,
+    });
+  });
+
+  it('drops a telemetry error containing a credential', () => {
+    expect(
+      safeUpdateEvent({
+        feature: 'delivery',
+        channel: 'stable',
+        phase: 'error',
+        message: 'HTTP request failed with Authorization: Bearer secret',
+      })
+    ).toBeNull();
   });
 });

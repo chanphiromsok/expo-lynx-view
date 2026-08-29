@@ -1,6 +1,6 @@
 import type { NativeSyntheticEvent, ViewProps } from 'react-native';
 
-import type { LynxErrorStage, LynxSource } from './LynxSource';
+import type { LynxErrorStage, LynxSource, LynxUpdateEvent } from './LynxSource';
 
 export type LynxInitialData = Record<string, unknown>;
 
@@ -28,16 +28,7 @@ export type LynxErrorEventPayload = {
  * local paths, and bundle contents so it is safe to forward to product
  * analytics after the app applies its own privacy policy.
  */
-export type LynxUpdateEventPayload = {
-  feature: string;
-  channel: 'stable' | 'beta';
-  phase: 'checking' | 'no-update' | 'downloaded' | 'staged' | 'error';
-  releaseId?: string;
-  version?: string;
-  revision?: number;
-  code?: string;
-  message?: string;
-};
+export type LynxUpdateEventPayload = LynxUpdateEvent;
 
 export type LynxBundleUpdateResult = {
   feature: string;
