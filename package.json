@@ -14,6 +14,8 @@
     "test": "pnpm --filter expo-lynx test && pnpm --filter @expo-lynx/bundle-cli test",
     "lint": "pnpm --filter expo-lynx lint && pnpm --filter @expo-lynx/bundle-cli lint",
     "lynx-bundle": "node packages/lynx-bundle-cli/bin/lynx-bundle.mjs",
+    "lynx-delivery": "node scripts/local-lynx-delivery.mjs",
+    "test:lynx-delivery": "node scripts/test-local-lynx-delivery.mjs",
     "sync:example-bundle": "node scripts/sync-lynx-example-bundle.mjs",
     "serve:lynx-local": "node scripts/serve-local-lynx-release.mjs",
     "serve:lynx-remote": "node scripts/serve-local-lynx-release.mjs --dist ../lynx-source/dist",

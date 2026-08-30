@@ -33,7 +33,68 @@ release still verifies the embedded public key, envelope signature, archive,
 CRC, and file hashes. A normal Release build continues to accept signed HTTPS
 only.
 
-## Rebuild and serve a remote release
+## Persistent local delivery service: upload, promote, and serve
+
+For a physical-device test that mirrors the production Worker route contract,
+use the persistent local delivery service. It stores test artifacts in an
+ignored local directory, requires a publisher bearer token for uploads and
+promotion, and exposes the same public V2 channel, manifest, and ZIP routes
+used by a production server.
+
+If the local key pair was just generated, make the public half the key the
+plugin embeds before starting the service. The following native step is needed
+once for the trust-root change, not for later bundle releases:
+
+```sh
+cp apps/expo-lynx-example/.local-lynx-keys/updates.public.pem \
+  apps/expo-lynx-example/keys/lynx/updates.public.pem
+cd apps/expo-lynx-example
+npx expo prebuild --platform ios
+cd ../..
+```
+
+```sh
+export LYNX_DELIVERY_LOCAL_TOKEN="$(openssl rand -hex 32)"
+
+pnpm lynx-delivery serve -- \
+  --host 0.0.0.0 \
+  --port 3000 \
+  --token "$LYNX_DELIVERY_LOCAL_TOKEN" \
+  --private-key apps/expo-lynx-example/.local-lynx-keys/updates.private.pem \
+  --public-key apps/expo-lynx-example/keys/lynx/updates.public.pem
+```
+
+Use the printed device channel URL in the Expo plugin `deliveryChannels` map
+before making the internal iOS build. The map is compiled into `Info.plist`, so
+a changed LAN IP requires another prebuild/rebuild; uploading and promoting a
+new signed release at an unchanged URL does not.
+
+Create, upload, and promote a release without any native rebuild:
+
+```sh
+pnpm lynx-bundle pack delivery \
+  --config apps/expo-lynx-example/lynx-bundle.config.mjs \
+  --release-id delivery-2026.08.30.1 \
+  --version 2026.08.30.1 \
+  --platform ios \
+  --runtime-version expo-57
+
+pnpm lynx-delivery publish -- \
+  --server http://192.168.18.144:3000 \
+  --token "$LYNX_DELIVERY_LOCAL_TOKEN" \
+  --release-dir apps/expo-lynx-example/dist/lynx-releases/delivery/delivery-2026.08.30.1 \
+  --channel stable
+```
+
+Replace the IP address with the service's printed LAN address. The `publish`
+command performs the authenticated manifest upload, streamed ZIP upload with
+signed hash/length verification, then signed `next-open` channel promotion. It
+is safe to repeat; differing bytes for a reused release ID are rejected.
+
+Run the service integration test with `pnpm test:lynx-delivery`. It starts only
+a temporary loopback HTTP server; it does not invoke an iOS build.
+
+## One-shot rebuild and serve a remote release
 
 Run this at the repository root. It rebuilds the selected feature through the
 S01 bundle CLI, produces a signed ZIP, then starts a LAN-reachable server.

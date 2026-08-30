@@ -1,6 +1,7 @@
 node_modules/
 .local-lynx-server/
 .local-lynx-keys/
+.local-lynx-delivery/
 .pnpm-store/
 .expo/
 dist/

@@ -189,7 +189,101 @@ GET /v1/releases/:feature/:releaseId/release.zip
 
 ## Test signed delivery locally
 
-The root local server is the fastest end-to-end test. It builds and signs a
+### Persistent, production-shaped local service
+
+For a realistic phone test, use the persistent local delivery service. It has
+the same public client route shape as the Worker, requires a bearer token for
+operator requests, accepts a signed manifest and ZIP through separate bounded
+upload routes, makes artifacts public only after the ZIP hash/length match, and
+promotes channels by creating a new signed monotonic revision. It stores only
+local test data in the ignored `.local-lynx-delivery/` directory.
+
+Generate a local publisher token and start the service. The private key remains
+on the development Mac; the service uses it only to sign channel envelopes.
+If this is a fresh development pair, first copy its **public** half to the Expo
+plugin path and make a new internal build so the app embeds the matching trust
+root. Do not copy the private PEM anywhere outside `.local-lynx-keys/`.
+
+```sh
+cp apps/expo-lynx-example/.local-lynx-keys/updates.public.pem \
+  apps/expo-lynx-example/keys/lynx/updates.public.pem
+
+# Required once after changing the embedded public key; not required per release.
+cd apps/expo-lynx-example
+npx expo prebuild --platform ios
+cd ../..
+
+export LYNX_DELIVERY_LOCAL_TOKEN="$(openssl rand -hex 32)"
+
+pnpm lynx-delivery serve -- \
+  --host 0.0.0.0 \
+  --port 3000 \
+  --token "$LYNX_DELIVERY_LOCAL_TOKEN" \
+  --private-key apps/expo-lynx-example/.local-lynx-keys/updates.private.pem \
+  --public-key apps/expo-lynx-example/keys/lynx/updates.public.pem
+```
+
+It prints a loopback URL and every reachable LAN channel URL. Use the printed
+LAN URL—not `localhost`—in the `deliveryChannels` entry embedded in an iPhone
+build. Because that map is native `Info.plist` configuration, changing the
+host/IP requires a prebuild and new internal app build; publishing subsequent
+remote releases to the same URL does not.
+
+Build and package a named release, then upload and promote it from the
+publisher CLI. The `publish` command reads only `release-envelope.json` and
+`release.zip` from the given release directory; it does not expose the private
+key to the phone or upload it to the server storage.
+
+```sh
+pnpm lynx-bundle pack delivery \
+  --config apps/expo-lynx-example/lynx-bundle.config.mjs \
+  --release-id delivery-2026.08.30.1 \
+  --version 2026.08.30.1 \
+  --platform ios \
+  --runtime-version expo-57
+
+pnpm lynx-delivery publish -- \
+  --server http://192.168.18.144:3000 \
+  --token "$LYNX_DELIVERY_LOCAL_TOKEN" \
+  --release-dir apps/expo-lynx-example/dist/lynx-releases/delivery/delivery-2026.08.30.1 \
+  --channel stable \
+  --activation next-open
+```
+
+Replace `192.168.18.144` with the LAN address printed by your service. This
+publishes these exact routes:
+
+```text
+PUT  /v1/admin/releases/:feature/:releaseId/manifest
+PUT  /v1/admin/releases/:feature/:releaseId/archive
+POST /v1/admin/channels/:feature/:channel/promote
+
+GET  /v1/channels/:feature/:channel
+GET  /v1/releases/:feature/:releaseId/manifest
+GET  /v1/releases/:feature/:releaseId/release.zip
+```
+
+The three `PUT`/`POST` routes are operator-only and require the bearer token.
+The three `GET` routes are client-facing: channel responses use `no-cache` plus a strong
+ETag/`304`, while the feature-scoped manifest and ZIP are immutable and use
+long-lived cache headers. Repeating the same upload and CLI idempotency key is
+safe; attempting different content under an existing release ID fails rather
+than overwriting an artifact.
+
+Run the no-native integration test at any time:
+
+```sh
+pnpm test:lynx-delivery
+```
+
+It runs a loopback-only temporary server and verifies unauthorized upload
+rejection, signed upload, promotion, idempotent republish, ETag `304`, and exact
+manifest/ZIP response bytes. It does not run Expo prebuild, Pods, Xcode, or an
+iOS simulator.
+
+### One-shot static server
+
+The root static server remains the fastest smoke test. It builds and signs a
 fresh local `delivery` release, serves it from `0.0.0.0:3000`, and prints a
 simulator URL plus reachable LAN addresses for a physical iPhone:
 
