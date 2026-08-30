@@ -1,12 +1,7 @@
 export default {
   featuresDir: './features',
   features: {
-    delivery: {
-      build: {
-        command: process.execPath,
-        args: ['./scripts/build-delivery-runtime.mjs', '{outputDir}'],
-      },
-    },
+    delivery: {},
   },
   // These directories intentionally sit outside Metro's imported asset graph.
   embeddedOutputDir: './generated/expo-lynx/embedded',

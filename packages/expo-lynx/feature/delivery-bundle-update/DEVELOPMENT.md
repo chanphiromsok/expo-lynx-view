@@ -48,9 +48,9 @@ flowchart LR
   end
 
   subgraph Local[Local development]
-    Source[/Users/phirom/Desktop/lynx-source/]
-    Build[npm run build\ndist/main.lynx.bundle + static/]
-    Server[pnpm serve:lynx-remote\nmanifest.json + files]
+    Source[apps/expo-lynx-example/features/delivery/]
+    Build[pnpm lynx release delivery\nRspeedy build + signed ZIP]
+    Server[pnpm lynx local start\nchannel + manifest + ZIP routes]
   end
 
   subgraph Production[Future production]
@@ -69,10 +69,11 @@ flowchart LR
   R2 -. immutable files .-> Store
 ```
 
-The local server copies the sibling Lynx build into the repository's ignored
-`.local-lynx-server/` directory. The server must be started with
-`--dist ../lynx-source/dist`; `pnpm serve:lynx-local` serves the embedded
-baseline and is not a remote-update test.
+The local delivery service persists uploaded test releases under the ignored
+`.local-lynx-delivery/` directory. `pnpm lynx release delivery` builds the
+in-repository feature, signs its ZIP, uploads it, and promotes a signed channel
+revision. The advanced `pnpm serve:lynx-local` helper remains useful for static
+fault injection, but is not the normal remote-update workflow.
 
 ## Download and activation flow
 
@@ -164,49 +165,28 @@ fallback usable.
 
 ## Testing workflow
 
-### 1. Build the remote Lynx source
-
-```sh
-cd /Users/phirom/Desktop/lynx-source
-npm run build
-```
-
-Or use the repository helper, which builds the sibling project and refreshes
-the local release directory:
+### 1. Start the local signed delivery service
 
 ```sh
 cd /Users/phirom/Desktop/expo-lynx-monorepo
-pnpm rebuild:lynx-remote
+pnpm lynx local start
 ```
 
-### 2. Start the correct static server
+The command prints a device channel URL. Put that LAN URL in the Expo plugin
+`deliveryChannels` map before making an internal build; do not use phone
+`localhost`.
 
-Keep this process running:
+### 2. Publish the in-repository feature
 
 ```sh
-cd /Users/phirom/Desktop/expo-lynx-monorepo
-pnpm serve:lynx-remote
+pnpm lynx release delivery
 ```
 
-The server prints the device URL. With the current Mac address it is:
-
-```text
-http://192.168.18.144:3000/manifest.json
-```
-
-Verify from the Mac:
-
-```sh
-curl http://192.168.18.144:3000/manifest.json
-```
-
-Verify from the physical iPhone by opening the same URL in Safari. The Mac and
-iPhone must be on the same Wi-Fi network. If Safari cannot open the URL, the
-Expo/Lynx code cannot reach the server either; check the Mac firewall, VPN, and
-the current LAN address.
-
-Do not use `pnpm serve:lynx-local` for this test. That command serves
-`apps/expo-lynx-example/assets/static.lynx`, not the sibling remote build.
+The CLI generates the release ID and display version automatically. It builds,
+signs, uploads, and promotes the default `stable` channel. Before debugging the
+native app, open the printed channel URL in the physical iPhone's Safari. If it
+cannot load, check that the Mac and phone share Wi-Fi and that firewall, VPN,
+and client-isolation settings allow the chosen port.
 
 ### 3. Debug build test (recommended during development)
 

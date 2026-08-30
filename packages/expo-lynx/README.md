@@ -86,34 +86,22 @@ For the end-to-end iOS architecture, callback expectations, Release opt-in,
 failure matrix, and R2 transition, see
 [`feature/delivery-bundle-update/DEVELOPMENT.md`](./feature/delivery-bundle-update/DEVELOPMENT.md).
 
-The repository includes a zero-dependency static server that copies the example's embedded artifact, enumerates its sidecars, and generates a matching manifest:
+The example's ReactLynx source now lives at
+`apps/expo-lynx-example/features/delivery`. Use the root workflow to build it,
+publish a signed local release, and inspect its channel:
 
 ```sh
-pnpm serve:lynx-local
-pnpm ios
+pnpm lynx local start
+pnpm lynx release delivery
+pnpm lynx status delivery
 ```
 
-The example starts in `Managed cache` mode and requests the host configured by `expo.extra.lynxDevBundleHost`. Use `127.0.0.1` for a simulator-only workflow. For a physical iPhone, use one of the LAN addresses printed by the server, then rebuild the development app; that LAN address also works from the simulator.
-
-To serve the latest artifact built by the sibling `/Users/phirom/Desktop/lynx-source` project without replacing the embedded baseline, run:
-
-```sh
-cd /Users/phirom/Desktop/lynx-source
-npm run build
-
-cd /Users/phirom/Desktop/expo-lynx-monorepo
-pnpm serve:lynx-remote
-```
-
-This keeps `assets/static.lynx` unchanged, so the first physical-device test visibly exercises the managed `embedded → download` transition instead of serving the same bytes as both sources.
-
-After changing the Lynx source, use the rebuild helper:
-
-```sh
-pnpm rebuild:lynx-remote
-```
-
-It runs `npm run build` in `/Users/phirom/Desktop/lynx-source`, refreshes the ignored `.local-lynx-server/` files, and leaves an already-running `pnpm serve:lynx-remote` process serving the new bundle. Reload or reopen the managed mini-app to fetch the new manifest. Set `LYNX_SOURCE_DIR` when the Lynx source lives elsewhere.
+`lynx release` builds the feature directly, generates its internal release ID,
+signs it, uploads it to the local test service, and promotes the selected
+channel. The generated embedded baseline remains separate, so the first remote
+release visibly exercises the managed `embedded → download` transition. The
+physical iPhone uses a LAN channel URL compiled into the plugin configuration;
+do not use `localhost` from a phone.
 
 For signed V2 delivery, configure every production channel in the Expo plugin.
 Prebuild writes this map into `Info.plist`, and native code resolves the
@@ -241,10 +229,11 @@ the first `LynxView` is created. Build the app in Debug, start the Lynx DevTool 
 connect to the running iOS client to inspect the embedded page (DOM/CSS, console, network, and
 reload controls).
 
-For HMR, run Rspeedy's development server from the Lynx source project:
+For HMR, run Rspeedy's development server from the in-repository delivery
+feature:
 
 ```sh
-cd /Users/phirom/Desktop/lynx-source
+cd apps/expo-lynx-example/features/delivery
 pnpm dev
 ```
 

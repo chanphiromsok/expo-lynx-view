@@ -1,6 +1,7 @@
 packages:
   - 'packages/*'
   - 'apps/*'
+  - 'apps/expo-lynx-example/features/delivery'
 allowBuilds:
   esbuild: true
   workerd: true

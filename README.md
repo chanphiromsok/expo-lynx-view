@@ -50,8 +50,40 @@ the normal setup or bundle-release workflow.
 | `packages/expo-lynx` | Expo native module, config plugin, and iOS managed-bundle implementation. |
 | `packages/lynx-bundle-cli` | Builds, packages, hashes, and signs each Lynx feature. |
 | `apps/expo-lynx-example` | Reference Expo app and its `delivery` mini-app feature. |
+| `apps/expo-lynx-example/features/delivery` | The ReactLynx mini-app source, now part of this monorepo. |
 | `apps/lynx-delivery-worker` | Cloudflare Worker service scaffold for the production delivery API. |
 | `scripts/serve-local-lynx-release.mjs` | Local signed-release server for simulator or trusted-LAN device testing. |
+
+## Everyday mini-app workflow
+
+Use the friendly `lynx` command for normal development. It generates internal
+release identities and local publisher tokens for you; no manual date version,
+release ID, PEM path, output directory, or upload route is required.
+
+```sh
+# First-time development-key setup. It deliberately requires this explicit
+# flag because it replaces the public key embedded in the example app.
+pnpm lynx local init --replace-app-key
+
+# Starts the LAN-reachable local delivery service and stores its token only in
+# ignored .local-lynx-delivery/ state.
+pnpm lynx local start
+
+# Rebuild static native-resource input from the actual delivery source.
+pnpm lynx bundle delivery
+
+# Build → sign → upload → promote the local stable channel.
+pnpm lynx release delivery
+
+# Inspect the current local channel head.
+pnpm lynx status delivery
+```
+
+`pnpm lynx release delivery` generates an immutable release ID and a display
+version automatically. Use `--draft` to package without publishing, or
+`--channel beta` when testing a different configured channel. A changed
+embedded public key, feature registry, or channel-host mapping still requires
+one Expo prebuild and internal iOS build; a later `lynx release` does not.
 
 ## Set up a mini-app feature
 
@@ -88,9 +120,11 @@ Unless a feature supplies an advanced `build` wrapper, it must contain
 Build static embedded resources for the app runtime, then validate the result:
 
 ```sh
-pnpm lynx-bundle build-embedded --runtime-version expo-57
-pnpm lynx-bundle check-embedded --runtime-version expo-57
+pnpm lynx bundle delivery
 ```
+
+The lower-level `pnpm lynx-bundle build-embedded` and `check-embedded`
+commands remain available for CI and diagnostics.
 
 `generated/expo-lynx/embedded` is config-plugin input, not an Expo/Metro
 asset import. When it is configured as `embeddedBundlesPath`, prebuild also

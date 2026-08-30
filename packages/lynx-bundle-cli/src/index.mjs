@@ -352,27 +352,52 @@ function selectFeatures(config, requested = []) {
 function runFeatureBuild(config, feature, outputDirectory) {
   const build = feature.build ?? defaultBuild(feature, outputDirectory);
   const args = build.args.map((argument) => resolveBuildArgument(argument, outputDirectory, build.configDirectory ?? config.configDirectory));
-  const result = spawnSync(build.command, args, {
-    cwd: feature.root,
-    stdio: 'inherit',
-    env: { ...process.env, LYNX_BUNDLE_OUTPUT_DIR: outputDirectory },
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`Feature ${feature.id} production build failed with exit code ${result.status}.`);
+  try {
+    const result = spawnSync(build.command, args, {
+      cwd: feature.root,
+      stdio: 'inherit',
+      env: { ...process.env, LYNX_BUNDLE_OUTPUT_DIR: outputDirectory },
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`Feature ${feature.id} production build failed with exit code ${result.status}.`);
+  } finally {
+    // The transient Rspeedy config lives in the build directory so Rspeedy can
+    // import it. It is tooling input, not a publishable Lynx resource.
+    build.cleanup?.();
+  }
 }
 
 function defaultBuild(feature, outputDirectory) {
   const temporaryConfig = resolve(outputDirectory, 'lynx-bundle.rspeedy.config.mjs');
   const content = [
     `import config from ${JSON.stringify(pathToFileURL(feature.lynxConfig).href)};`,
-    `export default { ...config, output: { ...(config.output ?? {}), distPath: ${JSON.stringify(outputDirectory)} } };`,
+    // Rspeedy validates the Lynx environment against its current DistPath
+    // object shape. The string form is accepted by some Rsbuild environments,
+    // but is rejected by Rspeedy's Lynx config validator.
+    `export default { ...config, output: { ...(config.output ?? {}), distPath: { root: ${JSON.stringify(outputDirectory)} } } };`,
   ].join('\n');
   writeFileSync(temporaryConfig, content, { mode: 0o600 });
-  const command = existsSync(resolve(feature.root, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm';
+  const workspaceRoot = findPnpmWorkspaceRoot(feature.root);
+  const command = workspaceRoot || existsSync(resolve(feature.root, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm';
   const args = command === 'pnpm'
-    ? ['exec', 'rspeedy', 'build', '--environment', 'lynx', '--root', feature.root, '--config', temporaryConfig]
+    ? [...(workspaceRoot ? ['--dir', feature.root] : []), 'exec', 'rspeedy', 'build', '--environment', 'lynx', '--root', feature.root, '--config', temporaryConfig]
     : ['exec', '--', 'rspeedy', 'build', '--environment', 'lynx', '--root', feature.root, '--config', temporaryConfig];
-  return { command, args, configDirectory: feature.root };
+  return {
+    command,
+    args,
+    configDirectory: feature.root,
+    cleanup: () => rmSync(temporaryConfig, { force: true }),
+  };
+}
+
+function findPnpmWorkspaceRoot(startDirectory) {
+  let directory = startDirectory;
+  while (true) {
+    if (existsSync(resolve(directory, 'pnpm-workspace.yaml'))) return directory;
+    const parent = dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
 }
 
 function resolveBuildArgument(argument, outputDirectory, configDirectory) {
