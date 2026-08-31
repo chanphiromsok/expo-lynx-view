@@ -70,7 +70,7 @@ and TypeScript rejects an unknown `source.feature` value:
 const source: LynxSource = {
   kind: 'managed',
   feature: 'shopping', // autocomplete comes from the embedded registry
-  channel: 'stable',
+  channel: 'active',
 };
 ```
 
@@ -122,7 +122,7 @@ installs the ZIP; that release activates on the next mini-app open.
           "publicKeyPath": "./keys/lynx/updates.public.pem",
           "deliveryChannels": {
             "delivery": {
-              "stable": "https://delivery.example.com/v1/channels/delivery/stable"
+              "active": "https://delivery.example.com/v1/channels/delivery/active"
             }
           }
         }
@@ -136,7 +136,7 @@ installs the ZIP; that release activates on the next mini-app open.
 const source: LynxSource = {
   kind: 'managed',
   feature: 'delivery',
-  channel: 'stable',
+  channel: 'active',
 };
 ```
 
@@ -199,9 +199,9 @@ import ExpoLynx, { ExpoLynxView } from 'expo-lynx';
 
 const result = await ExpoLynx.checkForUpdate({
   feature: 'delivery',
-  channel: 'stable',
+  channel: 'active',
 });
-// { feature: 'delivery', channel: 'stable', status: 'no-update' | 'pending', ... }
+// { feature: 'delivery', channel: 'active', status: 'no-update' | 'pending', ... }
 ```
 
 Use `onUpdate` to drive a small “checking/downloading/ready next time” status

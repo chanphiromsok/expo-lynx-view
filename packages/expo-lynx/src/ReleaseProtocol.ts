@@ -22,7 +22,6 @@ export const RELEASE_PROTOCOL_LIMITS = {
 const MAX_ENVELOPE_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const MAX_ENVELOPE_SIGNATURE_BYTES = 16 * 1024;
 const FEATURE_ID = /^[a-z][a-z0-9-]{0,63}$/;
-const CHANNEL_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const RELEASE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const DISPLAY_VERSION = /^[A-Za-z0-9][A-Za-z0-9.+-]{0,127}$/;
 const SHA_256 = /^[a-f0-9]{64}$/;
@@ -36,20 +35,25 @@ export type SignedEnvelope = {
   signature: string;
 };
 
-export type ChannelPayload = {
-  type: 'lynx-channel';
-  feature: string;
-  channel: string;
-  revision: number;
-  releaseId: string;
-  manifestUrl: string;
-  manifestSha256: string;
-  runtimeVersion: string;
-  activation: 'next-open' | 'on-launch';
-  force: boolean;
-  issuedAt: string;
-  expiresAt?: string;
-};
+export type DeploymentPayload =
+  | {
+      type: 'lynx-deployment';
+      feature: string;
+      revision: number;
+      enabled: false;
+      issuedAt: string;
+    }
+  | {
+      type: 'lynx-deployment';
+      feature: string;
+      revision: number;
+      enabled: true;
+      releaseId: string;
+      manifestUrl: string;
+      manifestSha256: string;
+      force: boolean;
+      issuedAt: string;
+    };
 
 export type ReleaseCompatibility = {
   runtimeVersion: string;
@@ -97,7 +101,7 @@ export type ReleaseProtocolErrorCode =
   | 'invalid-type'
   | 'feature-mismatch'
   | 'invalid-feature'
-  | 'invalid-channel'
+  | 'invalid-enabled'
   | 'invalid-release-id'
   | 'invalid-version'
   | 'invalid-revision'
@@ -105,7 +109,6 @@ export type ReleaseProtocolErrorCode =
   | 'invalid-sha256'
   | 'invalid-size'
   | 'invalid-timestamp'
-  | 'invalid-activation'
   | 'invalid-force'
   | 'invalid-platform'
   | 'invalid-archive-format'
@@ -118,12 +121,11 @@ export type ReleaseProtocolErrorCode =
 
 export class ReleaseProtocolError extends Error {
   readonly name = 'ReleaseProtocolError';
+  readonly code: ReleaseProtocolErrorCode;
 
-  constructor(
-    readonly code: ReleaseProtocolErrorCode,
-    message: string
-  ) {
+  constructor(code: ReleaseProtocolErrorCode, message: string) {
     super(message);
+    this.code = code;
   }
 }
 
@@ -184,86 +186,84 @@ export function decodeEnvelopePayload(envelope: SignedEnvelope): ProtocolParseRe
 }
 
 /**
- * Parses a channel payload after the native verifier has authenticated the
+ * Parses a deployment payload after the native verifier has authenticated the
  * envelope. expectedFeature is mandatory domain separation.
  */
-export function parseChannelPayload(
+export function parseDeploymentPayload(
   input: unknown,
   expectedFeature: string
-): ProtocolParseResult<ChannelPayload> {
+): ProtocolParseResult<DeploymentPayload> {
   return parseResult(() => {
     assertFeature(expectedFeature);
     const value = parseJsonObject(input);
-    assert(value.type === 'lynx-channel', 'invalid-type', 'Expected payload type lynx-channel.');
-    assertOnlyKeys(value, [
-      'type',
-      'feature',
-      'channel',
-      'revision',
-      'releaseId',
-      'manifestUrl',
-      'manifestSha256',
-      'runtimeVersion',
-      'activation',
-      'force',
-      'issuedAt',
-      'expiresAt',
-    ]);
-    assertString(value.feature, 'invalid-feature', 'Channel feature must be a string.');
+    assert(
+      value.type === 'lynx-deployment',
+      'invalid-type',
+      'Expected payload type lynx-deployment.'
+    );
+    assert(
+      typeof value.enabled === 'boolean',
+      'invalid-enabled',
+      'Deployment enabled must be a boolean.'
+    );
+    assertOnlyKeys(
+      value,
+      value.enabled
+        ? [
+            'type',
+            'feature',
+            'revision',
+            'enabled',
+            'releaseId',
+            'manifestUrl',
+            'manifestSha256',
+            'force',
+            'issuedAt',
+          ]
+        : ['type', 'feature', 'revision', 'enabled', 'issuedAt']
+    );
+    assertString(value.feature, 'invalid-feature', 'Deployment feature must be a string.');
     assertFeature(value.feature);
     assert(
       value.feature === expectedFeature,
       'feature-mismatch',
       `Expected feature '${expectedFeature}' but received '${value.feature}'.`
     );
-    assertString(value.channel, 'invalid-channel', 'Channel must be a string.');
-    assert(CHANNEL_ID.test(value.channel), 'invalid-channel', 'Channel is not a safe identifier.');
     assertPositiveSafeInteger(
       value.revision,
       'invalid-revision',
       'Revision must be a positive safe integer.'
     );
+    assertString(value.issuedAt, 'invalid-timestamp', 'issuedAt must be an ISO-8601 timestamp.');
+    assertTimestamp(value.issuedAt, 'issuedAt');
+
+    if (!value.enabled) {
+      return {
+        type: 'lynx-deployment',
+        feature: value.feature,
+        revision: value.revision,
+        enabled: false,
+        issuedAt: value.issuedAt,
+      };
+    }
+
     assertString(value.releaseId, 'invalid-release-id', 'Release ID must be a string.');
     assertReleaseId(value.releaseId);
     assertString(value.manifestUrl, 'invalid-url', 'Manifest URL must be a string.');
     assertArtifactUrl(value.manifestUrl, 'manifestUrl');
     assertSha256(value.manifestSha256, 'manifestSha256');
-    assertProtocolVersion(value.runtimeVersion, 'runtimeVersion');
-    assert(
-      value.activation === 'next-open' || value.activation === 'on-launch',
-      'invalid-activation',
-      'Activation must be next-open or on-launch.'
-    );
     assert(typeof value.force === 'boolean', 'invalid-force', 'Force must be a boolean.');
-    assertString(value.issuedAt, 'invalid-timestamp', 'issuedAt must be an ISO-8601 timestamp.');
-    assertTimestamp(value.issuedAt, 'issuedAt');
-    if (value.expiresAt !== undefined) {
-      assertString(
-        value.expiresAt,
-        'invalid-timestamp',
-        'expiresAt must be an ISO-8601 timestamp.'
-      );
-      assertTimestamp(value.expiresAt, 'expiresAt');
-      assert(
-        Date.parse(value.expiresAt) >= Date.parse(value.issuedAt),
-        'invalid-timestamp',
-        'expiresAt cannot be earlier than issuedAt.'
-      );
-    }
 
     return {
-      type: 'lynx-channel',
+      type: 'lynx-deployment',
       feature: value.feature,
-      channel: value.channel,
       revision: value.revision,
+      enabled: true,
       releaseId: value.releaseId,
       manifestUrl: value.manifestUrl,
       manifestSha256: value.manifestSha256,
-      runtimeVersion: value.runtimeVersion,
-      activation: value.activation,
       force: value.force,
       issuedAt: value.issuedAt,
-      ...(value.expiresAt === undefined ? {} : { expiresAt: value.expiresAt }),
     };
   });
 }
@@ -354,7 +354,7 @@ export function parseUnverifiedEnvelopePayload(
     const bytes = unwrap(decodeEnvelopePayload(envelope));
     let json: string;
     try {
-      json = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      json = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
     } catch {
       throw new ReleaseProtocolError('invalid-utf8', 'Envelope payload is not valid UTF-8.');
     }

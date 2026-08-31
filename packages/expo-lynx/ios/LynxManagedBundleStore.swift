@@ -8,9 +8,17 @@ struct LynxManagedRelease: Sendable {
   let bundleURL: URL
 }
 
-enum LynxChannelUpdateResult: Sendable {
-  case noUpdate(eTag: String?, revision: Int?)
-  case downloaded(release: LynxManagedRelease, eTag: String?, revision: Int)
+enum LynxDeploymentUpdateResult: Sendable {
+  case notModified(eTag: String?)
+  case disabled(eTag: String?, revision: Int)
+  case blocked(releaseID: String, eTag: String?, revision: Int)
+  case selected(
+    release: LynxManagedRelease,
+    force: Bool,
+    eTag: String?,
+    revision: Int,
+    downloaded: Bool
+  )
 }
 
 actor LynxManagedBundleStore {
@@ -19,7 +27,7 @@ actor LynxManagedBundleStore {
   private let fileManager = FileManager.default
   private let rootURL: URL
   private var v2Installs: [String: Task<LynxManagedRelease, Error>] = [:]
-  private var channelChecks: [String: Task<LynxChannelUpdateResult, Error>] = [:]
+  private var deploymentChecks: [String: Task<LynxDeploymentUpdateResult, Error>] = [:]
 
   init(rootURL: URL? = nil) {
     if let rootURL {
@@ -35,7 +43,6 @@ actor LynxManagedBundleStore {
 
   func installedRelease(
     feature: String,
-    channel: String = "stable",
     manifestID: String
   ) throws -> LynxManagedRelease? {
     guard isSafeFeature(feature) else { return nil }
@@ -44,7 +51,6 @@ actor LynxManagedBundleStore {
     // manifest layout so a staged signed release can reopen cheaply.
     if let installed = try installedV2Release(
       feature: feature,
-      channel: channel,
       releaseID: manifestID
     ) {
       return installed
@@ -148,133 +154,187 @@ actor LynxManagedBundleStore {
   /// and per-file hashes have succeeded in an app-private transaction.
   func install(
     releaseEnvelopeURL: URL,
-    expectedFeature: String,
-    expectedChannel: String = "stable"
+    expectedFeature: String
   ) async throws -> LynxManagedRelease {
     let (envelope, response) = try await URLSession.shared.data(for: noCacheURLRequest(releaseEnvelopeURL))
     try validateHTTPResponse(response, url: releaseEnvelopeURL)
     return try await install(
       releaseEnvelopeData: envelope,
       releaseEnvelopeURL: releaseEnvelopeURL,
-      expectedFeature: expectedFeature,
-      expectedChannel: expectedChannel
+      expectedFeature: expectedFeature
     )
   }
 
   /// Installation still owns the expensive cryptographic, archive, and file
-  /// verification. Channel checks call this only after a signed pointer has
+  /// verification. Deployment checks call this only after a signed pointer has
   /// identified a different immutable release.
   func install(
     releaseEnvelopeData: Data,
     releaseEnvelopeURL: URL,
-    expectedFeature: String,
-    expectedChannel: String = "stable"
+    expectedFeature: String
   ) async throws -> LynxManagedRelease {
     let payload = try LynxReleasePayload.decodeVerified(
       LynxSignatureVerifier.verifyEmbedded(envelopeData: releaseEnvelopeData, expectedType: "lynx-release", expectedFeature: expectedFeature),
       expectedFeature: expectedFeature
     )
-    guard isSafeChannel(expectedChannel) else {
-      throw LynxDeliveryError(stage: .manifest, code: "ERR_LYNX_CHANNEL_INVALID", message: "The managed Lynx channel is not safe for local storage.")
-    }
-    let key = "\(expectedFeature)/\(expectedChannel)/\(payload.releaseId)"
-    if let installed = try installedV2Release(feature: expectedFeature, channel: expectedChannel, releaseID: payload.releaseId) { return installed }
+    let key = "\(expectedFeature)/\(payload.releaseId)"
+    if let installed = try installedV2Release(feature: expectedFeature, releaseID: payload.releaseId) { return installed }
     if let task = v2Installs[key] { return try await task.value }
-    let task = Task { [self] in try await performV2Install(payload: payload, channel: expectedChannel, envelope: releaseEnvelopeData, envelopeURL: releaseEnvelopeURL) }
+    let task = Task { [self] in
+      try await performV2Install(
+        payload: payload,
+        envelope: releaseEnvelopeData,
+        envelopeURL: releaseEnvelopeURL
+      )
+    }
     v2Installs[key] = task
     defer { v2Installs[key] = nil }
     return try await task.value
   }
 
-  /// Reads the small signed channel envelope with ETag revalidation. A ZIP is
-  /// requested only when its immutable release ID is not already active,
-  /// pending, or failed for this feature/channel.
+  /// Reads the small signed deployment envelope with ETag and revision replay
+  /// protection. Artifact bytes are requested only for a new, unblocked ID.
   func checkForUpdate(
-    channelEnvelopeURL: URL,
+    deploymentEnvelopeURL: URL,
     expectedFeature: String,
-    expectedChannel: String,
     eTag: String?,
-    knownReleaseIDs: Set<String>
-  ) async throws -> LynxChannelUpdateResult {
-    let key = "\(expectedFeature)/\(expectedChannel)/\(channelEnvelopeURL.absoluteString)"
-    if let task = channelChecks[key] { return try await task.value }
+    lastRevision: Int?,
+    blockedReleaseIDs: Set<String>
+  ) async throws -> LynxDeploymentUpdateResult {
+    let key = "\(expectedFeature)/\(deploymentEnvelopeURL.absoluteString)"
+    if let task = deploymentChecks[key] { return try await task.value }
     let task = Task { [self] in
-      try await performChannelCheck(
-        channelEnvelopeURL: channelEnvelopeURL,
+      try await performDeploymentCheck(
+        deploymentEnvelopeURL: deploymentEnvelopeURL,
         expectedFeature: expectedFeature,
-        expectedChannel: expectedChannel,
         eTag: eTag,
-        knownReleaseIDs: knownReleaseIDs
+        lastRevision: lastRevision,
+        blockedReleaseIDs: blockedReleaseIDs
       )
     }
-    channelChecks[key] = task
-    defer { channelChecks[key] = nil }
+    deploymentChecks[key] = task
+    defer { deploymentChecks[key] = nil }
     return try await task.value
   }
 
-  private func performChannelCheck(
-    channelEnvelopeURL: URL,
+  private func performDeploymentCheck(
+    deploymentEnvelopeURL: URL,
     expectedFeature: String,
-    expectedChannel: String,
     eTag: String?,
-    knownReleaseIDs: Set<String>
-  ) async throws -> LynxChannelUpdateResult {
-    var request = noCacheURLRequest(channelEnvelopeURL)
+    lastRevision: Int?,
+    blockedReleaseIDs: Set<String>
+  ) async throws -> LynxDeploymentUpdateResult {
+    var request = noCacheURLRequest(deploymentEnvelopeURL)
     if let eTag, !eTag.isEmpty { request.setValue(eTag, forHTTPHeaderField: "If-None-Match") }
-    let (channelEnvelope, response) = try await URLSession.shared.data(for: request)
+    let (deploymentEnvelope, response) = try await URLSession.shared.data(for: request)
     guard let httpResponse = response as? HTTPURLResponse else {
-      throw LynxDeliveryError(stage: .download, code: "ERR_LYNX_HTTP_0", message: "The Lynx channel response was not HTTP.")
+      throw LynxDeliveryError(stage: .download, code: "ERR_LYNX_HTTP_0", message: "The Lynx deployment response was not HTTP.")
     }
     if httpResponse.statusCode == 304 {
-      return .noUpdate(eTag: httpResponse.value(forHTTPHeaderField: "ETag") ?? eTag, revision: nil)
+      return .notModified(eTag: httpResponse.value(forHTTPHeaderField: "ETag") ?? eTag)
     }
-    try validateHTTPResponse(httpResponse, url: channelEnvelopeURL)
-    let channel = try LynxChannelPayload.decodeVerified(
+    try validateHTTPResponse(httpResponse, url: deploymentEnvelopeURL)
+    let deployment = try LynxDeploymentPayload.decodeVerified(
       LynxSignatureVerifier.verifyEmbedded(
-        envelopeData: channelEnvelope,
-        expectedType: "lynx-channel",
+        envelopeData: deploymentEnvelope,
+        expectedType: "lynx-deployment",
         expectedFeature: expectedFeature
       ),
-      expectedFeature: expectedFeature,
-      expectedChannel: expectedChannel
+      expectedFeature: expectedFeature
     )
     let responseETag = httpResponse.value(forHTTPHeaderField: "ETag")
-    guard !knownReleaseIDs.contains(channel.releaseId) else {
-      return .noUpdate(eTag: responseETag, revision: channel.revision)
+    if let lastRevision {
+      guard deployment.revision >= lastRevision else {
+        throw LynxDeliveryError(
+          stage: .manifest,
+          code: "ERR_LYNX_DEPLOYMENT_REPLAY",
+          message: "The signed deployment revision is older than local state."
+        )
+      }
+      if deployment.revision == lastRevision {
+        guard let eTag, responseETag == eTag else {
+          throw LynxDeliveryError(
+            stage: .manifest,
+            code: "ERR_LYNX_DEPLOYMENT_CONFLICT",
+            message: "The signed deployment changed without a newer revision."
+          )
+        }
+        return .notModified(eTag: responseETag)
+      }
     }
 
-    let releaseEnvelopeURL = try resolveRemoteURL(channel.manifestUrl, relativeTo: channelEnvelopeURL)
+    guard deployment.enabled else {
+      return .disabled(eTag: responseETag, revision: deployment.revision)
+    }
+    guard let releaseID = deployment.releaseId,
+      let manifestURL = deployment.manifestUrl,
+      let manifestSha256 = deployment.manifestSha256,
+      let force = deployment.force
+    else {
+      throw LynxDeliveryError(
+        stage: .manifest,
+        code: "ERR_LYNX_DEPLOYMENT_INVALID",
+        message: "The enabled deployment is missing release fields."
+      )
+    }
+    if blockedReleaseIDs.contains(releaseID) {
+      return .blocked(
+        releaseID: releaseID,
+        eTag: responseETag,
+        revision: deployment.revision
+      )
+    }
+    if let installed = try installedV2Release(feature: expectedFeature, releaseID: releaseID) {
+      return .selected(
+        release: installed,
+        force: force,
+        eTag: responseETag,
+        revision: deployment.revision,
+        downloaded: false
+      )
+    }
+
+    let releaseEnvelopeURL = try resolveRemoteURL(manifestURL, relativeTo: deploymentEnvelopeURL)
     let (releaseEnvelope, releaseResponse) = try await URLSession.shared.data(
       for: noCacheURLRequest(releaseEnvelopeURL)
     )
     try validateHTTPResponse(releaseResponse, url: releaseEnvelopeURL)
     let releaseHash = SHA256.hash(data: releaseEnvelope).map { String(format: "%02x", $0) }.joined()
-    guard releaseHash == channel.manifestSha256 else {
+    guard releaseHash == manifestSha256 else {
       throw LynxDeliveryError(
         stage: .checksum,
-        code: "ERR_LYNX_CHANNEL_MANIFEST_SHA256",
-        message: "The release envelope does not match the signed channel pointer."
+        code: "ERR_LYNX_DEPLOYMENT_MANIFEST_SHA256",
+        message: "The release envelope does not match the signed deployment."
       )
     }
     let release = try await install(
       releaseEnvelopeData: releaseEnvelope,
       releaseEnvelopeURL: releaseEnvelopeURL,
-      expectedFeature: expectedFeature,
-      expectedChannel: expectedChannel
+      expectedFeature: expectedFeature
     )
-    guard release.manifestID == channel.releaseId else {
+    guard release.manifestID == releaseID else {
       throw LynxDeliveryError(
         stage: .manifest,
-        code: "ERR_LYNX_CHANNEL_RELEASE_ID",
-        message: "The signed channel release ID does not match the signed release envelope."
+        code: "ERR_LYNX_DEPLOYMENT_RELEASE_ID",
+        message: "The signed deployment release ID does not match the signed release envelope."
       )
     }
-    return .downloaded(release: release, eTag: responseETag, revision: channel.revision)
+    return .selected(
+      release: release,
+      force: force,
+      eTag: responseETag,
+      revision: deployment.revision,
+      downloaded: true
+    )
   }
 
-  private func performV2Install(payload: LynxReleasePayload, channel: String, envelope: Data, envelopeURL: URL) async throws -> LynxManagedRelease {
+  private func performV2Install(
+    payload: LynxReleasePayload,
+    envelope: Data,
+    envelopeURL: URL
+  ) async throws -> LynxManagedRelease {
     try ensureDiskSpace(requiredBytes: payload.archive.bytes + payload.archive.uncompressedBytes)
-    let featureRoot = channelRoot(feature: payload.feature, channel: channel)
+    let featureRoot = featureRoot(feature: payload.feature)
     let staging = featureRoot.appendingPathComponent("staging", isDirectory: true).appendingPathComponent(UUID().uuidString, isDirectory: true)
     let extracted = staging.appendingPathComponent("release", isDirectory: true)
     let archive = staging.appendingPathComponent("release.zip.part")
@@ -287,20 +347,20 @@ actor LynxManagedBundleStore {
     try envelope.write(to: extracted.appendingPathComponent("release-envelope.json"), options: .atomic)
     let completion = V2Completion(feature: payload.feature, releaseID: payload.releaseId, version: payload.version, archiveSHA256: payload.archive.sha256, files: expected.map(\.path))
     try JSONEncoder().encode(completion).write(to: extracted.appendingPathComponent("completion.json"), options: .atomic)
-    let final = v2ReadyURL(feature: payload.feature, channel: channel, releaseID: payload.releaseId)
+    let final = v2ReadyURL(feature: payload.feature, releaseID: payload.releaseId)
     try fileManager.createDirectory(at: final.deletingLastPathComponent(), withIntermediateDirectories: true)
     if !fileManager.fileExists(atPath: final.path) { try fileManager.moveItem(at: extracted, to: final) }
-    guard let installed = try installedV2Release(feature: payload.feature, channel: channel, releaseID: payload.releaseId) else { throw LynxDeliveryError(stage: .archive, code: "ERR_LYNX_RELEASE_INSTALL", message: "The completed signed Lynx release could not be reopened.") }
+    guard let installed = try installedV2Release(feature: payload.feature, releaseID: payload.releaseId) else { throw LynxDeliveryError(stage: .archive, code: "ERR_LYNX_RELEASE_INSTALL", message: "The completed signed Lynx release could not be reopened.") }
     return installed
   }
 
-  private func installedV2Release(feature: String, channel: String, releaseID: String) throws -> LynxManagedRelease? {
-    guard isSafeFeature(feature), isSafeChannel(channel), releaseID.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", options: .regularExpression) != nil else { return nil }
-    let directory = v2ReadyURL(feature: feature, channel: channel, releaseID: releaseID)
+  private func installedV2Release(feature: String, releaseID: String) throws -> LynxManagedRelease? {
+    guard isSafeFeature(feature), releaseID.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", options: .regularExpression) != nil else { return nil }
+    let directory = v2ReadyURL(feature: feature, releaseID: releaseID)
     let completionURL = directory.appendingPathComponent("completion.json")
     let bundleURL = directory.appendingPathComponent("main.lynx.bundle")
-    if !isRegularFile(completionURL), try migrateLegacyV2Release(feature: feature, channel: channel, releaseID: releaseID) {
-      return try installedV2Release(feature: feature, channel: channel, releaseID: releaseID)
+    if !isRegularFile(completionURL), try migrateLegacyV2Release(feature: feature, releaseID: releaseID) {
+      return try installedV2Release(feature: feature, releaseID: releaseID)
     }
     guard isRegularFile(completionURL), isRegularFile(bundleURL), let completion = try? JSONDecoder().decode(V2Completion.self, from: Data(contentsOf: completionURL)), completion.feature == feature, completion.releaseID == releaseID else { return nil }
     // Cache opens perform only bounded metadata/entry checks. Archive, RSA,
@@ -314,11 +374,11 @@ actor LynxManagedBundleStore {
 
   /// Idempotent startup/after-install maintenance. It removes work-in-progress
   /// directories and incomplete releases, then evicts only unprotected oldest
-  /// complete releases. State pointers are supplied by the channel coordinator,
+  /// complete releases. State pointers are supplied by the deployment coordinator,
   /// so active/pending/previous candidates are never selected for eviction.
-  func reconcile(feature: String, channel: String, protectedReleaseIDs: Set<String>) throws {
-    guard isSafeFeature(feature), isSafeChannel(channel) else { return }
-    let root = channelRoot(feature: feature, channel: channel)
+  func reconcile(feature: String, protectedReleaseIDs: Set<String>) throws {
+    guard isSafeFeature(feature) else { return }
+    let root = featureRoot(feature: feature)
     let staging = root.appendingPathComponent("staging", isDirectory: true)
     if fileManager.fileExists(atPath: staging.path) { try? fileManager.removeItem(at: staging) }
     let ready = root.appendingPathComponent("ready", isDirectory: true)
@@ -331,7 +391,7 @@ actor LynxManagedBundleStore {
     for directory in directories {
       guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
       let id = directory.lastPathComponent
-      guard let release = try installedV2Release(feature: feature, channel: channel, releaseID: id) else {
+      guard let release = try installedV2Release(feature: feature, releaseID: id) else {
         try? fileManager.removeItem(at: directory)
         continue
       }
@@ -359,23 +419,26 @@ actor LynxManagedBundleStore {
   private static let maxReadyReleases = 4
   private static let maxReadyBytes: Int64 = 256 * 1_024 * 1_024
 
-  private func channelRoot(feature: String, channel: String) -> URL {
+  private func featureRoot(feature: String) -> URL {
     rootURL
       .appendingPathComponent(feature, isDirectory: true)
-      .appendingPathComponent(channel, isDirectory: true)
   }
 
-  private func v2ReadyURL(feature: String, channel: String, releaseID: String) -> URL {
-    channelRoot(feature: feature, channel: channel)
+  private func v2ReadyURL(feature: String, releaseID: String) -> URL {
+    featureRoot(feature: feature)
       .appendingPathComponent("ready", isDirectory: true)
       .appendingPathComponent(releaseID, isDirectory: true)
   }
 
-  private func migrateLegacyV2Release(feature: String, channel: String, releaseID: String) throws -> Bool {
-    let legacy = readyURL(feature: feature, manifestID: releaseID)
+  private func migrateLegacyV2Release(feature: String, releaseID: String) throws -> Bool {
+    let legacy = rootURL
+      .appendingPathComponent(feature, isDirectory: true)
+      .appendingPathComponent("active", isDirectory: true)
+      .appendingPathComponent("ready", isDirectory: true)
+      .appendingPathComponent(releaseID, isDirectory: true)
     let completion = legacy.appendingPathComponent("completion.json")
     guard isRegularFile(completion), isRegularFile(legacy.appendingPathComponent("main.lynx.bundle")) else { return false }
-    let destination = v2ReadyURL(feature: feature, channel: channel, releaseID: releaseID)
+    let destination = v2ReadyURL(feature: feature, releaseID: releaseID)
     try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
     guard !fileManager.fileExists(atPath: destination.path) else { return true }
     try fileManager.moveItem(at: legacy, to: destination)
@@ -416,10 +479,6 @@ actor LynxManagedBundleStore {
     return feature.unicodeScalars.allSatisfy {
       CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0)
     }
-  }
-
-  private func isSafeChannel(_ channel: String) -> Bool {
-    channel == "stable" || channel == "beta"
   }
 
   private func isSHA256(_ value: String) -> Bool {

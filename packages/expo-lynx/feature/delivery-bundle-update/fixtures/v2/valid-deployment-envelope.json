@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "RSA-SHA256",
+  "payload": "eyJ0eXBlIjoibHlueC1kZXBsb3ltZW50IiwiZmVhdHVyZSI6InNob3BwaW5nIiwicmV2aXNpb24iOjcsImVuYWJsZWQiOnRydWUsInJlbGVhc2VJZCI6InNob3BwaW5nLTIwMjYuMDguMjkuMSIsIm1hbmlmZXN0VXJsIjoicmVsZWFzZXMvc2hvcHBpbmctMjAyNi4wOC4yOS4xL21hbmlmZXN0Lmpzb24iLCJtYW5pZmVzdFNoYTI1NiI6IjExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJmb3JjZSI6ZmFsc2UsImlzc3VlZEF0IjoiMjAyNi0wOC0yOVQwOTowMDowMC4wMDBaIn0",
+  "signature": "AQ"
+}

@@ -51,7 +51,8 @@ the normal setup or bundle-release workflow.
 | `packages/lynx-bundle-cli` | Builds, packages, hashes, and signs each Lynx feature. |
 | `apps/expo-lynx-example` | Reference Expo app and its `delivery` mini-app feature. |
 | `apps/expo-lynx-example/features/delivery` | The ReactLynx mini-app source, now part of this monorepo. |
-| `apps/lynx-delivery-worker` | Cloudflare Worker service scaffold for the production delivery API. |
+| `apps/docs` | MDX documentation website for setup, managed delivery, CLI, and troubleshooting. |
+| `apps/console` | Unified TanStack operator console and Elysia/Cloudflare Worker for signed delivery artifacts. |
 | `scripts/serve-local-lynx-release.mjs` | Local signed-release server for simulator or trusted-LAN device testing. |
 
 ## Everyday mini-app workflow
@@ -72,7 +73,7 @@ pnpm lynx local start
 # Rebuild static native-resource input from the actual delivery source.
 pnpm lynx bundle delivery
 
-# Build → sign → upload → promote the local stable channel.
+# Build → sign → upload → promote the single active deployment.
 pnpm lynx release delivery
 
 # Inspect the current local channel head.
@@ -80,8 +81,8 @@ pnpm lynx status delivery
 ```
 
 `pnpm lynx release delivery` generates an immutable release ID and a display
-version automatically. Use `--draft` to package without publishing, or
-`--channel beta` when testing a different configured channel. A changed
+version automatically. Use `--draft` to package without publishing. The
+delivery contract has one fixed deployment named `active`. A changed
 embedded public key, feature registry, or channel-host mapping still requires
 one Expo prebuild and internal iOS build; a later `lynx release` does not.
 
@@ -169,7 +170,7 @@ public key and embedded resources in the Expo plugin:
           "publicKeyPath": "./keys/lynx/updates.public.pem",
           "deliveryChannels": {
             "shopping": {
-              "stable": "https://delivery.example.com/v1/channels/shopping/stable"
+              "active": "https://delivery.example.com/v1/channels/shopping/active"
             }
           }
         }
@@ -280,7 +281,6 @@ pnpm lynx-delivery publish -- \
   --server http://192.168.18.144:3000 \
   --token "$LYNX_DELIVERY_LOCAL_TOKEN" \
   --release-dir apps/expo-lynx-example/dist/lynx-releases/delivery/delivery-2026.08.30.1 \
-  --channel stable \
   --activation next-open
 ```
 
@@ -344,36 +344,39 @@ pnpm serve:lynx-local -- --fault 404
 pnpm serve:lynx-local -- --fault delay
 ```
 
-## Cloudflare server scaffold
+## Cloudflare delivery console and Worker
 
-`apps/lynx-delivery-worker` is the server scaffold already checked into this
-monorepo. It currently provides `GET /` and `GET /health` and declares the R2
-artifact bucket and D1 database bindings. The signed release and channel
-routes above are the next Worker implementation milestone; they are not
-implemented by the scaffold yet.
+`apps/console` is the checked-in package for both the TanStack
+console and its Elysia-powered **read-only public data plane**. It serves signed
+channel envelopes from D1 and immutable manifest/ZIP objects from R2 through
+the same three public routes used by the mobile client. The deployed browser
+bundle has no Cloudflare credentials or private signing key; authenticated
+publisher routes remain future work.
 
-Start the skeleton locally:
+The Worker includes an initial D1 schema migration. After replacing the D1
+placeholder ID, apply it locally before starting the Worker:
 
 ```sh
-pnpm --filter @expo-lynx/lynx-delivery-worker dev
+cd apps/console
+pnpm exec wrangler d1 migrations apply lynx-delivery --local
+pnpm dev
 curl http://127.0.0.1:8787/health
 ```
 
 Provision its Cloudflare resources, then replace the placeholder D1
-`database_id` in `apps/lynx-delivery-worker/wrangler.toml` with the returned
+`database_id` in `apps/console/wrangler.toml` with the returned
 value:
 
 ```sh
-cd apps/lynx-delivery-worker
+cd apps/console
 pnpm exec wrangler r2 bucket create lynx-artifacts
 pnpm exec wrangler d1 create lynx-delivery
-pnpm exec wrangler deploy
 ```
 
-There is currently no `lynx-bundle scaffold-server` generator command. The
-checked-in Worker is the authoritative scaffold. Keeping that explicit avoids
-suggesting that a generated Worker already implements secure publication,
-channel signing, R2 upload, or D1 migrations.
+Run `pnpm test` and `pnpm typecheck` from the Worker package before a staging
+deployment. Deploying the Worker does not make updates available by itself: the
+local console service must first validate and publish immutable artifacts, then
+create a signed D1 channel-head revision.
 
 ## When an iOS prebuild is required
 

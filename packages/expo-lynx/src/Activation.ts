@@ -6,7 +6,7 @@
 // the channel's declared activation mode, decide whether to reload
 // in this launch or stage for next.
 
-import type { ActivationMode } from './LynxSource';
+type ActivationMode = 'on-launch' | 'next-open';
 
 export type StagedRelease = {
   feature: string;

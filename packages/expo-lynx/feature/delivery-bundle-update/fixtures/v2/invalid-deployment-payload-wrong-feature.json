@@ -1,0 +1,11 @@
+{
+  "type": "lynx-deployment",
+  "feature": "orders",
+  "revision": 7,
+  "enabled": true,
+  "releaseId": "shopping-2026.08.29.1",
+  "manifestUrl": "releases/shopping-2026.08.29.1/manifest.json",
+  "manifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "force": false,
+  "issuedAt": "2026-08-29T09:00:00.000Z"
+}

@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 import {
   decodeBase64Url,
-  parseChannelPayload,
+  parseDeploymentPayload,
   parseReleasePayload,
   parseSignedEnvelope,
   parseUnverifiedEnvelopePayload,
@@ -27,8 +27,15 @@ function failureCode<T>(result: ProtocolParseResult<T>): string {
   throw new Error('Expected protocol parsing to fail.');
 }
 
-function channelFixture(): Record<string, unknown> {
-  return structuredClone(fixture('valid-channel-payload.json')) as Record<string, unknown>;
+function deploymentFixture(): Record<string, unknown> {
+  return structuredClone(fixture('valid-deployment-payload.json')) as Record<string, unknown>;
+}
+
+function disabledDeploymentFixture(): Record<string, unknown> {
+  return structuredClone(fixture('valid-disabled-deployment-payload.json')) as Record<
+    string,
+    unknown
+  >;
 }
 
 function releaseFixture(): Record<string, unknown> {
@@ -36,16 +43,27 @@ function releaseFixture(): Record<string, unknown> {
 }
 
 describe('V2 release protocol', () => {
-  it('parses portable channel/release payload and envelope fixtures deterministically', () => {
-    const channelEnvelope = parsed(parseSignedEnvelope(fixture('valid-channel-envelope.json')));
+  it('parses portable deployment/release payload and envelope fixtures deterministically', () => {
+    const deploymentEnvelope = parsed(
+      parseSignedEnvelope(fixture('valid-deployment-envelope.json'))
+    );
     const releaseEnvelope = parsed(parseSignedEnvelope(fixture('valid-release-envelope.json')));
 
-    expect(parsed(parseChannelPayload(channelFixture(), 'shopping'))).toMatchObject({
-      type: 'lynx-channel',
+    expect(parsed(parseDeploymentPayload(deploymentFixture(), 'shopping'))).toMatchObject({
+      type: 'lynx-deployment',
       feature: 'shopping',
       revision: 7,
-      activation: 'next-open',
+      enabled: true,
       force: false,
+    });
+    expect(
+      parsed(parseDeploymentPayload(disabledDeploymentFixture(), 'shopping'))
+    ).toEqual({
+      type: 'lynx-deployment',
+      feature: 'shopping',
+      revision: 8,
+      enabled: false,
+      issuedAt: '2026-08-29T10:00:00.000Z',
     });
     expect(parsed(parseReleasePayload(releaseFixture(), 'shopping'))).toMatchObject({
       type: 'lynx-release',
@@ -53,12 +71,14 @@ describe('V2 release protocol', () => {
       platform: 'ios',
       archive: { format: 'zip', entryCount: 2, uncompressedBytes: 20 },
     });
-    expect(parsed(parseUnverifiedEnvelopePayload(channelEnvelope))).toEqual(channelFixture());
+    expect(parsed(parseUnverifiedEnvelopePayload(deploymentEnvelope))).toEqual(
+      deploymentFixture()
+    );
     expect(parsed(parseUnverifiedEnvelopePayload(releaseEnvelope))).toEqual(releaseFixture());
   });
 
   it('parses the checked-in cryptographic M02 fixture envelopes without changing payload bytes', () => {
-    for (const type of ['channel', 'release']) {
+    for (const type of ['deployment', 'release']) {
       const envelope = parsed(
         parseSignedEnvelope(fixture(`crypto-development/valid-${type}-envelope.json`))
       );
@@ -75,7 +95,7 @@ describe('V2 release protocol', () => {
     expect(
       failureCode(
         parseSignedEnvelope({
-          ...(fixture('valid-channel-envelope.json') as object),
+          ...(fixture('valid-deployment-envelope.json') as object),
           schemaVersion: 2,
         })
       )
@@ -83,7 +103,7 @@ describe('V2 release protocol', () => {
     expect(
       failureCode(
         parseSignedEnvelope({
-          ...(fixture('valid-channel-envelope.json') as object),
+          ...(fixture('valid-deployment-envelope.json') as object),
           algorithm: 'RSA-PSS',
         })
       )
@@ -97,10 +117,13 @@ describe('V2 release protocol', () => {
   });
 
   it('requires signed document type and exact requested feature before a payload can be used', () => {
-    expect(failureCode(parseReleasePayload(channelFixture(), 'shopping'))).toBe('invalid-type');
+    expect(failureCode(parseReleasePayload(deploymentFixture(), 'shopping'))).toBe('invalid-type');
     expect(
       failureCode(
-        parseChannelPayload(fixture('invalid-channel-payload-wrong-feature.json'), 'shopping')
+        parseDeploymentPayload(
+          fixture('invalid-deployment-payload-wrong-feature.json'),
+          'shopping'
+        )
       )
     ).toBe('feature-mismatch');
     const release = releaseFixture();
@@ -108,32 +131,53 @@ describe('V2 release protocol', () => {
     expect(failureCode(parseReleasePayload(release, 'Shopping'))).toBe('invalid-feature');
   });
 
-  it('rejects unsafe identifiers, URLs, activation, revisions, and timestamps', () => {
+  it('rejects unsafe identifiers, URLs, revisions, and timestamps', () => {
     const invalidCases: [string, unknown, string][] = [
       ['feature', { feature: 'shopping/admin' }, 'invalid-feature'],
-      ['channel', { channel: '../stable' }, 'invalid-channel'],
       ['releaseId', { releaseId: '../release' }, 'invalid-release-id'],
       ['manifestUrl', { manifestUrl: '/release.json' }, 'invalid-url'],
-      ['activation', { activation: 'immediately' }, 'invalid-activation'],
       ['revision', { revision: 0 }, 'invalid-revision'],
       ['issuedAt', { issuedAt: 'not-a-date' }, 'invalid-timestamp'],
     ];
     for (const [, change, expectedCode] of invalidCases) {
-      expect(failureCode(parseChannelPayload({ ...channelFixture(), ...change }, 'shopping'))).toBe(
-        expectedCode
-      );
+      expect(
+        failureCode(
+          parseDeploymentPayload({ ...deploymentFixture(), ...change }, 'shopping')
+        )
+      ).toBe(expectedCode);
     }
   });
 
-  it('rejects unknown protocol fields and keeps force as a boolean timing hint only', () => {
+  it('rejects cross-variant and unknown deployment fields', () => {
     expect(
       failureCode(
-        parseChannelPayload({ ...channelFixture(), unsafeMode: 'skip-verification' }, 'shopping')
+        parseDeploymentPayload(
+          { ...deploymentFixture(), unsafeMode: 'skip-verification' },
+          'shopping'
+        )
       )
     ).toBe('unknown-field');
     expect(
-      parsed(parseChannelPayload({ ...channelFixture(), force: true }, 'shopping')).force
+      parsed(
+        parseDeploymentPayload({ ...deploymentFixture(), force: true }, 'shopping')
+      ).force
     ).toBe(true);
+    expect(
+      failureCode(
+        parseDeploymentPayload(
+          { ...disabledDeploymentFixture(), releaseId: 'forbidden' },
+          'shopping'
+        )
+      )
+    ).toBe('unknown-field');
+    expect(
+      failureCode(
+        parseDeploymentPayload(
+          { ...deploymentFixture(), enabled: false },
+          'shopping'
+        )
+      )
+    ).toBe('unknown-field');
   });
 
   it('rejects traversal, absolute, backslash, duplicate, and oversized release paths', () => {

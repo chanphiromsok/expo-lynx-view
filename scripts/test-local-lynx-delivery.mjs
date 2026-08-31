@@ -99,17 +99,17 @@ async function main() {
   });
   assert.equal(unauthorized.status, 401, 'operator uploads require a token before accepting a body');
 
-  const published = await run(process.execPath, [deliveryCli, 'publish', '--server', base, '--token', token, '--release-dir', temporary, '--channel', 'stable']);
+  const published = await run(process.execPath, [deliveryCli, 'publish', '--server', base, '--token', token, '--release-dir', temporary]);
   assert.match(published.stdout, /"status": "published"/);
-  const repeated = await run(process.execPath, [deliveryCli, 'publish', '--server', base, '--token', token, '--release-dir', temporary, '--channel', 'stable']);
+  const repeated = await run(process.execPath, [deliveryCli, 'publish', '--server', base, '--token', token, '--release-dir', temporary]);
   assert.match(repeated.stdout, /"revision": 1/);
 
-  const channel = await fetch(`${base}/v1/channels/delivery/stable`);
+  const channel = await fetch(`${base}/v1/channels/delivery/active`);
   assert.equal(channel.status, 200);
   assert.equal(channel.headers.get('cache-control'), 'no-cache');
   const channelEtag = channel.headers.get('etag');
   assert.ok(channelEtag);
-  assert.equal((await fetch(`${base}/v1/channels/delivery/stable`, { headers: { 'If-None-Match': channelEtag } })).status, 304);
+  assert.equal((await fetch(`${base}/v1/channels/delivery/active`, { headers: { 'If-None-Match': channelEtag } })).status, 304);
 
   const manifest = await fetch(`${base}/v1/releases/delivery/delivery-local-test-1/manifest`);
   assert.equal(manifest.status, 200);

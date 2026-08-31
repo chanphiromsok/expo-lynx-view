@@ -4,4 +4,5 @@ packages:
   - 'apps/expo-lynx-example/features/delivery'
 allowBuilds:
   esbuild: true
+  sharp: true
   workerd: true

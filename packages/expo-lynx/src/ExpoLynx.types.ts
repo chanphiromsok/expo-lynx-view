@@ -1,6 +1,10 @@
 import type { NativeSyntheticEvent, ViewProps } from 'react-native';
 
-import type { LynxErrorStage, LynxSource, LynxUpdateEvent } from './LynxSource';
+import type {
+  LynxErrorStage,
+  LynxSource,
+  LynxUpdateEvent,
+} from './LynxSource';
 
 export type LynxInitialData = Record<string, unknown>;
 
@@ -30,13 +34,19 @@ export type LynxErrorEventPayload = {
  */
 export type LynxUpdateEventPayload = LynxUpdateEvent;
 
-export type LynxBundleUpdateResult = {
-  feature: string;
-  channel: 'stable' | 'beta';
-  status: 'no-update' | 'downloaded' | 'pending';
-  releaseId?: string;
-  version?: string;
-};
+export type LynxBundleUpdateResult =
+  | {
+      feature: string;
+      status: 'disabled' | 'no-update';
+      revision?: number;
+    }
+  | {
+      feature: string;
+      status: 'pending' | 'reloaded';
+      revision: number;
+      releaseId: string;
+      version: string;
+    };
 
 type ExpoLynxViewBaseProps = Omit<ViewProps, 'children'> & {
   /** Data exposed to the Lynx page through `useInitData()`. */
@@ -48,8 +58,7 @@ type ExpoLynxViewBaseProps = Omit<ViewProps, 'children'> & {
   /** Fires for delivery, verification, resource, and Lynx rendering failures. */
   onError?: (event: NativeSyntheticEvent<LynxErrorEventPayload>) => void;
   /**
-   * Reports a non-blocking managed-delivery check. It never means the mounted
-   * Lynx page was replaced; a downloaded release is staged for a later open.
+   * Reports managed-delivery checking, staging, and verified force reloads.
    */
   onUpdate?: (event: NativeSyntheticEvent<LynxUpdateEventPayload>) => void;
   children?: never;

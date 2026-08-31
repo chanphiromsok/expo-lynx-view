@@ -86,7 +86,7 @@ Run commands required by the assigned spec. At minimum, when applicable:
 pnpm run test
 pnpm run lint
 pnpm run build
-pnpm --filter @expo-lynx/lynx-delivery-worker typecheck
+pnpm --filter @expo-lynx/delivery-console typecheck
 ```
 
 Native PRs additionally require platform unit/build commands from the spec.

@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "RSA-SHA256",
+  "payload": "eyJ0eXBlIjoibHlueC1kZXBsb3ltZW50IiwiZmVhdHVyZSI6InNob3BwaW5nIiwicmV2aXNpb24iOjgsImVuYWJsZWQiOmZhbHNlLCJpc3N1ZWRBdCI6IjIwMjYtMDgtMjlUMTA6MDA6MDAuMDAwWiJ9",
+  "signature": "AQ"
+}

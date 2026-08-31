@@ -10,6 +10,8 @@
     "ios": "pnpm --filter expo-lynx-example ios",
     "android": "pnpm --filter expo-lynx-example android",
     "start": "pnpm --filter expo-lynx-example start",
+    "docs": "pnpm --filter @expo-lynx/docs dev",
+    "docs:build": "pnpm --filter @expo-lynx/docs build",
     "build": "pnpm --filter expo-lynx build && pnpm --filter @expo-lynx/bundle-cli build",
     "test": "pnpm --filter expo-lynx test && pnpm --filter @expo-lynx/bundle-cli test",
     "lint": "pnpm --filter expo-lynx lint && pnpm --filter @expo-lynx/bundle-cli lint",

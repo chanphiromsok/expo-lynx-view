@@ -8,12 +8,7 @@ describe('resolveSource', () => {
   });
 
   it('passes managed through both debug and release', () => {
-    const s = {
-      kind: 'managed' as const,
-      feature: 'delivery',
-      channel: 'stable' as const,
-      activation: 'on-launch' as const,
-    };
+    const s = { kind: 'managed' as const, feature: 'delivery' };
     expect(resolveSource(s, 'debug')).toEqual(s);
     expect(resolveSource(s, 'release')).toEqual(s);
   });

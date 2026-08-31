@@ -5,23 +5,22 @@ enum LynxSignatureVerifierFixtureTest {
   static func main() throws {
     let arguments = CommandLine.arguments
     guard arguments.count == 4 else {
-      fatalError("Usage: LynxSignatureVerifierFixtureTest <public-key> <channel-envelope> <release-envelope>")
+      fatalError("Usage: LynxSignatureVerifierFixtureTest <public-key> <deployment-envelope> <release-envelope>")
     }
 
     let publicKey = try Data(contentsOf: URL(fileURLWithPath: arguments[1]))
-    let channelEnvelope = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
+    let deploymentEnvelope = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
     let releaseEnvelope = try Data(contentsOf: URL(fileURLWithPath: arguments[3]))
 
-    let channelPayload = try LynxSignatureVerifier.verify(
-      envelopeData: channelEnvelope,
-      expectedType: "lynx-channel",
+    let deploymentPayload = try LynxSignatureVerifier.verify(
+      envelopeData: deploymentEnvelope,
+      expectedType: "lynx-deployment",
       expectedFeature: "shopping",
       publicKeyPEM: publicKey
     )
-    let channel = try LynxChannelPayload.decodeVerified(
-      channelPayload,
-      expectedFeature: "shopping",
-      expectedChannel: "stable"
+    let deployment = try LynxDeploymentPayload.decodeVerified(
+      deploymentPayload,
+      expectedFeature: "shopping"
     )
     let releasePayload = try LynxSignatureVerifier.verify(
       envelopeData: releaseEnvelope,
@@ -29,13 +28,13 @@ enum LynxSignatureVerifierFixtureTest {
       expectedFeature: "shopping",
       publicKeyPEM: publicKey
     )
-    guard channel.releaseId == "shopping-2026.08.29.1", !releasePayload.isEmpty else {
+    guard deployment.releaseId == "shopping-2026.08.29.1", !releasePayload.isEmpty else {
       fatalError("Expected non-empty signed payloads")
     }
 
     expect(.wrongDocumentType) {
       _ = try LynxSignatureVerifier.verify(
-        envelopeData: channelEnvelope,
+        envelopeData: deploymentEnvelope,
         expectedType: "lynx-release",
         expectedFeature: "shopping",
         publicKeyPEM: publicKey
@@ -51,8 +50,8 @@ enum LynxSignatureVerifierFixtureTest {
     }
     expect(.invalidSignature) {
       _ = try LynxSignatureVerifier.verify(
-        envelopeData: tamperedSignature(channelEnvelope),
-        expectedType: "lynx-channel",
+        envelopeData: tamperedSignature(deploymentEnvelope),
+        expectedType: "lynx-deployment",
         expectedFeature: "shopping",
         publicKeyPEM: publicKey
       )

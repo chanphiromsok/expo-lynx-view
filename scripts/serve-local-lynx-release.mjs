@@ -10,7 +10,7 @@ import { loadConfigAsync, packRelease, signPayloadBytes } from '../packages/lynx
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name, fallback) => { const index = process.argv.indexOf(name); return index < 0 ? fallback : process.argv[index + 1]; };
 const host = arg('--host', '0.0.0.0'), port = Number(arg('--port', '3000'));
-const feature = arg('--feature', 'delivery'), channel = arg('--channel', 'stable');
+const feature = arg('--feature', 'delivery'), channel = arg('--channel', 'active');
 const configPath = arg('--config', 'apps/expo-lynx-example/lynx-bundle.config.mjs');
 const fault = arg('--fault', 'none');
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Expected --port between 1 and 65535.');

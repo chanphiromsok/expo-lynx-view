@@ -21,7 +21,6 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_ADMIN_JSON_BYTES = 64 * 1024;
 const FEATURE_ID = /^[a-z][a-z0-9-]{0,63}$/;
-const CHANNEL_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const RELEASE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SHA_256 = /^[a-f0-9]{64}$/;
 
@@ -36,8 +35,8 @@ class HttpError extends Error {
 function usage() {
   process.stdout.write(`Usage:
   lynx-delivery serve --token <publisher-token> --private-key <PKCS#8.pem> --public-key <SPKI.pem> [--host 0.0.0.0] [--port 3000] [--storage-dir .local-lynx-delivery]
-  lynx-delivery publish --server <base-url> --token <publisher-token> --release-dir <directory> [--channel stable] [--activation next-open|on-launch] [--force]
-  lynx-delivery promote --server <base-url> --token <publisher-token> --feature <feature> --channel <channel> --release-id <release-id> [--activation next-open|on-launch] [--force]
+  lynx-delivery publish --server <base-url> --token <publisher-token> --release-dir <directory> [--activation next-open|on-launch] [--force]
+  lynx-delivery promote --server <base-url> --token <publisher-token> --feature <feature> --release-id <release-id> [--activation next-open|on-launch] [--force]
 
 Public routes:
   GET /v1/channels/:feature/:channel
@@ -79,7 +78,7 @@ function safeFeature(value) {
 }
 
 function safeChannel(value) {
-  if (typeof value !== 'string' || !CHANNEL_ID.test(value)) throw new HttpError(400, 'invalid-channel', 'Channel is invalid.');
+  if (value !== 'active') throw new HttpError(400, 'invalid-channel', 'Only the active deployment is supported.');
   return value;
 }
 
@@ -320,7 +319,7 @@ async function serve(options) {
   const token = options.token;
   if (!existsSync(privateKeyPath) || !existsSync(publicKeyPath)) throw new Error('Both --private-key and --public-key must point to existing PEM files.');
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  const probePayload = Buffer.from('{"type":"lynx-channel","feature":"probe","channel":"stable"}\n');
+  const probePayload = Buffer.from('{"type":"lynx-channel","feature":"probe","channel":"active"}\n');
   if (!verifyEnvelope(signPayloadBytes(probePayload, 'lynx-channel', privateKeyPath), publicKeyPath)) {
     throw new Error('The configured private and public PEM keys are not a matching RSA signing pair.');
   }
@@ -489,11 +488,11 @@ async function serve(options) {
   const listeningPort = typeof address === 'object' && address ? address.port : options.port;
   const base = `http://${options.host === '0.0.0.0' ? '127.0.0.1' : options.host}:${listeningPort}`;
   process.stdout.write(`Local Lynx delivery ready: ${base}\n`);
-  process.stdout.write(`Public channel example: ${base}/v1/channels/delivery/stable\n`);
+  process.stdout.write(`Public deployment example: ${base}/v1/channels/delivery/active\n`);
   if (options.host === '0.0.0.0') {
     const lanAddresses = Object.values(networkInterfaces()).flat().filter((entry) => entry?.family === 'IPv4' && !entry.internal);
     for (const entry of lanAddresses) {
-      process.stdout.write(`Device channel example: http://${entry.address}:${listeningPort}/v1/channels/delivery/stable\n`);
+      process.stdout.write(`Device deployment example: http://${entry.address}:${listeningPort}/v1/channels/delivery/active\n`);
     }
   }
   process.stdout.write(`Storage: ${root}\n`);
@@ -551,21 +550,19 @@ async function publish(options) {
     body: createReadStream(archive),
     duplex: 'half',
   });
-  let promotion;
-  if (options.channel) {
-    const body = { releaseId, activation: options.activation ?? 'next-open', force: options.force === true };
-    promotion = await request(serverUrl(options.server, `/v1/admin/channels/${feature}/${safeChannel(options.channel)}/promote`), {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json', 'Idempotency-Key': `publish:${feature}:${releaseId}:${options.channel}` },
-      body: JSON.stringify(body),
-    });
-  }
+  const channel = safeChannel(options.channel ?? 'active');
+  const body = { releaseId, activation: options.activation ?? 'next-open', force: options.force === true };
+  const promotion = await request(serverUrl(options.server, `/v1/admin/channels/${feature}/${channel}/promote`), {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json', 'Idempotency-Key': `publish:${feature}:${releaseId}:${channel}` },
+    body: JSON.stringify(body),
+  });
   process.stdout.write(`${JSON.stringify({ status: 'published', feature, releaseId, promotion: promotion ? await promotion.json() : null }, null, 2)}\n`);
 }
 
 async function promote(options) {
   const feature = safeFeature(required(options.feature, '--feature'));
-  const channel = safeChannel(required(options.channel, '--channel'));
+  const channel = safeChannel(options.channel ?? 'active');
   const releaseId = safeRelease(required(options.releaseId, '--release-id'));
   const response = await request(serverUrl(options.server, `/v1/admin/channels/${feature}/${channel}/promote`), {
     method: 'POST',

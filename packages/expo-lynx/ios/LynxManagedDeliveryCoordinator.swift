@@ -1,12 +1,13 @@
 import Foundation
 
 enum LynxManagedDeliveryConfiguration {
-  private static let infoPlistDeliveryChannels = "ExpoLynxDeliveryChannels"
+  private static let infoPlistDeliveryEndpoints = "ExpoLynxDeliveryEndpoints"
 
-  static func channelURL(feature: String, channel: String) throws -> URL {
-    guard let channels = Bundle.main.object(forInfoDictionaryKey: infoPlistDeliveryChannels) as? [String: Any],
-      let featureChannels = channels[feature] as? [String: Any],
-      let value = featureChannels[channel] as? String,
+  static func deploymentURL(feature: String) throws -> URL {
+    guard let endpoints = Bundle.main.object(
+      forInfoDictionaryKey: infoPlistDeliveryEndpoints
+    ) as? [String: Any],
+      let value = endpoints[feature] as? String,
       let url = URL(string: value),
       ["http", "https"].contains(url.scheme?.lowercased()),
       url.user == nil,
@@ -16,8 +17,8 @@ enum LynxManagedDeliveryConfiguration {
     else {
       throw LynxDeliveryError(
         stage: .manifest,
-        code: "ERR_LYNX_CHANNEL_CONFIGURATION",
-        message: "No build-time Lynx delivery channel is configured for \(feature)/\(channel)."
+        code: "ERR_LYNX_DEPLOYMENT_CONFIGURATION",
+        message: "No build-time Lynx deployment endpoint is configured for \(feature)."
       )
     }
     #if !DEBUG && !LYNX_ALLOW_LOCAL_MANAGED_RELEASE
@@ -35,20 +36,20 @@ enum LynxManagedDeliveryConfiguration {
 
 struct LynxManagedUpdateCheckResult: Sendable {
   enum Status: String, Sendable {
+    case disabled
     case noUpdate = "no-update"
-    case downloaded
     case pending
+    case reloaded
   }
 
   let feature: String
-  let channel: String
   let status: Status
   let releaseID: String?
   let version: String?
   let revision: Int?
 
   func eventPayload(phase: String) -> [String: Any] {
-    var payload: [String: Any] = ["feature": feature, "channel": channel, "phase": phase]
+    var payload: [String: Any] = ["feature": feature, "phase": phase]
     if let releaseID { payload["releaseId"] = releaseID }
     if let version { payload["version"] = version }
     if let revision { payload["revision"] = revision }
@@ -56,70 +57,155 @@ struct LynxManagedUpdateCheckResult: Sendable {
   }
 
   func modulePayload() -> [String: Any] {
-    var payload: [String: Any] = ["feature": feature, "channel": channel, "status": status.rawValue]
+    var payload: [String: Any] = ["feature": feature, "status": status.rawValue]
     if let releaseID { payload["releaseId"] = releaseID }
     if let version { payload["version"] = version }
+    if let revision { payload["revision"] = revision }
     return payload
   }
 }
 
-/// Serializes the channel-state portion of managed delivery independently from
-/// any particular LynxView. A module request and a mounted view both join the
-/// store's feature/channel deduplication rather than creating a second update
-/// path with independently supplied URLs.
 actor LynxManagedDeliveryCoordinator {
   static let shared = LynxManagedDeliveryCoordinator()
 
-  func checkForUpdate(feature: String, channel: String) async throws -> LynxManagedUpdateCheckResult {
-    let channelURL = try LynxManagedDeliveryConfiguration.channelURL(feature: feature, channel: channel)
-    return try await checkForUpdate(feature: feature, channel: channel, channelURL: channelURL)
+  func checkForUpdate(feature: String) async throws -> LynxManagedUpdateCheckResult {
+    let deploymentURL = try LynxManagedDeliveryConfiguration.deploymentURL(feature: feature)
+    return try await checkForUpdate(feature: feature, deploymentURL: deploymentURL)
   }
 
   func checkForUpdate(
     feature: String,
-    channel: String,
-    channelURL: URL
+    deploymentURL: URL
   ) async throws -> LynxManagedUpdateCheckResult {
-    let state = await LynxManagedChannelState.shared.recover(feature: feature, channel: channel)
-    var knownReleaseIDs = state.failedManifestIDs
-    [state.activeManifestID, state.pendingManifestID, state.attemptingManifestID,
-     state.previousManifestID].compactMap { $0 }.forEach { knownReleaseIDs.append($0) }
-
+    let state = await LynxManagedDeploymentState.shared.recover(feature: feature)
     let result = try await LynxManagedBundleStore.shared.checkForUpdate(
-      channelEnvelopeURL: channelURL,
+      deploymentEnvelopeURL: deploymentURL,
       expectedFeature: feature,
-      expectedChannel: channel,
       eTag: state.lastETag,
-      knownReleaseIDs: Set(knownReleaseIDs)
+      lastRevision: state.lastRevision,
+      blockedReleaseIDs: Set(state.failedReleaseIDs)
     )
+
     switch result {
-    case let .noUpdate(eTag, revision):
-      await LynxManagedChannelState.shared.recordChannelCheck(
-        eTag: eTag, revision: revision, feature: feature, channel: channel
+    case let .notModified(eTag):
+      await LynxManagedDeploymentState.shared.recordDeploymentCheck(
+        eTag: eTag,
+        revision: nil,
+        feature: feature
       )
       return LynxManagedUpdateCheckResult(
-        feature: feature, channel: channel, status: .noUpdate, releaseID: nil, version: nil, revision: revision
+        feature: feature,
+        status: .noUpdate,
+        releaseID: nil,
+        version: nil,
+        revision: state.lastRevision
       )
-    case let .downloaded(release, eTag, revision):
-      await LynxManagedChannelState.shared.recordChannelCheck(
-        eTag: eTag, revision: revision, feature: feature, channel: channel
+
+    case let .disabled(eTag, revision):
+      await LynxManagedDeploymentState.shared.recordDeploymentCheck(
+        eTag: eTag,
+        revision: revision,
+        feature: feature
       )
-      guard !state.failedManifestIDs.contains(release.manifestID),
-        state.activeManifestID != release.manifestID,
-        state.pendingManifestID != release.manifestID
-      else {
+      return LynxManagedUpdateCheckResult(
+        feature: feature,
+        status: .disabled,
+        releaseID: nil,
+        version: nil,
+        revision: revision
+      )
+
+    case let .blocked(releaseID, eTag, revision):
+      await LynxManagedDeploymentState.shared.recordDeploymentCheck(
+        eTag: eTag,
+        revision: revision,
+        feature: feature
+      )
+      return LynxManagedUpdateCheckResult(
+        feature: feature,
+        status: .noUpdate,
+        releaseID: releaseID,
+        version: nil,
+        revision: revision
+      )
+
+    case let .selected(release, force, eTag, revision, _):
+      // Consume the authenticated revision before installation or view work so
+      // a repeated force response can never reload twice after interruption.
+      await LynxManagedDeploymentState.shared.recordDeploymentCheck(
+        eTag: eTag,
+        revision: revision,
+        feature: feature
+      )
+      let latest = await LynxManagedDeploymentState.shared.recover(feature: feature)
+
+      if !force {
+        guard latest.activeReleaseID != release.manifestID,
+          latest.pendingReleaseID != release.manifestID
+        else {
+          return LynxManagedUpdateCheckResult(
+            feature: feature,
+            status: .noUpdate,
+            releaseID: release.manifestID,
+            version: release.version,
+            revision: revision
+          )
+        }
+        await LynxManagedDeploymentState.shared.stage(
+          releaseID: release.manifestID,
+          feature: feature
+        )
         return LynxManagedUpdateCheckResult(
-          feature: feature, channel: channel, status: .noUpdate,
-          releaseID: release.manifestID, version: release.version, revision: revision
+          feature: feature,
+          status: .pending,
+          releaseID: release.manifestID,
+          version: release.version,
+          revision: revision
         )
       }
-      await LynxManagedChannelState.shared.stage(
-        manifestID: release.manifestID, feature: feature, channel: channel
+
+      let mounted = await LynxManagedViewRegistry.shared.hasMountedView(feature: feature)
+      guard mounted else {
+        await LynxManagedDeploymentState.shared.stage(
+          releaseID: release.manifestID,
+          feature: feature
+        )
+        return LynxManagedUpdateCheckResult(
+          feature: feature,
+          status: .pending,
+          releaseID: release.manifestID,
+          version: release.version,
+          revision: revision
+        )
+      }
+
+      await LynxManagedDeploymentState.shared.beginAttempt(
+        releaseID: release.manifestID,
+        feature: feature
       )
-      return LynxManagedUpdateCheckResult(
-        feature: feature, channel: channel, status: .pending,
-        releaseID: release.manifestID, version: release.version, revision: revision
-      )
+      do {
+        try await LynxManagedViewRegistry.shared.reloadMountedViews(
+          feature: feature,
+          release: release
+        )
+        await LynxManagedDeploymentState.shared.confirm(
+          releaseID: release.manifestID,
+          feature: feature
+        )
+        return LynxManagedUpdateCheckResult(
+          feature: feature,
+          status: .reloaded,
+          releaseID: release.manifestID,
+          version: release.version,
+          revision: revision
+        )
+      } catch {
+        await LynxManagedDeploymentState.shared.fail(
+          releaseID: release.manifestID,
+          feature: feature
+        )
+        throw error
+      }
     }
   }
 }

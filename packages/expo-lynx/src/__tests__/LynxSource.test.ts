@@ -9,60 +9,11 @@ describe('LynxSource contract', () => {
     }
   });
 
-  it('accepts managed source with default channel and on-launch activation', () => {
-    const s: LynxSource = {
-      kind: 'managed',
-      feature: 'delivery',
-      channel: 'stable',
-      activation: 'on-launch',
-    };
+  it('accepts a feature-only managed deployment', () => {
+    const s: LynxSource = { kind: 'managed', feature: 'delivery' };
     expect(s.kind).toBe('managed');
     if (s.kind === 'managed') {
-      expect(s.channel).toBe('stable');
-      expect(s.activation).toBe('on-launch');
-    }
-  });
-
-  it('accepts managed source with next-open activation', () => {
-    const s: LynxSource = {
-      kind: 'managed',
-      feature: 'delivery',
-      channel: 'beta',
-      activation: 'next-open',
-    };
-    if (s.kind === 'managed') {
-      expect(s.activation).toBe('next-open');
-    }
-  });
-
-  it('accepts a Debug-only direct manifest URL for local testing', () => {
-    const s: LynxSource = {
-      kind: 'managed',
-      feature: 'delivery',
-      manifestUrl: 'http://127.0.0.1:3017/manifest.json',
-    };
-    if (s.kind === 'managed') {
-      expect(s.manifestUrl).toContain('manifest.json');
-    }
-  });
-
-  it('accepts a signed channel URL for conditional update checks', () => {
-    const s: LynxSource = {
-      kind: 'managed',
-      feature: 'delivery',
-      channel: 'stable',
-      channelUrl: 'http://127.0.0.1:3017/v1/channels/delivery/stable',
-    };
-    if (s.kind === 'managed') {
-      expect(s.channelUrl).toContain('/v1/channels/delivery/stable');
-    }
-  });
-
-  it('omitting channel and activation is valid (defaults applied at runtime)', () => {
-    const s: LynxSource = { kind: 'managed', feature: 'delivery' };
-    if (s.kind === 'managed') {
-      expect(s.channel).toBeUndefined();
-      expect(s.activation).toBeUndefined();
+      expect(s.feature).toBe('delivery');
     }
   });
 

@@ -1,5 +1,3 @@
-export type ActivationMode = 'on-launch' | 'next-open';
-
 /**
  * Augmented by the app-local `generated/expo-lynx/lynx-features.d.ts` file
  * written by the Expo config plugin during prebuild.
@@ -22,12 +20,6 @@ export type LynxSource =
   | {
       kind: 'managed';
       feature: LynxFeatureName;
-      channel?: 'stable' | 'beta';
-      activation?: ActivationMode;
-      /** Debug/internal-LAN override. Production uses the native build-time channel map. */
-      channelUrl?: string;
-      /** Debug-only direct signed release-envelope endpoint for local testing. */
-      manifestUrl?: string;
     }
   | { kind: 'development'; url: string };
 
@@ -48,12 +40,12 @@ export type LynxErrorEvent = {
   message: string;
 };
 
-export type LynxUpdatePhase = 'checking' | 'no-update' | 'downloaded' | 'staged' | 'error';
+export type LynxUpdatePhase =
+  'checking' | 'disabled' | 'no-update' | 'downloaded' | 'staged' | 'reloading' | 'reloaded' | 'error';
 
 /** Privacy-safe, lifecycle-level delivery telemetry for a managed source. */
 export type LynxUpdateEvent = {
   feature: string;
-  channel: 'stable' | 'beta';
   phase: LynxUpdatePhase;
   releaseId?: string;
   version?: string;

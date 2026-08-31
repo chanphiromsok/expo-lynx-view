@@ -5,10 +5,9 @@ public final class ExpoLynxModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ExpoLynx")
 
-    AsyncFunction("checkForUpdate") { (feature: String, channel: String?) async throws -> [String: Any] in
-      let selectedChannel = channel ?? "stable"
+    AsyncFunction("checkForUpdate") { (feature: String) async throws -> [String: Any] in
       return try await LynxManagedDeliveryCoordinator.shared
-        .checkForUpdate(feature: feature, channel: selectedChannel)
+        .checkForUpdate(feature: feature)
         .modulePayload()
     }
 

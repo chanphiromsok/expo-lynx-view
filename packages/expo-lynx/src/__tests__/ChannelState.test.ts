@@ -1,7 +1,7 @@
 import { decide, compareVersions, type ChannelState, type ChannelPointer } from '../ChannelState';
 
 const POINTER: ChannelPointer = {
-  channel: 'stable',
+  channel: 'active',
   feature: 'delivery',
   current: {
     manifestUrl: 'https://cdn.example.com/lynx/manifests/release/abc.json',
@@ -14,7 +14,7 @@ const POINTER: ChannelPointer = {
 
 const LOCAL_CLEAN: ChannelState = {
   feature: 'delivery',
-  channel: 'stable',
+  channel: 'active',
   last_manifest_id: 'v1-sha',
   last_checked_at: '2026-08-26T10:00:00Z',
   last_etag: null,

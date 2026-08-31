@@ -1,13 +1,17 @@
-# M01 — Shared release protocol and fixtures
+# M01 — Shared release and deployment protocol
 
 **Spec:** `feature/delivery-bundle-update/specs/v2/mobile/m01-shared-release-protocol.md`
 
 ## Goal
 
-Define one versioned wire contract for channel pointers, release manifests,
-archives, files, limits, activation, and signed envelopes. TypeScript tests and
-checked-in fixtures become the source used by Swift, producer, and Worker specs;
-their byte format remains platform-neutral for future Android work.
+Define one platform-neutral signed wire contract for feature deployment state,
+release manifests, archives, files, and safety limits. TypeScript tests and
+checked-in fixtures are shared by the CLI, Worker, Swift, and future Android
+implementation.
+
+The pre-production `lynx-channel` contract is replaced by one
+`lynx-deployment` payload per feature. There is no channel, activation mode, or
+rollout field. One `force` boolean controls application timing.
 
 ## Depends on
 
@@ -15,65 +19,81 @@ None. Read the current architecture first.
 
 ## Files
 
-- `packages/expo-lynx/src/ReleaseProtocol.ts` — new
-- `packages/expo-lynx/src/index.ts` — export public protocol types
-- `packages/expo-lynx/src/__tests__/ReleaseProtocol.test.ts` — new
-- `packages/expo-lynx/feature/delivery-bundle-update/fixtures/v2/` — new fixture set
+- `packages/expo-lynx/src/ReleaseProtocol.ts`
+- `packages/expo-lynx/src/index.ts`
+- `packages/expo-lynx/src/__tests__/ReleaseProtocol.test.ts`
+- `packages/expo-lynx/feature/delivery-bundle-update/fixtures/v2/`
 
 ## Contract
 
-Signed objects use exact payload bytes, avoiding JSON canonicalization:
+Signed objects preserve exact payload bytes and do not require JSON
+canonicalization:
 
 ```ts
 type SignedEnvelope = {
   schemaVersion: 1;
   algorithm: 'RSA-SHA256';
-  payload: string;   // base64url UTF-8 JSON bytes
-  signature: string; // base64url signature over decoded payload bytes
+  payload: string;   // unpadded base64url UTF-8 JSON bytes
+  signature: string; // unpadded base64url signature over decoded payload bytes
 };
 ```
 
-For this protocol, the `RSA-SHA256` string is normative shorthand for
-RSASSA-PKCS1-v1_5 with SHA-256 over the decoded payload bytes. It is not RSA-PSS
-and is not a plain SHA-256 checksum. Require an RSA modulus of at least 3072
-bits and public exponent 65537. Public keys use PEM-encoded X.509 SubjectPublicKeyInfo;
-signing-side private keys use PEM PKCS#8. Cross-language fixtures must prove the
-equivalent platform algorithms:
+`RSA-SHA256` means RSASSA-PKCS1-v1_5 with SHA-256 over the decoded payload
+bytes. Require an RSA modulus of at least 3072 bits and public exponent 65537.
+Public keys use PEM X.509 SubjectPublicKeyInfo; signing private keys use PEM
+PKCS#8.
+
+Equivalent platform algorithms are:
 
 - Node/Worker: `RSA-SHA256` with PKCS#1 v1.5 padding selected explicitly.
 - iOS: `SecKeyAlgorithm.rsaSignatureMessagePKCS1v15SHA256`.
-- Future Android/JCA mapping is reserved as `SHA256withRSA`, but Kotlin/native
-  Android implementation is not required in the current milestone.
+- Future Android: `SHA256withRSA`.
 
-The decoded channel payload contains `type: 'lynx-channel'`, `feature`,
-`channel`, monotonic `revision`, `releaseId`, `manifestUrl`, `manifestSha256`,
-`runtimeVersion`, `activation`, `force`, `issuedAt`, and optional `expiresAt`.
+### Deployment payload
 
-The decoded release payload contains `type: 'lynx-release'`, `feature`,
-`releaseId`, display `version`, `platform`, compatibility fields, archive
-format/size/hash/expanded limits, and an exact file list. `main.lynx.bundle` is
-required exactly once.
-
-The V2 payload fields are fixed as follows. Unknown fields fail closed in V2;
-adding fields requires a new schema version rather than silent cross-language
-drift.
+The deployment payload is a discriminated union:
 
 ```ts
-type ChannelPayloadV1 = {
-  type: 'lynx-channel';
-  feature: string;
-  channel: string;
-  revision: number; // positive safe integer
-  releaseId: string;
-  manifestUrl: string; // HTTP(S), or a safe relative URL
-  manifestSha256: string; // lowercase 64-char hex SHA-256
-  runtimeVersion: string;
-  activation: 'next-open' | 'on-launch';
-  force: boolean;
-  issuedAt: string; // UTC ISO-8601
-  expiresAt?: string; // UTC ISO-8601, not before issuedAt
-};
+type DeploymentPayloadV1 =
+  | {
+      type: 'lynx-deployment';
+      feature: string;
+      revision: number;
+      enabled: false;
+      issuedAt: string;
+    }
+  | {
+      type: 'lynx-deployment';
+      feature: string;
+      revision: number;
+      enabled: true;
+      releaseId: string;
+      manifestUrl: string;
+      manifestSha256: string;
+      force: boolean;
+      issuedAt: string;
+    };
+```
 
+`revision` is a positive safe integer that increases whenever the selected
+release or enabled value changes, or an operator issues a new force command.
+An enabled deployment must identify one signed release and an explicit `force`
+value. A disabled deployment must not contain release, manifest, or force
+fields.
+
+`force: false` installs and stages a new release for the next feature open.
+`force: true` requests reload of an already mounted view only after the release
+has downloaded, verified, and installed successfully. It never bypasses
+signature, compatibility, archive, health, failed-ID, or rollback rules. A
+device with no mounted view simply uses the installed release on its next open.
+
+The Worker returns a signed disabled payload with HTTP `200`. A `204`
+response is not a deployment instruction because it cannot authenticate
+`enabled: false` or carry a revision.
+
+### Release payload
+
+```ts
 type ReleasePayloadV1 = {
   type: 'lynx-release';
   feature: string;
@@ -87,35 +107,48 @@ type ReleasePayloadV1 = {
   };
   archive: {
     format: 'zip';
-    url: string; // HTTP(S), or a safe relative URL
+    url: string;
     sha256: string;
     bytes: number;
     uncompressedBytes: number;
     entryCount: number;
   };
-  files: Array<{ path: string; bytes: number; sha256: string }>;
+  files: Array<{
+    path: string;
+    bytes: number;
+    sha256: string;
+  }>;
 };
 ```
 
-V2 archives declare files only, not directories: `entryCount` equals the
-number of `files`, and `uncompressedBytes` equals the sum of their `bytes`.
-All sizes are positive safe integers. `channel` follows
-`^[a-z][a-z0-9-]{0,31}$`; `releaseId` follows
-`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
+`main.lynx.bundle` is required exactly once. Archives declare files only:
+`entryCount` equals `files.length`, and `uncompressedBytes` equals the sum
+of file bytes.
 
-The structural parser accepts HTTP(S) absolute URLs so the same fixtures work
-against a local LAN static server. Production delivery policy still requires
-HTTPS; M04 applies that policy at the native network boundary. Relative URLs
-are resolved only against the already verified channel/manifest endpoint and
-may not contain traversal, a query, or a fragment.
+Unknown fields fail closed. The enabled and disabled deployment variants reject
+fields belonging only to the other variant. Because `lynx-channel` was never
+released, its fixtures and parser are replaced rather than retained as a
+compatibility path.
 
-The explicit signed `type` is mandatory domain separation because V2 uses one
-app-wide signing key for both document kinds. A caller must state the expected
-document type and feature before verified payload data is used. A valid
-release payload can never substitute for a channel pointer, and a valid payload
-for one feature can never select another feature's URL, cache, or state.
+Identifiers use:
 
-Defaults:
+```text
+feature:   ^[a-z][a-z0-9-]{0,63}$
+releaseId: ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$
+sha256:    ^[a-f0-9]{64}$
+```
+
+Artifact URLs may be HTTPS or a safe relative URL. Tests and internal local
+delivery may use HTTP. Relative URLs resolve only against the already verified
+deployment or manifest endpoint and cannot contain traversal, a query, or a
+fragment.
+
+Signed `type` and `feature` provide domain separation. A valid release cannot
+substitute for a deployment, a disabled deployment cannot select an artifact,
+and a payload for one feature cannot select another feature's URL, cache, or
+state.
+
+Hard ceilings:
 
 ```text
 max archive bytes:            64 MiB
@@ -127,50 +160,58 @@ max UTF-8 path bytes:            512
 max path depth:                   16
 ```
 
-Host applications may lower limits but cannot exceed compiled hard ceilings
-without a native release.
+Host applications may lower these limits but cannot exceed them without a
+native release.
 
 ## Requirements
 
-- Validate safe feature/channel/release identifiers. Feature IDs follow
-  `^[a-z][a-z0-9-]{0,63}$` and are the same canonical keys defined by S01.
-- Validate HTTP(S) production URLs and safe relative artifact URLs.
+- Parse envelopes and payloads into typed results/errors; never use unchecked
+  casts at a trust boundary.
+- Verify signature, expected `type`, and expected `feature` before using
+  payload URLs, release IDs, revision, or enabled state.
+- Require a positive safe deployment revision and UTC ISO-8601 `issuedAt`.
+- Require enabled deployments to contain the exact release fields plus
+  `force`, and disabled deployments to contain none of them.
+- Validate safe feature and release identifiers, hashes, sizes, and URLs.
 - Reject duplicate normalized file paths, absolute paths, backslashes, empty
-  components, `.` and `..`.
-- Require positive sizes and 64-character hexadecimal SHA-256 values.
-- Require archive `entryCount` and `uncompressedBytes` to agree with the file
-  contract, with directories treated consistently.
-- `force` cannot select a new safety mode; it only changes activation timing.
-- Export parser functions returning typed results/errors, not unchecked casts.
-- Include valid and invalid fixture envelopes/payloads without production
-  private keys or credentials. Test fixtures may use an unmistakably
-  development-only key pair whose private half never ships in app resources.
+  components, `.`, and `..`.
+- Require archive counts and sizes to agree with the exact file contract.
+- Include valid and invalid fixtures without production private keys or
+  credentials.
 
 ## Acceptance criteria
 
-- [ ] Valid channel and release payload fixtures parse deterministically.
-- [ ] Unknown `schemaVersion`, algorithm, activation, or archive format fails.
-- [ ] Missing/unknown/wrong `type` and requested-feature mismatch fail after
-      signature verification and before payload URLs/state are used.
+- [ ] Valid enabled deployment, disabled deployment, and release fixtures parse
+      deterministically in TypeScript and Swift.
+- [ ] Unknown schema version, algorithm, document type, field, or archive format
+      fails closed.
+- [ ] Requested-feature mismatch fails after signature verification and before
+      payload state or URLs are used.
+- [ ] Disabled deployment carrying release fields fails.
+- [ ] Disabled deployment carrying `force` fails.
+- [ ] Enabled deployment missing any release field or `force` fails.
+- [ ] Invalid revision, timestamp, URL, hash, size, ratio, or entry count fails.
 - [ ] Duplicate, traversal, absolute, backslash, and oversized paths fail.
 - [ ] Missing or multiple `main.lynx.bundle` entries fail.
-- [ ] Invalid revision, timestamps, hashes, sizes, ratios, and entry counts fail.
-- [ ] Base64url decoding is strict and rejects padding/invalid alphabet according
-      to the documented encoding rule.
-- [ ] Fixtures are usable without TypeScript runtime dependencies by Swift and
-      Worker tests and remain portable for the Android roadmap.
+- [ ] Base64url decoding rejects padding and invalid alphabet.
+- [ ] Former `lynx-channel` fixtures are rejected; no compatibility parser is
+      shipped.
+- [ ] Fixtures require no TypeScript runtime and remain portable to Swift,
+      Worker, and future Android tests.
 
 ## Required verification
 
 ```bash
-pnpm run test
-pnpm run lint
-pnpm run build
+pnpm --filter expo-lynx exec jest --runInBand --no-watchman
+pnpm --filter expo-lynx lint
+pnpm --filter expo-lynx build
+git diff --check
 ```
 
 ## Out of scope
 
-- Producer signing and ZIP creation (S01)
-- Native signature verification (M02)
-- ZIP extraction/installation (M03; Android roadmap M05 later)
-- Network requests and storage
+- Producer signing and deterministic ZIP creation.
+- Native trust-root embedding and signature implementation.
+- Network requests, persistence, download, extraction, or activation.
+- Channels, separate activation modes, rollout cohorts, or expiry policy.
+- Key rotation and multiple simultaneous trust roots.

@@ -83,7 +83,7 @@ pnpm lynx-delivery publish -- \
   --server http://192.168.18.144:3000 \
   --token "$LYNX_DELIVERY_LOCAL_TOKEN" \
   --release-dir apps/expo-lynx-example/dist/lynx-releases/delivery/delivery-2026.08.30.1 \
-  --channel stable
+  --channel active
 ```
 
 Replace the IP address with the service's printed LAN address. The `publish`
@@ -113,7 +113,7 @@ as the immutable release route. The server also exposes the future channel
 route:
 
 ```text
-GET /v1/channels/delivery/stable
+GET /v1/channels/delivery/active
 GET /v1/releases/delivery/<releaseId>/manifest
 GET /v1/releases/delivery/<releaseId>/release.zip
 ```

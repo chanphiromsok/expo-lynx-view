@@ -41,8 +41,6 @@ export default function App() {
       ? {
           kind: "managed",
           feature: "delivery",
-          channel: "stable",
-          activation: "next-open",
         }
       : sourceKind === "dev"
         ? { kind: "development", url: DEV_BUNDLE }

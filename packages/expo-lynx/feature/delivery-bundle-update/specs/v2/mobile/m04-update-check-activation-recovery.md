@@ -1,229 +1,319 @@
-# M04 — React Native update check, conditional download, iOS activation, candidate view, and recovery
+# M04 — Feature deployment check, iOS force reload, activation, and recovery
 
 **Spec:** `feature/delivery-bundle-update/specs/v2/mobile/m04-update-check-activation-recovery.md`
 
 ## Goal
 
-Expose one understandable React Native update-check API and connect it to the
-complete iOS open/activation lifecycle: immediate local UI, a small throttled
-channel check, ZIP download only for a newly advertised release, `next-open` by
-default, optional separate candidate view, health confirmation, process-death
-rollback, and terminal splash callbacks.
+Expose one feature-only React Native update-check API and connect it to the iOS
+open lifecycle. The app renders a verified local source immediately, checks one
+signed deployment endpoint, downloads only a newly selected release, and uses
+the deployment's single `force` boolean to choose next-open activation or
+reload of a mounted view.
 
-## Why these tasks are merged
-
-The update check produces `pendingReleaseId` only after a channel advertises a
-new release and that release installs successfully; activation consumes it.
-Splitting the check/download API from activation left unclear whether an update
-could change the visible view and who owned terminal events. One coordinator
-now owns open, check, conditional download, install observation, activation,
-and recovery, while React Native owns only product UI.
+`enabled` controls distribution only. Disabling prevents future discovery and
+download; it never removes, deactivates, or rolls back a release already
+downloaded by that device.
 
 ## Depends on
 
-- [M01 — Shared protocol/types](m01-shared-release-protocol.md).
+- [M01 — Shared release and deployment protocol](m01-shared-release-protocol.md).
 - [M02 — Embedded registry and trust](m02-trust-roots-signature-verification.md).
 - [M03 — iOS release installation](m03-ios-archive-installation.md).
 
-## Owned files
+## Files
 
-- `ExpoLynxModule.ts`, public types/exports, and JS tests
-- `ExpoLynxModule.swift`, `ExpoLynxView.swift`
-- iOS delivery coordinator and channel state
-- activation/watchdog/candidate/state tests
-- example controls/evidence only as needed
+- `packages/expo-lynx/src/ExpoLynx.types.ts`
+- `packages/expo-lynx/src/ExpoLynxModule.ts`
+- `packages/expo-lynx/src/LynxSource.ts`
+- `packages/expo-lynx/src/index.ts`
+- `packages/expo-lynx/app.plugin.js`
+- `packages/expo-lynx/ios/ExpoLynxModule.swift`
+- `packages/expo-lynx/ios/ExpoLynxView.swift`
+- `packages/expo-lynx/ios/LynxManagedDeliveryCoordinator.swift`
+- `packages/expo-lynx/ios/LynxManagedChannelState.swift` — rename to deployment state
+- `packages/expo-lynx/ios/LynxManagedBundleStore.swift`
+- focused TypeScript, Swift, plugin, and local delivery tests
 
-## Current iOS public API
+## Contract
+
+### React Native API
 
 ```ts
+type CheckForUpdateResult =
+  | {
+      feature: string;
+      status: 'disabled' | 'no-update';
+      revision?: number;
+    }
+  | {
+      feature: string;
+      status: 'pending' | 'reloaded';
+      revision: number;
+      releaseId: string;
+      version: string;
+    };
+
 type ExpoLynxModule = {
-  checkForUpdate(options: { feature: LynxFeatureName; channel?: 'stable' | 'beta' }): Promise<{
-    feature: string;
-    channel: 'stable' | 'beta';
-    releaseId?: string;
-    version?: string;
-    status: 'no-update' | 'downloaded' | 'pending';
-  }>;
+  checkForUpdate(options: {
+    feature: LynxFeatureName;
+  }): Promise<CheckForUpdateResult>;
 };
 ```
 
-`ExpoLynx.checkForUpdate()` is deliberately **module-scoped**. It accepts only
-the canonical feature/channel pair and resolves the endpoint from the native
-build-time `ExpoLynxDeliveryChannels` map. It does not accept a URL, public
-key, or release ID from JavaScript, so no imperative call can override the
-source being rendered.
+JavaScript supplies only a canonical feature. It cannot supply a deployment
+URL, release ID, public key, channel, activation mode, or force value.
 
-The Expo plugin validates `deliveryChannels` against the embedded feature
-registry and writes it into `Info.plist`. A managed production source needs
-only `feature`, `channel`, and optional activation. `channelUrl` and
-`manifestUrl` are Debug/internal-LAN compatibility routes only and are not the
-Worker contract.
-
-The result shape is:
+Production managed sources require only their feature:
 
 ```ts
+type ManagedLynxSource = {
+  kind: 'managed';
+  feature: LynxFeatureName;
+};
+```
+
+### Build-time endpoint configuration
+
+The Expo plugin validates one endpoint per embedded feature:
+
+```json
 {
-  feature: string;
-  channel: 'stable' | 'beta';
-  releaseId?: string;
-  version?: string;
-  status: 'no-update' | 'downloaded' | 'pending';
+  "deliveryEndpoints": {
+    "delivery": "https://example.com/v1/deploy/delivery"
+  }
 }
 ```
 
-The native side owns ETag state, signature verification, files, staging, and
-activation. A `304 Not Modified`, an unchanged release ID, or an already
-ready/pending release returns `no-update` without requesting the ZIP, rehashing
-cached content, or extracting anything. `downloaded` is possible when an
-install finished but automatic staging was cancelled due to a source change;
-`pending` means the installed release was durably staged for the next open.
-
-`onUpdate` is the current event surface. Its phases are `checking`,
-`no-update`, `downloaded`, `staged`, and `error`; it carries feature, channel,
-release/version/revision when known, and a bounded error code/message. It
-intentionally excludes URLs, tokens, headers, private paths, initial data, and
-bundle content. Byte-level progress, transaction IDs, and rate-limited transfer
-progress are a future enhancement; the current URLSession install path does not
-pretend to expose byte progress.
-
-## Worker route contract used by mobile
-
-The client fetches the configured channel URL and follows the **signed relative
-`manifestUrl`** inside the verified channel payload. It never constructs a
-release URL from a release ID. The Worker and local parity server therefore use
-this canonical route shape:
+It writes the native property-list map:
 
 ```text
-GET /v1/channels/:feature/:channel
-GET /v1/releases/:feature/:releaseId/manifest
-GET /v1/releases/:feature/:releaseId/release.zip
+ExpoLynxDeliveryEndpoints
+  delivery -> https://example.com/v1/deploy/delivery
 ```
 
-The exact public channel and release envelope bytes are defined by M01. The
-channel's `manifestUrl` may be relative to its channel URL, so a local server
-and the Worker can have different origins without changing the mobile client.
+Production endpoints require HTTPS. HTTP remains limited to Debug or the
+existing internal local-delivery build guard.
 
-## Coordinator concurrency/threading
+### Persistent state
 
-- Deduplicate open/update-check requests for the same feature/channel and
-  resolved release; observers receive the same underlying result.
-- Listener removal/unmount does not cancel shared required work unexpectedly.
-- Network, hashing, ZIP, and file work stay off UI and RN JS threads.
-- LynxView mutations and RN event delivery occur on the platform UI thread.
-- Rate-limit/coalesce progress and reject stale callbacks by generation +
-  feature + release identity.
-- Every visible loading state terminates as loaded candidate/current fallback or
-  explicit error; never leave “Loading Mini app” indefinitely.
+State is serialized per feature, not per feature/channel:
 
-## Open/fallback resolution
+```swift
+struct LynxManagedState: Codable, Sendable {
+  var activeReleaseID: String?
+  var previousReleaseID: String?
+  var pendingReleaseID: String?
+  var attemptingReleaseID: String?
+  var failedReleaseIDs: [String]
+  var lastCheckedAt: String?
+  var lastETag: String?
+  var lastRevision: Int?
+}
+```
 
-Resolve only the exact requested canonical feature:
+`enabled` is not local source state and is not persisted as a source-selection
+flag. The feature-only storage key is:
 
-1. recover unconfirmed attempt and partial transaction;
-2. attempt a fully installed pending release when eligible;
-3. otherwise use confirmed active release;
-4. use previous LKG only for recovery;
-5. use that feature's read-only embedded registry entry.
+```text
+expo.lynx.managed.v2.<feature>
+```
 
-Unknown/missing features fail explicitly. Never load generic `static.lynx` or
-another feature. Render usable local content before waiting for a channel check.
+### Open resolution
 
-## State machine
+Render local content before waiting for the network:
 
-Per feature/channel state includes last accepted revision, active, previous LKG,
-pending, attempting, failed immutable IDs, and ETag. Serialize transitions.
+```text
+pending verified release -> attempt pending release
+active verified release  -> use active release
+otherwise                -> use embedded bundle
+```
 
-### Update check and conditional download
+Only the exact embedded baseline for the requested feature is a fallback.
+Never load a generic bundle or another feature.
 
-- Read the per-feature/channel check policy (`lastCheckedAt`, ETag, active,
-  pending, and failed immutable IDs) before making a request. The policy may
-  check once per session, after a configured interval, or after an explicit
-  host/API update hint; it must not block the current local open.
-- Send `If-None-Match` when an ETag exists. A `304`, an unchanged release ID,
-  or a release already marked ready/pending returns `no-update`; it does not
-  download a ZIP, repeat archive/file verification, or change the current view
-  or active pointer.
-- Only a verified channel response that advertises a compatible, non-failed,
-  different release can fetch the release envelope and ZIP through M03.
-- A newly verified installed release becomes `pendingReleaseId` for
-  `next-open`. `downloaded` reports installation completed; `pending` reports
-  that the release remains staged for activation.
+### Deployment check and revision
 
-### `next-open` — default
+Fetch the build-time endpoint with `If-None-Match` when an ETag exists. Verify
+the M01 signature, document type, feature, revision, and exact enabled or
+disabled variant before changing state.
 
-- Keep current UI during the update check and any conditional download/install.
-- On the next mini-app open, preserve prior LKG and durably write
-  `attemptingReleaseId` before rendering the pending candidate.
-- Confirm active only after Lynx main-bundle success plus the documented short
-  health boundary with no fatal error.
-- Load error, timeout, or process death blocks the immutable ID and restores LKG
-  or embedded. A fixed release requires a new ID; no boot loop.
+```text
+incoming revision > last revision
+  accept once
 
-### `on-launch` / `force`
+incoming revision = last revision and exact ETag/body is unchanged
+  no update
 
-**Current implementation status:** accepted source settings are safely treated
-as `next-open`. The Worker may round-trip `activation` and `force`, but current
-iOS does not use either signed field to replace a mounted view.
+incoming revision = last revision with different bytes
+  reject
 
-- Target behavior before enabling current-open activation: keep the mounted
-  active view visible while a separate candidate LynxView
-  loads.
-- Candidate receives identical bounds, safe-area/global props, initial data,
-  and resource roots.
-- Swap only after health confirmation; otherwise destroy candidate and retain
-  active view.
-- If measured memory cannot support two views, disable current-open activation
-  and defer to `next-open`; never blank/reload in place as a shortcut.
-- `force` selects this safe timing at an open boundary only. It never bypasses
-  verification, compatibility, failed-ID blocking, health, or rollback and
-  cannot destroy an interactive mounted view remotely.
+incoming revision < last revision
+  reject replay
+```
 
-## Event semantics
+A `304` preserves all local state. Network, HTTP, parsing, signature,
+identity, revision, or storage failure also preserves the currently active,
+pending, previous, and attempting releases.
 
-- Stable `onLoadStart`/`onStart`, `onLoad`, `onError`, and update progress/result
-  payloads include source (`embedded`, `cache`, `candidate`) and release ID when
-  applicable.
-- Splash UI may hide on successful local load even while update revalidation
-  continues.
-- Offline/update failure while usable local content is loaded is an update
-  event, not a blank terminal view.
-- Source changes/unmount ignore obsolete callbacks safely.
+### Disabled deployment
+
+After verifying a newer signed `enabled: false` deployment:
+
+- record revision, ETag, and check time;
+- do not request a release manifest or ZIP;
+- do not clear pending, active, previous, or attempting release IDs;
+- do not delete verified release files;
+- do not reload a mounted view; and
+- return `status: 'disabled'`.
+
+Disabled means the server is offering no release. Local source resolution does
+not change:
+
+```text
+already active remote release -> keep it
+already pending remote release -> attempt it on next open
+older active remote release -> keep it
+no local remote release -> use embedded
+```
+
+### Enabled deployment with `force: false`
+
+- Record the accepted revision before processing the selected release.
+- If the release is already active or pending, return `no-update` without a
+  manifest or ZIP request.
+- If the release is already installed, set it pending without downloading.
+- Otherwise verify its release manifest through M01/M02 and install through
+  M03.
+- Store the verified release as pending and return `status: 'pending'`.
+- Keep every currently mounted view unchanged.
+
+On the next feature open, preserve active as previous, persist attempting
+before rendering pending, and confirm active only after Lynx reports successful
+main-bundle load. Load failure, timeout, or process death blocks the failed
+immutable ID and restores previous or embedded.
+
+### Enabled deployment with `force: true`
+
+`force: true` is the only current-open timing instruction. There is no
+separate activation field.
+
+- If the selected release is not installed, download, verify, and install it
+  completely while the current view stays visible.
+- If it is already installed, reuse the verified local files.
+- If no matching managed view is mounted, store the release as pending and use
+  it on the next feature open.
+- If a matching managed view is mounted, persist previous/attempting state and
+  reload that view from the verified local release immediately after install.
+- Return `status: 'reloaded'` only after the reload reaches the existing
+  main-bundle health boundary.
+- On reload failure or timeout, block the failed ID and reload previous or
+  embedded.
+
+“Immediately” means after that device polls the endpoint and completes
+signature, compatibility, download, archive, file, and installation checks. It
+does not mean server push at the moment an operator clicks the console.
+
+An accepted revision is consumed once. Revalidation of the same revision or
+`304` must not reload the view again. A newer revision may select the same
+bundle with `force: true` to request another explicit reload.
+
+### Rollback
+
+Selecting an older release is accepted only through a newer signed deployment
+revision. `force: false` applies that rollback next open; `force: true`
+reloads the mounted view after the older release is verified locally. Bundle
+age never controls replay protection.
+
+### Concurrency and events
+
+- Serialize transitions per feature.
+- Deduplicate simultaneous checks and installs for the same feature/release.
+- Keep network, hashing, ZIP, and file work off UI and React Native JS threads.
+- Mutate Lynx views and emit React Native events on the platform UI thread.
+- Ignore stale callbacks by source generation and release identity.
+- Emit bounded phases: `checking`, `disabled`, `no-update`, `downloaded`,
+  `staged`, `reloading`, `reloaded`, and `error`.
+- Never expose URLs, headers, tokens, private paths, or bundle content in
+  events.
+
+## Requirements
+
+- Resolve the endpoint only from validated build-time native configuration.
+- Verify signed enabled and force values before using them.
+- Treat disabled as “no new distribution,” not embedded fallback.
+- Preserve every verified local release pointer and file when disabled.
+- Apply `force: false` on next open and `force: true` after verified install.
+- Never reload before signature, compatibility, archive, file, and installation
+  checks succeed.
+- Consume each force revision at most once.
+- Preserve current local state on offline and every failed check.
+- Keep feature isolation, atomic install, failed-ID blocking,
+  last-known-good recovery, and embedded fallback safety.
+- Remove production channel, separate activation, and caller-provided URL
+  paths.
 
 ## Acceptance criteria
 
-- [ ] RN update check reports `no-update` for `304`, unchanged, ready, and
-      pending releases without a ZIP request or full cached-content hash scan.
-- [ ] Two callers checking the same newly advertised release perform one
-      download/install transaction and observe monotonic install phases.
-- [ ] Update checking/conditional download never reloads or blanks mounted UI
-      or changes the active pointer.
-- [ ] First offline open loads the requested embedded baseline quickly.
-- [ ] `next-open` installs now, keeps current UI, and attempts on next open.
-- [ ] Success promotes candidate and preserves previous rollback LKG.
-- [ ] Error/timeout/process kill restores LKG/embedded and blocks failed ID.
-- [ ] `on-launch` never hides active content before candidate health success.
-- [ ] Safe-area/container layout does not jump during swap.
-- [ ] Listener removal, rapid source change, and stale callbacks leak/crash none.
-- [ ] Offline/error/splash always reaches a deterministic terminal state.
-- [ ] One-view/two-view timing and memory comparison is recorded.
+- [ ] The public JS API and managed source require only a canonical feature.
+- [ ] The plugin embeds exactly one validated deployment endpoint per feature.
+- [ ] JavaScript cannot override endpoint, release, key, enabled, force, or
+      revision.
+- [ ] Disabled performs no artifact request and preserves pending, active,
+      previous, attempting, and verified files.
+- [ ] A device with an active remote release keeps it after disable and reopen.
+- [ ] A device with a pending verified release attempts it after disable and
+      reopen.
+- [ ] A device with no local remote release uses embedded while disabled.
+- [ ] `force: false` installs a new release, keeps mounted UI, and stages it for
+      next open.
+- [ ] `force: true` keeps current UI through install, then reloads a matching
+      mounted view from verified local files.
+- [ ] `force: true` with no mounted view stores pending for next open.
+- [ ] Force reload failure restores previous or embedded and blocks the failed
+      release ID.
+- [ ] Revalidating the same force revision never reloads twice.
+- [ ] A newer force revision may reload the same verified release again.
+- [ ] `304`, offline, HTTP error, malformed payload, bad signature, wrong type,
+      wrong feature, and storage failure preserve local state.
+- [ ] Lower revision and equal revision with different bytes fail without state
+      mutation.
+- [ ] A newer revision can select an older release for rollback with either
+      force value.
+- [ ] Duplicate callers perform at most one request, install, and reload for the
+      accepted revision.
 
 ## Required verification
 
 ```bash
-pnpm run test
-pnpm run lint
-pnpm run build
+pnpm --filter expo-lynx exec jest --runInBand --no-watchman
+node --test packages/expo-lynx/app.plugin.test.js
+pnpm test:lynx-delivery
+git diff --check
 ```
 
-Also run physical iOS internal Release cases for embedded, cached, channel
-`304`, unchanged release, one newly advertised release, duplicate update
-checks, offline, next-open, on-launch, force, load error, timeout, process
-kill, rapid source change, and safe-area stability. Attach a short candidate
-swap recording and state before/after evidence.
+Run physical iOS internal Release cases for:
+
+```text
+first embedded open
+enabled force=false -> download -> next-open activation
+enabled force=true -> download -> mounted-view reload
+enabled force=true + cached release -> no download -> reload once
+enabled force=true + no mounted view -> pending next open
+disable after active remote -> remote stays active
+disable after pending download -> pending activates next open
+disable before any remote download -> embedded remains
+offline after disable -> current local source remains
+newer revision selecting older release -> rollback
+lower/equal-conflicting revision -> state unchanged
+force reload error/timeout/process death -> previous or embedded
+```
 
 ## Out of scope
 
-- OS background fetch and arbitrary production URLs.
-- Preserving internal Lynx page state across release replacement.
-- Mid-interaction forced replacement.
-- Android parity (M05) and cache quota policy (M07).
+- Server push or guaranteed wall-clock instant delivery.
+- A separate `activation` enum or `next-open` field.
+- Candidate-view swap or preserving page state across forced reload.
+- Channels, multiple deployments per feature, cohorts, or percentage rollout.
+- Background fetch and push-triggered updates.
+- Android implementation and cache quota policy.
+- Migration of pre-production channel-keyed state or cached files.
