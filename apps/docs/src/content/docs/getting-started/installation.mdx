@@ -1,0 +1,162 @@
+---
+title: Installation
+description: Install Expo Lynx, configure a safe embedded baseline, and make the first iOS development build.
+---
+
+Expo Lynx has native iOS code, so it runs in an **Expo development build** or
+release build—not Expo Go. The minimum iOS deployment target is 16.4.
+
+This page deliberately separates the one-time native setup from normal remote
+bundle releases. That is the same useful shape as Hot Updater's Expo guide:
+install the module, configure the plugin, then prebuild the native project.
+Once that is done, a signed remote mini-app release does not require another
+Expo prebuild or iOS rebuild. See Hot Updater's [basic usage](https://hot-updater.dev/docs/get-started/basic-usage)
+and [Expo build-plugin guide](https://hot-updater.dev/docs/build-plugins/expo)
+for that onboarding pattern.
+
+## 1. Add the package
+
+### In this monorepo
+
+The example already depends on the workspace package. For another workspace
+app, add this dependency and then install from the repository root:
+
+```sh
+pnpm --filter your-expo-app add expo-lynx@workspace:*
+pnpm install
+```
+
+`expo-lynx` is not published to a package registry yet, so do not use a
+registry install command until a published version exists. For an app outside
+this monorepo, first publish the package or use your organization's private
+package source; then install that exact published version.
+
+## 2. Create the embedded baseline and local signing setup
+
+Every managed feature must have an embedded baseline. It is the offline-safe
+first version of the mini-app and is used whenever no confirmed remote release
+is cached yet.
+
+For the included `delivery` feature, run this command from the repository
+root:
+
+```sh
+pnpm lynx init
+```
+
+`init` checks or configures the `expo-lynx` plugin in `app.json`, creates a
+matching local signing pair when one does not exist, and builds every embedded
+baseline from `lynx-bundle.config.mjs`. The private key and publisher settings
+stay in ignored local state; the public key is safe to compile into the app.
+The embedded output is:
+
+```text
+apps/expo-lynx-example/generated/expo-lynx/embedded
+```
+
+The generated registry also supplies feature-name autocomplete to TypeScript
+after prebuild.
+
+If an app already embeds a public key but its matching private key was lost,
+the command stops rather than silently changing the trust root. Restore the
+original private key, or deliberately create a new local trust root:
+
+```sh
+pnpm lynx init --replace-app-key
+```
+
+For a physical-phone local server, include the Mac's LAN channel URL while
+initializing the plugin:
+
+```sh
+pnpm lynx init \
+  --channel-url http://192.168.1.20:3000/v1/channels/delivery/stable
+```
+
+`pnpm lynx init` does not create Cloudflare resources or deploy a Worker yet.
+Those cloud actions will be added only after the Worker delivery API exists.
+
+:::caution[Protect production signing keys]
+The local workflow is only for development. Production private keys belong in a
+secret manager or CI; only a public verification key is compiled into the iOS
+app. Never commit a private signing key or put it in an Expo `extra` field.
+:::
+
+## 3. Review the Expo plugin configuration
+
+`pnpm lynx init` writes missing Expo Lynx configuration to `app.json`. Review
+the result; the example's [`app.json`](https://github.com/chanphiromsok/expo-lynx/blob/main/apps/expo-lynx-example/app.json)
+uses this configuration shape:
+
+```json
+{
+  "expo": {
+    "plugins": [[
+      "expo-lynx",
+      {
+        "embeddedBundlesPath": "./generated/expo-lynx/embedded",
+        "publicKeyPath": "./keys/lynx/updates.public.pem",
+        "deliveryChannels": {
+          "delivery": {
+            "stable": "https://delivery.example.com/v1/channels/delivery/stable"
+          }
+        }
+      }
+    ]]
+  }
+}
+```
+
+| Setting | Why it is compiled into the app |
+| --- | --- |
+| `embeddedBundlesPath` | Ships the offline baseline and generated feature registry. |
+| `publicKeyPath` | Provides the public key used to verify a release signature. |
+| `deliveryChannels` | Limits each feature/channel to an approved endpoint. |
+
+For a physical iPhone using the local service, replace the HTTPS example with
+your Mac's LAN URL, for example
+`http://192.168.1.20:3000/v1/channels/delivery/stable`. Never use `localhost`:
+on an iPhone it refers to the phone, not your Mac.
+
+## 4. Generate and install the iOS native project
+
+Run this only after a plugin configuration change or the first setup:
+
+```sh
+cd apps/expo-lynx-example
+pnpm exec expo prebuild --platform ios
+pnpm run ios
+```
+
+`prebuild` copies the embedded files, public key, and channel map into the
+native iOS project. It also generates
+`generated/expo-lynx/lynx-features.d.ts` for feature-name autocomplete.
+
+:::note[When a new iOS build is required]
+Run prebuild and install a new app when you change the embedded baseline,
+public key, channel URL, or another Expo plugin option. You do **not** need it
+after changing mini-app source and publishing an ordinary signed remote
+release.
+:::
+
+## 5. Render a managed mini-app
+
+```tsx
+import { ExpoLynxView } from 'expo-lynx';
+
+export function DeliveryScreen() {
+  return (
+    <ExpoLynxView
+      source={{ kind: 'managed', feature: 'delivery', channel: 'stable' }}
+      style={{ flex: 1 }}
+    />
+  );
+}
+```
+
+On first launch it renders the embedded baseline. On later launches it renders
+the confirmed local remote cache when one exists. It checks the channel in the
+background, verifies and stages a changed release, then activates it on the
+next mini-app open. Read [the lifecycle](/managed-delivery/lifecycle/) for the
+full state machine, then use [local development](/getting-started/local-development/)
+to release an update from a source edit.

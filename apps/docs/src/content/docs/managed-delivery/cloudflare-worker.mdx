@@ -1,0 +1,102 @@
+---
+title: Cloudflare delivery console and data plane
+description: The unified console/Worker package, its public routes, R2/D1 contract, and the remaining authenticated control-plane work.
+---
+
+## Current status: public read plane implemented
+
+The repository contains one console package that includes the Cloudflare Worker at:
+
+```text
+apps/console
+```
+
+It declares R2 and D1 bindings, includes the initial D1 migration, and
+implements the public read contract used by the iOS client:
+
+```text
+GET  /v1/channels/:feature/:channel
+GET  /v1/releases/:feature/:releaseId/manifest
+GET  /v1/releases/:feature/:releaseId/release.zip
+```
+
+The Worker is still **not ready for production delivery** because the
+authenticated console control plane has not yet been implemented to validate,
+upload, and promote releases. Do not point an app's `deliveryChannels` URL at a Worker
+until D1/R2 contain real signed data and the staging flow has passed on a device.
+
+## What has already been prepared
+
+The Worker has the following declared bindings in
+[`wrangler.toml`](https://github.com/chanphiromsok/expo-lynx/blob/main/apps/console/wrangler.toml):
+
+| Binding     | Intended service | Responsibility                                                                                                    |
+| ----------- | ---------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ARTIFACTS` | Cloudflare R2    | Immutable `release.zip` and signed manifest bytes.                                                                |
+| `DB`        | Cloudflare D1    | Exact signed channel envelope, channel head/revision, immutable release metadata, audit, and idempotency records. |
+
+Provisioning the empty resources is safe, but it does not make remote updates
+work by itself:
+
+```sh
+cd apps/console
+pnpm exec wrangler r2 bucket create lynx-artifacts
+pnpm exec wrangler d1 create lynx-delivery
+```
+
+After creating D1, replace the placeholder `database_id` in `wrangler.toml`
+with the ID returned by Wrangler, then apply the tracked schema locally:
+
+```sh
+pnpm exec wrangler d1 migrations apply lynx-delivery --local
+```
+
+Use `--remote` only as a deliberate provisioning action after reviewing the
+migration. Applying a migration does not publish an update.
+
+## Implemented public delivery API
+
+The public Cloudflare Worker is a **read-only data plane**. It exposes only the
+client contract already exercised by the local server:
+
+```text
+GET  /v1/channels/:feature/:channel
+GET  /v1/releases/:feature/:releaseId/manifest
+GET  /v1/releases/:feature/:releaseId/release.zip
+```
+
+Channel response bodies are the exact signed envelope text stored in D1. Release
+manifest and ZIP bytes are read from server-constructed, release-scoped R2
+keys. Channel responses use a strong ETag plus `no-cache`; manifest/ZIP
+responses use strong ETags and long-lived immutable caching. `If-None-Match`
+returns `304`; the ZIP endpoint deliberately advertises `Accept-Ranges: none`
+so the mobile client performs clean full-download retries.
+
+The Worker performs only cheap route, D1, and R2-size checks while reading. It
+does not rehash or reverify every artifact response. The iOS install path still
+verifies signature, archive SHA-256, and extracted files before activation.
+
+For the initial operator workflow, publishing and promotion are deliberately
+not public Worker routes. The unified console currently shows safe preview
+data. A future hosted control plane must authenticate every write and use the
+Worker's D1/R2 bindings directly. See
+[delivery console](/managed-delivery/local-console/).
+
+## Remaining safe migration path
+
+1. Implement the console's authenticated Cloudflare R2/D1 control plane, including
+   release-envelope validation, immutable object writes, idempotency, and an
+   audit record.
+2. Put publisher credentials and the **private** release-signing key in CI or
+   an ignored local environment file—not the Worker source, `wrangler.toml`,
+   browser JavaScript, or mobile app.
+3. Deploy a staging Worker and add its `https://.../v1/channels/...` URLs to an
+   internal app's Expo plugin configuration.
+4. Prebuild and install that internal app because the endpoint map is native
+   configuration.
+5. Publish a staging release, verify device install and next-open activation,
+   then promote the same API design to production.
+
+The app's embedded public key stays the trust root through this migration, so
+moving from local storage to R2 does not weaken device-side signature
+verification.

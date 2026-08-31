@@ -1,0 +1,128 @@
+---
+title: Delivery console
+description: One TanStack console package that runs locally with its Worker and deploys both as one Cloudflare application.
+---
+
+## Goal
+
+The Expo Lynx console is one package: it runs the TanStack browser app and its
+Elysia Cloudflare Worker together during development, then deploys both from
+the same package. The current screen remains a safe preview; hosted upload,
+promotion, and rollback require authenticated Worker routes before they are
+enabled.
+
+Start the local console from the repository root:
+
+```sh
+pnpm lynx console
+```
+
+The console is a Vite SPA using TanStack Router and TanStack Query. Its single
+development command starts Vite with HMR and Wrangler's local Workers runtime;
+Vite proxies Worker routes locally, while deployment serves both from one
+origin and route contract.
+
+It opens a local development URL. The first implementation is a functional UI
+preview with representative release data; it does not write Cloudflare data
+until the R2/D1 control-plane adapter is implemented.
+
+:::caution[Hosting requires authentication]
+The browser receives no Cloudflare API token or release private key. Before
+enabling hosted write routes, protect `/api/console/*` with Cloudflare Access
+or an equivalent identity layer, validate the caller in the Worker, and write
+the actor to the audit log.
+:::
+
+## Architecture
+
+```text
+browser
+  └─ TanStack console UI and same-origin `/api/console` requests
+       └─ Elysia Cloudflare Worker
+            ├─ validates authenticated operators
+            ├─ verifies signed release uploads
+            ├─ writes immutable artifacts to R2
+            └─ updates channel/release records in D1
+
+iOS app
+  └─ public Cloudflare Worker read endpoints only
+       └─ reads signed channel → manifest → release.zip
+```
+
+The Worker—not the browser—uses D1 and R2 bindings. This keeps credentials out
+of JavaScript bundles, browser storage, screenshots of Network tabs, and
+mobile builds.
+
+## Local configuration
+
+The console service will read an ignored file, for example
+`.env.lynx-delivery`:
+
+```dotenv
+LYNX_DELIVERY_CLOUDFLARE_ACCOUNT_ID=...
+LYNX_DELIVERY_CLOUDFLARE_API_TOKEN=...
+LYNX_DELIVERY_CLOUDFLARE_R2_BUCKET_NAME=lynx-artifacts
+LYNX_DELIVERY_CLOUDFLARE_D1_DATABASE_ID=...
+LYNX_DELIVERY_CLOUDFLARE_R2_ACCESS_KEY_ID=...
+LYNX_DELIVERY_CLOUDFLARE_R2_SECRET_ACCESS_KEY=...
+LYNX_DELIVERY_CLOUDFLARE_WORKER_NAME=lynx-delivery
+LYNX_DELIVERY_PUBLIC_KEY_PATH=./apps/expo-lynx-example/keys/lynx/updates.public.pem
+```
+
+The API token should have only the permissions required for the target R2
+bucket, D1 database, and Worker deployment. The R2 access-key pair is for the
+S3-compatible archive upload path and should be scoped to this bucket only.
+All of these values must never be committed, embedded in the console frontend,
+added to `app.json`, or passed to an iPhone. The console needs only the public
+key to validate uploads; the private signing key remains with the trusted CLI
+or CI that created the release.
+
+## First-version screens
+
+| Screen | Actions |
+| --- | --- |
+| Overview | Inspect feature/channel pointers, revisions, and latest release status. |
+| Releases | List immutable releases, ZIP size, SHA-256, signer key ID, runtime version, and creation time. |
+| Release detail | Inspect the signed manifest and see every channel currently using the release. |
+| Upload | Upload an already-signed `release.zip` and `release-envelope.json`; validate before writing R2/D1. |
+| Promote | Point a channel at a ready release and record a new revision. |
+| Roll back | Select an earlier ready release and promote it; never rewrite or delete the bad release. |
+| Audit | View local console actions with timestamp, action, feature, channel, old release, and new release. |
+
+The browser will not build Lynx bundles or sign arbitrary content. Building and
+signing stays in the trusted CLI/CI workflow:
+
+```sh
+pnpm lynx release delivery --draft
+```
+
+The console then uploads or promotes the resulting signed release package.
+
+## Data model and safety rules
+
+- **Release:** immutable. The same release ID can never accept different ZIP
+  bytes or manifest bytes.
+- **Channel:** mutable pointer from `feature + channel` to one ready release,
+  with an incrementing revision.
+- **Promotion:** creates a new channel revision; it does not copy or modify a
+  ZIP.
+- **Rollback:** is a promotion to an older verified release.
+- **Validation:** before accepting an upload, verify its release-envelope
+  signature, feature/release identity, ZIP SHA-256, byte length, platform, and
+  runtime compatibility.
+- **Audit:** every upload, promotion, rollback, or archive action creates an
+  immutable audit record in D1.
+
+## Delivery order
+
+1. Finish the Worker public read endpoints and R2/D1 schema.
+2. Create authenticated Worker console routes with Cloudflare R2/D1 adapters
+   and release-validation logic.
+3. Connect the console's existing TanStack data adapter to those same-origin
+   routes.
+4. Verify: upload → promote → iPhone download/stage → next-open activation →
+   rollback.
+
+Hosted authentication can be added later if several people need shared remote
+access. It should not change the signed mobile delivery protocol or the R2/D1
+data model.

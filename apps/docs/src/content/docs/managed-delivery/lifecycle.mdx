@@ -1,0 +1,62 @@
+---
+title: Embedded and remote lifecycle
+description: How managed delivery chooses the embedded fallback, active cache, and staged remote releases.
+---
+
+Use one managed source in a real Expo screen:
+
+```tsx
+<ExpoLynxView
+  source={{
+    kind: 'managed',
+    feature: 'delivery',
+    channel: 'stable',
+  }}
+/>
+```
+
+Do not make the screen choose between “embedded” and “remote.” `managed` owns that decision.
+
+## What loads first
+
+```text
+1. Confirmed remote release in local storage, if one exists
+2. Otherwise the embedded baseline in the app bundle
+3. Only after that: one remote channel check
+```
+
+This keeps the host responsive offline and avoids blocking the first usable Lynx render on a network request.
+
+## First install
+
+```text
+App opens
+  → no remote release is installed
+  → render embedded baseline
+  → fetch signed channel pointer
+  → download + validate signed ZIP
+  → atomically install and stage the remote release
+  → next app open loads the remote release
+```
+
+## Later releases
+
+```text
+App opens
+  → render confirmed remote release from local storage
+  → fetch signed channel pointer once
+  → if newer: download, validate, install, and stage it
+  → next app open loads the newer remote release
+```
+
+## Failure behavior
+
+| Failure | What the user sees |
+| --- | --- |
+| Offline or channel unavailable | Existing confirmed remote release, or the embedded baseline |
+| Bad signature, hash, ZIP, or compatibility | Existing confirmed remote release, or the embedded baseline |
+| Candidate fails before confirmation | Previous known-good remote release, or the embedded baseline |
+
+:::caution[Current activation status]
+`next-open` is the implemented activation model. The current iOS code stages every downloaded update; it does not yet perform a same-launch replacement of the mounted `LynxView`. Do not rely on `on-launch` for a visible same-launch swap yet.
+:::

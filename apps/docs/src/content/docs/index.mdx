@@ -1,0 +1,45 @@
+---
+title: Expo Lynx
+description: Signed Lynx mini-app delivery for Expo and React Native.
+template: splash
+hero:
+  tagline: Ship Lynx mini-apps inside an Expo host—with an embedded fallback and verified remote updates.
+  actions:
+    - text: Install Expo Lynx
+      link: /getting-started/installation/
+      icon: right-arrow
+    - text: Understand the lifecycle
+      link: /managed-delivery/lifecycle/
+      icon: right-arrow
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Expo Lynx lets an Expo / React Native app render a Lynx mini-app from a verified local bundle. The app always has a bundled fallback, while a signed remote release can become the active version without shipping a new host binary.
+
+<CardGrid stagger>
+	<Card title="Use a safe fallback" icon="shield-check">
+		The embedded baseline is shipped in the iOS app and works without a network connection.
+	</Card>
+	<Card title="Deliver remote releases" icon="cloud">
+		Remote ZIP releases are signed, hash checked, installed atomically, and served only from local verified files.
+	</Card>
+	<Card title="Test on an iPhone" icon="mobile">
+		Use the local delivery service to build, sign, upload, promote, and test a mini-app over your LAN.
+	</Card>
+</CardGrid>
+
+## The one rule to remember
+
+For a managed mini-app, the host loads the newest **verified local** version immediately:
+
+```text
+confirmed remote cache → otherwise embedded baseline
+```
+
+It checks the remote channel after that first local render. A remote URL is never passed directly to `LynxView` in a production managed flow.
+
+:::tip[Start with the local test loop]
+If you are adding Expo Lynx to a host app, begin with [installation](/getting-started/installation/). If it is already installed and you are changing the Delivery mini-app, use [local development](/getting-started/local-development/).
+:::

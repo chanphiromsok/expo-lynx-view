@@ -1,0 +1,47 @@
+---
+title: Local delivery troubleshooting
+description: Diagnose LAN, channel, and local-server failures during managed delivery testing.
+---
+
+## `Channel was not found`
+
+The delivery service is running, but no release has been promoted to `delivery/stable`.
+
+```sh
+pnpm lynx release delivery
+pnpm lynx status delivery
+```
+
+Then verify the exact LAN URL from the phone's point of view:
+
+```sh
+curl -i http://YOUR_MAC_LAN_IP:3000/v1/channels/delivery/stable
+```
+
+## `Request failed (404): Not found` while releasing
+
+An older static/legacy server is probably listening on port `3000`. It can answer an older public URL but does not support the authenticated `/v1/admin/...` upload routes.
+
+```sh
+lsof -nP -iTCP:3000 -sTCP:LISTEN
+```
+
+Stop the old listeners, then start one current delivery service:
+
+```sh
+pnpm lynx local start --host 0.0.0.0 --port 3000
+```
+
+## iPhone cannot connect
+
+Check all of these:
+
+- Phone and Mac are on the same Wi-Fi network.
+- The server was started with `--host 0.0.0.0`.
+- macOS firewall permits the selected port.
+- The channel URL uses the current LAN IP, not `localhost`.
+- VPN, guest-network isolation, and private relay are disabled for the test.
+
+## A published update does not appear immediately
+
+The current managed flow stages the update safely. Close and reopen the host app once to download/stage the release, then close and reopen it again to activate it.

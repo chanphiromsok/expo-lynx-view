@@ -1,0 +1,33 @@
+---
+title: Local iPhone testing
+description: Verify the local delivery channel before testing a signed remote release on a phone.
+---
+
+Before opening the app, make sure the channel URL is reachable from both the Mac and the phone.
+
+```sh
+curl -i http://YOUR_MAC_LAN_IP:3000/v1/channels/delivery/stable
+```
+
+After a release has been promoted, the response must begin with:
+
+```text
+HTTP/1.1 200 OK
+```
+
+## Two terminals, one flow
+
+```text
+Terminal 1
+  pnpm lynx local start --host 0.0.0.0 --port 3000
+
+Terminal 2
+  pnpm lynx release delivery
+  pnpm lynx status delivery
+```
+
+The status command should show a generated `delivery-...` release ID and an incrementing channel revision.
+
+:::danger[Do not run two servers on port 3000]
+The legacy one-shot/static server does not implement the managed channel upload routes. If another process owns port `3000`, `pnpm lynx release delivery` can return a 404 even though a channel request appears to work. Stop both old listeners and start only `pnpm lynx local start`.
+:::

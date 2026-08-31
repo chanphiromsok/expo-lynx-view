@@ -1,0 +1,56 @@
+---
+title: Lynx CLI
+description: Reference for the friendly local mini-app delivery commands.
+---
+
+Run these commands from the monorepo root.
+
+| Command | Purpose |
+| --- | --- |
+| `pnpm lynx init` | Set up or validate `app.json`, the local signing trust root, and every embedded fallback baseline. It does not provision Cloudflare. |
+| `pnpm lynx local init` | Create a local signing pair when no app public key exists yet. Replacing an embedded key requires a new iOS build. |
+| `pnpm lynx local start` | Start the persistent local signed-delivery service. |
+| `pnpm lynx bundle <feature>` | Build the embedded fallback baseline that ships inside the next native app build. |
+| `pnpm lynx release <feature>` | Build, package, sign, upload, and promote a remote release. |
+| `pnpm lynx status <feature>` | Show the promoted local channel head. |
+
+## Project initialization
+
+```sh
+pnpm lynx init
+```
+
+The command supports a review-only run that does not write files or build a
+Lynx bundle:
+
+```sh
+pnpm lynx init --dry-run --skip-bundle
+```
+
+For a project with a single feature, this configures its `stable` endpoint
+while keeping the URL in the Expo plugin's build-time map:
+
+```sh
+pnpm lynx init \
+  --channel-url http://192.168.1.20:3000/v1/channels/delivery/stable
+```
+
+With several features, add `--feature shopping` alongside `--channel-url`.
+When the public key exists but the matching private key is unavailable, pass
+`--replace-app-key` only when you intentionally want a new local trust root.
+
+## Normal remote update
+
+```sh
+pnpm lynx release delivery
+```
+
+The command creates the immutable release ID and display version automatically. Do not reuse a release ID for different bytes.
+
+## Embedded baseline rebuild
+
+```sh
+pnpm lynx bundle delivery
+```
+
+This is not part of a normal remote update. It rebuilds the baseline at `generated/expo-lynx/embedded`, which requires Expo prebuild and a new iOS binary before a device can use it.
