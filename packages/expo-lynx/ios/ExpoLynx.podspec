@@ -17,10 +17,9 @@ Pod::Spec.new do |s|
   s.dependency 'LynxService/Image', '4.0.0'
   s.dependency 'LynxService/Log', '4.0.0'
   s.dependency 'LynxService/Http', '4.0.0'
-  s.dependency 'LynxService/Devtool', '4.0.0'
-  # Lynx's integration guide lists these explicitly. LynxService/Devtool pulls
-  # most of them transitively, but the MessageTransceiverEnable subspec must be
-  # present for DevTool Desktop's debug-router connection.
+  # DevTool and DebugRouter are development-only; excluding them from Release
+  # avoids shipping their startup work, code, and native dependencies.
+  s.dependency 'LynxService/Devtool', '4.0.0', :configurations => ['Debug']
 
   # s.dependency 'LynxDevtool', '4.0.0'
   # s.dependency 'DebugRouter', '5.0.15'

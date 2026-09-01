@@ -268,7 +268,8 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   private var hasLoadedTemplate = false
   private var lastLayoutSize = CGSize.zero
   private var lastSafeAreaInsets: UIEdgeInsets?
-  private var hasPendingUpdate = false
+  private var sourceNeedsReload = false
+  private var initialDataNeedsUpdate = false
   private var currentTarget: ExpoLynxLoadTarget?
   // Retain only the validated declarative source configuration. This is the
   // authority for an explicit JS update check; JS never supplies a URL to the
@@ -386,7 +387,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
 
     legacySource = nextSource
-    hasPendingUpdate = true
+    sourceNeedsReload = true
   }
 
   func setSourceJSON(_ value: String?) {
@@ -395,7 +396,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
 
     sourceJSON = value
-    hasPendingUpdate = true
+    sourceNeedsReload = true
   }
 
   func setInitialDataJSON(_ value: String?) {
@@ -404,19 +405,17 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
 
     initialDataJSON = value
-    hasPendingUpdate = true
-
-    if hasLoadedTemplate, let templateData = makeTemplateData() {
-      lynxView.updateData(with: templateData)
-    }
+    initialDataNeedsUpdate = true
   }
 
   func applyPendingUpdate() {
-    guard hasPendingUpdate else {
+    if sourceNeedsReload {
+      sourceNeedsReload = false
+      scheduleLoad()
       return
     }
-    hasPendingUpdate = false
-    scheduleLoad()
+
+    applyPendingInitialDataUpdate()
   }
 
   func reload() {
@@ -424,6 +423,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   }
 
   private func scheduleLoad() {
+    sourceNeedsReload = false
     loadGeneration += 1
     hasLoadedTemplate = false
     deliveryTask?.cancel()
@@ -608,10 +608,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     deliveryTask = Task { @MainActor [weak self] in
       guard let self, generation == self.loadGeneration else { return }
       let state = await LynxManagedDeploymentState.shared.recover(feature: feature)
-      try? await LynxManagedBundleStore.shared.reconcile(
-        feature: feature,
-        protectedReleaseIDs: state.protectedReleaseIDs
-      )
+      guard !Task.isCancelled, generation == self.loadGeneration else { return }
 
       if let pendingID = state.pendingReleaseID,
         let pending = try? await LynxManagedBundleStore.shared.installedRelease(
@@ -723,6 +720,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
 
   private func loadTarget(_ target: ExpoLynxLoadTarget, generation: Int) {
     guard generation == loadGeneration else { return }
+    hasLoadedTemplate = false
     source = target.url
     currentTarget = target
     loadStartedAt = Date()
@@ -743,7 +741,10 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     {
       // Match Lynx Explorer: let Lynx own the remote load so DevTool's
       // Page.reload uses the same template-resource-fetcher pipeline.
-      lynxView.loadTemplate(fromURL: remoteURL.absoluteString, initData: makeTemplateData())
+      lynxView.loadTemplate(
+        fromURL: remoteURL.absoluteString,
+        initData: consumeTemplateDataForLoad()
+      )
       return
     }
 
@@ -785,7 +786,11 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
         return
       }
 
-      self.lynxView.loadTemplate(data, withURL: target.url, initData: self.makeTemplateData())
+      self.lynxView.loadTemplate(
+        data,
+        withURL: target.url,
+        initData: self.consumeTemplateDataForLoad()
+      )
     }
   }
 
@@ -871,6 +876,25 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
 
     return LynxTemplateData(json: initialDataJSON, useBoolLiterals: true)
+  }
+
+  private func consumeTemplateDataForLoad() -> LynxTemplateData? {
+    initialDataNeedsUpdate = false
+    return makeTemplateData()
+  }
+
+  private func applyPendingInitialDataUpdate() {
+    guard initialDataNeedsUpdate, hasLoadedTemplate else { return }
+    initialDataNeedsUpdate = false
+    if let templateData = makeTemplateData() {
+      lynxView.updateData(with: templateData)
+    } else {
+      // updateData(nil) is a no-op in Lynx. Reset with an empty object so
+      // removing the React prop also removes the previous template data.
+      lynxView.resetData(
+        with: LynxTemplateData(json: "{}", useBoolLiterals: true)
+      )
+    }
   }
 
   private func eventPayload(for target: ExpoLynxLoadTarget) -> [String: Any] {
@@ -1023,12 +1047,14 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   func lynxView(_ view: LynxView, didLoadFinishedWithUrl url: String) {
     guard let target = currentTarget else {
       hasLoadedTemplate = true
+      applyPendingInitialDataUpdate()
       onLoad(["url": url])
       return
     }
     guard url.isEmpty || url == target.url else { return }
     watchdogWorkItem?.cancel()
     hasLoadedTemplate = true
+    applyPendingInitialDataUpdate()
 
     var payload = eventPayload(for: target)
     payload["durationMs"] = max(0, Int(Date().timeIntervalSince(loadStartedAt) * 1_000))
@@ -1046,12 +1072,16 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
         ])
         forceReloadCompletion?(.success(()))
         forceReloadCompletion = nil
-      }
-      Task {
-        await LynxManagedDeploymentState.shared.confirm(
-          releaseID: manifestID,
-          feature: context.feature
-        )
+      } else {
+        // A pending release loaded during startup has no coordinator waiting
+        // for it, so the view owns confirmation. Forced reloads are confirmed
+        // once by the coordinator only after every mounted view succeeds.
+        Task {
+          await LynxManagedDeploymentState.shared.confirm(
+            releaseID: manifestID,
+            feature: context.feature
+          )
+        }
       }
     }
   }

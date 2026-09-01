@@ -28,6 +28,7 @@ actor LynxManagedBundleStore {
   private let rootURL: URL
   private var v2Installs: [String: Task<LynxManagedRelease, Error>] = [:]
   private var deploymentChecks: [String: Task<LynxDeploymentUpdateResult, Error>] = [:]
+  private var activeStagingPaths = Set<String>()
 
   init(rootURL: URL? = nil) {
     if let rootURL {
@@ -104,8 +105,12 @@ actor LynxManagedBundleStore {
     let featureRoot = rootURL.appendingPathComponent(expectedFeature, isDirectory: true)
     let stagingRoot = featureRoot.appendingPathComponent("staging", isDirectory: true)
     let stagingURL = stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    activeStagingPaths.insert(stagingURL.standardizedFileURL.path)
+    defer {
+      activeStagingPaths.remove(stagingURL.standardizedFileURL.path)
+      try? fileManager.removeItem(at: stagingURL)
+    }
     try fileManager.createDirectory(at: stagingURL, withIntermediateDirectories: true)
-    defer { try? fileManager.removeItem(at: stagingURL) }
 
     let bundleDestination = stagingURL.appendingPathComponent("main.lynx.bundle")
     try await download(
@@ -320,8 +325,12 @@ actor LynxManagedBundleStore {
     let staging = featureRoot.appendingPathComponent("staging", isDirectory: true).appendingPathComponent(UUID().uuidString, isDirectory: true)
     let extracted = staging.appendingPathComponent("release", isDirectory: true)
     let archive = staging.appendingPathComponent("release.zip.part")
+    activeStagingPaths.insert(staging.standardizedFileURL.path)
+    defer {
+      activeStagingPaths.remove(staging.standardizedFileURL.path)
+      try? fileManager.removeItem(at: staging)
+    }
     try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
-    defer { try? fileManager.removeItem(at: staging) }
     try await downloadArchive(
       from: archiveURL,
       to: archive,
@@ -366,7 +375,7 @@ actor LynxManagedBundleStore {
     guard isSafeFeature(feature) else { return }
     let root = featureRoot(feature: feature)
     let staging = root.appendingPathComponent("staging", isDirectory: true)
-    if fileManager.fileExists(atPath: staging.path) { try? fileManager.removeItem(at: staging) }
+    removeInactiveStagingDirectories(at: staging)
     let ready = root.appendingPathComponent("ready", isDirectory: true)
     guard let directories = try? fileManager.contentsOfDirectory(
       at: ready,
@@ -452,6 +461,18 @@ actor LynxManagedBundleStore {
       size += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
     }
     return size
+  }
+
+  private func removeInactiveStagingDirectories(at stagingRoot: URL) {
+    guard let entries = try? fileManager.contentsOfDirectory(
+      at: stagingRoot,
+      includingPropertiesForKeys: nil,
+      options: [.skipsHiddenFiles]
+    ) else { return }
+    for entry in entries
+    where !activeStagingPaths.contains(entry.standardizedFileURL.path) {
+      try? fileManager.removeItem(at: entry)
+    }
   }
 
   private func isRegularFile(_ url: URL) -> Bool {

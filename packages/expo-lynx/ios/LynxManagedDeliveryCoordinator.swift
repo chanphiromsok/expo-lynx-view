@@ -83,12 +83,78 @@ struct LynxManagedUpdateCheckResult: Sendable {
 actor LynxManagedDeliveryCoordinator {
   static let shared = LynxManagedDeliveryCoordinator()
 
+  private struct UpdateKey: Hashable {
+    let feature: String
+    let deploymentURL: String
+  }
+
+  private struct InFlightUpdate {
+    let id: UUID
+    let task: Task<LynxManagedUpdateCheckResult, Error>
+  }
+
+  private var inFlightUpdates: [UpdateKey: InFlightUpdate] = [:]
+
   func checkForUpdate(feature: String) async throws -> LynxManagedUpdateCheckResult {
     let deploymentURL = try LynxManagedDeliveryConfiguration.deploymentURL(feature: feature)
     return try await checkForUpdate(feature: feature, deploymentURL: deploymentURL)
   }
 
   func checkForUpdate(
+    feature: String,
+    deploymentURL: URL
+  ) async throws -> LynxManagedUpdateCheckResult {
+    let key = UpdateKey(
+      feature: feature,
+      deploymentURL: deploymentURL.absoluteString
+    )
+    if let update = inFlightUpdates[key] {
+      return try await update.task.value
+    }
+
+    // The shared task owns the complete transaction, including state changes
+    // and view reloads. Cancelling one caller must not interrupt other views
+    // waiting for the same feature and endpoint.
+    let id = UUID()
+    let task = Task {
+      do {
+        let result = try await self.performCheckForUpdate(
+          feature: feature,
+          deploymentURL: deploymentURL
+        )
+        await self.reconcileCache(feature: feature)
+        return result
+      } catch {
+        await self.reconcileCache(feature: feature)
+        throw error
+      }
+    }
+    inFlightUpdates[key] = InFlightUpdate(id: id, task: task)
+
+    do {
+      let result = try await task.value
+      removeInFlightUpdate(id: id, key: key)
+      return result
+    } catch {
+      removeInFlightUpdate(id: id, key: key)
+      throw error
+    }
+  }
+
+  private func removeInFlightUpdate(id: UUID, key: UpdateKey) {
+    guard inFlightUpdates[key]?.id == id else { return }
+    inFlightUpdates.removeValue(forKey: key)
+  }
+
+  private func reconcileCache(feature: String) async {
+    let state = await LynxManagedDeploymentState.shared.recover(feature: feature)
+    try? await LynxManagedBundleStore.shared.reconcile(
+      feature: feature,
+      protectedReleaseIDs: state.protectedReleaseIDs
+    )
+  }
+
+  private func performCheckForUpdate(
     feature: String,
     deploymentURL: URL
   ) async throws -> LynxManagedUpdateCheckResult {
