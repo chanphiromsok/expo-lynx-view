@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { dirname, relative, resolve } from 'node:path';
+import { loadEnvFile } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfigAsync } from '../packages/lynx-bundle-cli/src/index.mjs';
@@ -18,6 +19,7 @@ const bundleCli = resolve(repositoryRoot, 'packages/lynx-bundle-cli/bin/lynx-bun
 const deliveryConsolePackage = '@expo-lynx/delivery-console';
 const bundleConfigPath = resolve(exampleRoot, 'lynx-bundle.config.mjs');
 const operationalCli = resolve(repositoryRoot, 'packages/lynx-bundle-cli/bin/lynx.mjs');
+const localDeliveryEnvPath = resolve(repositoryRoot, 'apps/console/.dev.vars');
 const runtimeVersion = 'expo-57';
 const FEATURE_ID = /^[a-z][a-z0-9-]{0,63}$/;
 
@@ -36,13 +38,18 @@ Examples:
   pnpm lynx console
   pnpm lynx init --channel-url https://delivery.example/v1/deploy/delivery
   pnpm lynx bundle delivery
-  LYNX_DELIVERY_SERVER=https://delivery.example LYNX_DELIVERY_CONTROL_TOKEN=... pnpm lynx release delivery
+  pnpm lynx release delivery
   LYNX_DELIVERY_CONTROL_TOKEN=... pnpm lynx release upload ./dist/lynx-releases/delivery/delivery-20260830T143512-a1b2c3 --server http://127.0.0.1:8787
 
 release generates the immutable release ID and display version automatically,
 then builds, packages, and uploads it to the delivery Worker. Use
 --draft to stop after packaging. Uploading never promotes or enables a bundle;
 make that explicit choice in the console.
+
+For local development, release automatically reads the ignored
+apps/console/.dev.vars file: CONTROL_TOKEN becomes the local CLI credential
+and the server defaults to http://127.0.0.1:8787. Explicit --server/--token
+arguments or LYNX_DELIVERY_* environment variables always take precedence.
 
 init prepares the Expo app's managed-delivery inputs. It never creates
 Cloudflare resources or deploys a Worker; those are explicit future commands.
@@ -133,32 +140,41 @@ function ensureAppPlugin(paths, featureArgument, channelUrl, dryRun) {
   }
   const expo = appConfig.expo;
   if (expo.plugins === undefined) expo.plugins = [];
-  if (!Array.isArray(expo.plugins)) throw new Error('expo.plugins must be an array before pnpm lynx init can configure expo-lynx.');
+  if (!Array.isArray(expo.plugins)) throw new Error('expo.plugins must be an array before pnpm lynx init can configure expo-lynx-view.');
 
   const expected = {
     embeddedBundlesPath: relativeProjectPath(paths.appRoot, paths.bundle.embeddedOutputDir),
     publicKeyPath: relativeProjectPath(paths.appRoot, paths.publicKeyPath),
   };
-  const pluginIndex = expo.plugins.findIndex((plugin) => plugin === 'expo-lynx' || (Array.isArray(plugin) && plugin[0] === 'expo-lynx'));
+  const pluginIndex = expo.plugins.findIndex(
+    (plugin) =>
+      plugin === 'expo-lynx-view' ||
+      plugin === 'expo-lynx' ||
+      (Array.isArray(plugin) && (plugin[0] === 'expo-lynx-view' || plugin[0] === 'expo-lynx'))
+  );
   let changed = false;
   let options;
   if (pluginIndex === -1) {
     options = { ...expected };
-    expo.plugins.push(['expo-lynx', options]);
+    expo.plugins.push(['expo-lynx-view', options]);
     changed = true;
   } else {
     const existing = expo.plugins[pluginIndex];
-    if (existing === 'expo-lynx') {
+    if (existing === 'expo-lynx-view' || existing === 'expo-lynx') {
       options = { ...expected };
-      expo.plugins[pluginIndex] = ['expo-lynx', options];
+      expo.plugins[pluginIndex] = ['expo-lynx-view', options];
       changed = true;
     } else {
       if (!Array.isArray(existing) || existing.length !== 2 || !existing[1] || typeof existing[1] !== 'object' || Array.isArray(existing[1])) {
-        throw new Error('The expo-lynx plugin must use ["expo-lynx", { ...options }] before pnpm lynx init can update it.');
+        throw new Error('The expo-lynx-view plugin must use ["expo-lynx-view", { ...options }] before pnpm lynx init can update it.');
       }
       options = existing[1];
+      if (existing[0] === 'expo-lynx') {
+        existing[0] = 'expo-lynx-view';
+        changed = true;
+      }
       if (Array.isArray(options.bundledResources) && options.bundledResources.length > 0) {
-        throw new Error('The existing expo-lynx plugin uses legacy bundledResources. Migrate it to embeddedBundlesPath/publicKeyPath before running pnpm lynx init.');
+        throw new Error('The existing expo-lynx-view plugin uses legacy bundledResources. Migrate it to embeddedBundlesPath/publicKeyPath before running pnpm lynx init.');
       }
       for (const [key, value] of Object.entries(expected)) {
         if (options[key] === undefined) {
@@ -184,7 +200,7 @@ function ensureAppPlugin(paths, featureArgument, channelUrl, dryRun) {
     if (!feature) throw new Error('--channel-url needs --feature when the bundle config contains more than one feature.');
     if (!featureIds.includes(feature)) throw new Error(`The configured Lynx feature does not exist: ${feature}`);
     const endpoints = options.deliveryEndpoints ?? {};
-    if (!endpoints || typeof endpoints !== 'object' || Array.isArray(endpoints)) throw new Error('expo-lynx deliveryEndpoints must be an object.');
+    if (!endpoints || typeof endpoints !== 'object' || Array.isArray(endpoints)) throw new Error('expo-lynx-view deliveryEndpoints must be an object.');
     if (endpoints[feature] !== channelUrl) {
       options.deliveryEndpoints = { ...endpoints, [feature]: channelUrl };
       changed = true;
@@ -195,10 +211,10 @@ function ensureAppPlugin(paths, featureArgument, channelUrl, dryRun) {
     if (dryRun) process.stdout.write(`Would update Expo plugin configuration: ${paths.appJsonPath}\n`);
     else {
       writeJson(paths.appJsonPath, appConfig);
-      process.stdout.write(`Configured expo-lynx in ${paths.appJsonPath}\n`);
+      process.stdout.write(`Configured expo-lynx-view in ${paths.appJsonPath}\n`);
     }
   } else {
-    process.stdout.write(`Expo plugin configuration is already ready: ${paths.appJsonPath}\n`);
+    process.stdout.write(`expo-lynx-view plugin configuration is already ready: ${paths.appJsonPath}\n`);
   }
 }
 
@@ -224,14 +240,24 @@ async function initProject(options) {
 }
 
 function startConsole() {
-  process.stdout.write('Starting the Expo Lynx Delivery Console with its local Cloudflare Worker runtime.\n');
-  const child = spawn('pnpm', ['--filter', deliveryConsolePackage, 'dev'], { cwd: repositoryRoot, stdio: 'inherit' });
+  process.stdout.write('Starting the Expo Lynx Delivery Console and LAN-accessible local Worker.\n');
+  const child = spawn('pnpm', ['--filter', deliveryConsolePackage, 'dev:device'], { cwd: repositoryRoot, stdio: 'inherit' });
   child.once('error', (error) => { throw error; });
   child.once('exit', (code) => { process.exitCode = code ?? 1; });
 }
 
 function buildEmbedded(feature) {
   run(process.execPath, [bundleCli, 'build-embedded', feature, '--config', bundleConfigPath, '--runtime-version', runtimeVersion]);
+}
+
+function configureLocalDeliveryUpload() {
+  process.env.LYNX_DELIVERY_SERVER = 'http://127.0.0.1:8787';
+  if (existsSync(localDeliveryEnvPath)) {
+    loadEnvFile(localDeliveryEnvPath);
+    if (!process.env.LYNX_DELIVERY_CONTROL_TOKEN && process.env.CONTROL_TOKEN) {
+      process.env.LYNX_DELIVERY_CONTROL_TOKEN = process.env.CONTROL_TOKEN;
+    }
+  }
 }
 
 function release(feature, options) {
@@ -250,6 +276,9 @@ function release(feature, options) {
   const uploadArguments = [operationalCli, 'release:upload', releaseDirectory];
   const server = options.get('--server');
   const token = options.get('--token');
+  if (!server && !token && !process.env.LYNX_DELIVERY_SERVER && !process.env.LYNX_DELIVERY_CONTROL_TOKEN) {
+    configureLocalDeliveryUpload();
+  }
   if (server) uploadArguments.push('--server', server);
   if (token) uploadArguments.push('--token', token);
   if (options.get('--json')) uploadArguments.push('--json');

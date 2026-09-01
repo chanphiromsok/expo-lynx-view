@@ -7,7 +7,6 @@ import {
   FileArchive,
   LoaderCircle,
   RefreshCw,
-  ShieldCheck,
   X,
 } from 'lucide-react';
 
@@ -15,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -183,62 +183,38 @@ function DeploymentCard({
     : deployment.status === 'disabled' ? 'Disabled' : 'No selected bundle';
 
   return (
-    <Card className="shadow-xl shadow-slate-950/[0.03]">
+    <Card className="shadow-sm" size="sm">
       <CardHeader className="border-b">
         <div>
           <CardDescription>Remote deployment</CardDescription>
-          <CardTitle className="mt-1 flex items-center gap-2 text-xl">
+          <CardTitle className="mt-1 flex items-center gap-2">
             {state}
             <Badge variant={deployment.enabled ? 'default' : 'secondary'}>
               {deployment.enabled ? 'enabled' : 'disabled'}
             </Badge>
           </CardTitle>
         </div>
-        <Button
-          disabled={pending || disabledWithoutBundle}
-          onClick={onToggle}
-          size="sm"
-          variant={deployment.enabled ? 'outline' : 'default'}
-        >
-          {pending ? <LoaderCircle className="animate-spin" /> : null}
-          {deployment.enabled ? 'Disable delivery' : 'Enable delivery'}
-        </Button>
+        <CardAction><Button disabled={pending || disabledWithoutBundle} onClick={onToggle} size="sm" variant={deployment.enabled ? 'outline' : 'default'}>{pending ? <LoaderCircle className="animate-spin" /> : null}{deployment.enabled ? 'Disable' : 'Enable'}</Button></CardAction>
       </CardHeader>
-      <CardContent className="pt-5">
+      <CardContent className="space-y-4 pt-1">
         {activeBundle ? (
           <div>
             <p className="font-mono text-xs text-muted-foreground">{activeBundle.id}</p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <span className="text-lg font-semibold">{activeBundle.version}</span>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <span className="font-semibold">{activeBundle.version}</span>
               <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300">
                 <Check aria-hidden="true" /> Verified
               </Badge>
             </div>
-            <p className="mt-2 text-sm text-muted-foreground">
+            <p className="mt-1.5 text-xs text-muted-foreground">
               {formatBytes(activeBundle.archiveBytes)} · SHA-256 {shortHash(activeBundle.archiveSha256)}
             </p>
           </div>
         ) : deployment.bundleId ? (
-          <div><p className="font-mono text-xs text-muted-foreground">{deployment.bundleId}</p><p className="mt-2 text-sm text-muted-foreground">This verified bundle is retained but remote delivery is disabled.</p></div>
-        ) : <p className="text-sm text-muted-foreground">No verified bundle has been selected yet. Complete a CLI upload, then select it below.</p>}
-        <div className="mt-6 rounded-xl border bg-muted/35 p-4 text-sm">
-          <p className="font-medium">Device behavior</p>
-          <p className="mt-1 text-xs text-muted-foreground">Standard promotions activate on the next feature open. A force command asks a mounted view to reload only after the bundle is verified and installed.</p>
-        </div>
+          <div><p className="font-mono text-xs text-muted-foreground">{deployment.bundleId}</p><p className="mt-1.5 text-xs text-muted-foreground">This verified bundle remains selected while delivery is disabled.</p></div>
+        ) : <p className="text-xs text-muted-foreground">Select a verified bundle from the table to prepare the deployment.</p>}
+        <p className="border-t pt-3 text-xs leading-5 text-muted-foreground">Standard promotions activate on the next feature open. Force reload is available only while selecting a bundle.</p>
       </CardContent>
-    </Card>
-  );
-}
-
-function TrustCard() {
-  return (
-    <Card className="bg-[linear-gradient(145deg,oklch(0.21_0.035_258),oklch(0.16_0.025_258))] text-white shadow-xl shadow-blue-950/15">
-      <CardHeader>
-        <div className="grid size-9 place-items-center rounded-lg bg-white/10"><ShieldCheck className="size-5 text-blue-200" aria-hidden="true" /></div>
-        <CardTitle className="mt-2 text-base text-white">Trust status</CardTitle>
-        <CardDescription className="text-slate-300">Artifacts reach this list only after Worker verification.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2 text-sm text-slate-200"><p>Worker-signed deployment</p><p>R2 object SHA-256</p><p>Immutable bundle bytes</p></CardContent>
     </Card>
   );
 }
@@ -249,14 +225,14 @@ function BundleTable({ bundles, selectedId, onSelect }: {
   onSelect: (bundle: Bundle) => void;
 }) {
   return (
-    <Card className="mt-6 overflow-hidden shadow-xl shadow-slate-950/[0.03]">
-      <CardHeader className="border-b"><div><CardTitle>Verified bundles</CardTitle><CardDescription>Only bundles completed by the trusted CLI are listed here.</CardDescription></div></CardHeader>
+    <Card className="min-h-[28rem] shadow-sm">
+      <CardHeader className="border-b"><div><CardTitle>Verified bundles</CardTitle><CardDescription>Choose the next deployment from CLI-uploaded releases.</CardDescription></div><CardAction><Badge variant="outline">{bundles.length} releases</Badge></CardAction></CardHeader>
       <CardContent className="px-0 pb-0">
         {bundles.length === 0 ? <p className="p-5 text-sm text-muted-foreground">No verified bundles have been uploaded for this feature.</p> : (
           <Table>
             <TableHeader><TableRow><TableHead className="pl-5">Bundle</TableHead><TableHead>Status</TableHead><TableHead className="hidden md:table-cell">Archive</TableHead><TableHead className="hidden lg:table-cell">Created</TableHead><TableHead className="w-36 text-right">Action</TableHead></TableRow></TableHeader>
             <TableBody>{bundles.map((bundle) => (
-              <TableRow key={bundle.id}>
+              <TableRow className={bundle.id === selectedId ? 'bg-primary/[0.045] hover:bg-primary/[0.07]' : undefined} key={bundle.id}>
                 <TableCell className="pl-5"><div className="flex items-center gap-3"><div className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground"><FileArchive className="size-4" aria-hidden="true" /></div><div><p className="font-medium">{bundle.version}</p><p className="mt-0.5 max-w-44 truncate font-mono text-xs text-muted-foreground sm:max-w-72">{bundle.id}</p></div></div></TableCell>
                 <TableCell>{statusBadge(bundle.status)}</TableCell>
                 <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">{formatBytes(bundle.archiveBytes)} · {shortHash(bundle.archiveSha256)}</TableCell>
@@ -296,11 +272,11 @@ function ConsoleContent({ overview, pending, onToggle, onSelect }: {
   onSelect: (bundle: Bundle) => void;
 }) {
   const activeBundle = overview.bundles.find((bundle) => bundle.status === 'active');
+  const deploymentState = overview.deployment.enabled ? 'Remote delivery is enabled' : 'Remote delivery is disabled';
   return (
-    <section className="mx-auto max-w-6xl px-4 py-7 sm:px-7 lg:py-9">
-      <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="mb-2 text-sm text-muted-foreground">Deployment / {feature}</p><h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Release delivery</h1><p className="mt-1 max-w-2xl text-sm text-muted-foreground">Select a verified CLI-uploaded bundle, then enable or disable remote delivery.</p></div><Badge variant="outline">Revision {overview.deployment.revision}</Badge></div>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]"><DeploymentCard activeBundle={activeBundle} deployment={overview.deployment} onToggle={onToggle} pending={pending} /><TrustCard /></div>
-      <BundleTable bundles={overview.bundles} onSelect={onSelect} selectedId={overview.deployment.bundleId} />
+    <section className="mx-auto max-w-7xl px-4 py-5 sm:px-7 lg:py-7">
+      <div className="mb-5 flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">Deployment / {feature}</p><h1 className="mt-1 text-2xl font-semibold tracking-tight">Release delivery</h1></div><div className="flex flex-wrap items-center gap-2 text-sm"><Badge variant={overview.deployment.enabled ? 'default' : 'secondary'}>{deploymentState}</Badge><Badge variant="outline">Revision {overview.deployment.revision}</Badge></div></div>
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]"><BundleTable bundles={overview.bundles} onSelect={onSelect} selectedId={overview.deployment.bundleId} /><aside className="lg:sticky lg:top-20"><DeploymentCard activeBundle={activeBundle} deployment={overview.deployment} onToggle={onToggle} pending={pending} /></aside></div>
     </section>
   );
 }

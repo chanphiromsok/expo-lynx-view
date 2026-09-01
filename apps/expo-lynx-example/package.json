@@ -5,7 +5,7 @@
   "dependencies": {
     "expo": "~57.0.16",
     "expo-constants": "~17.0.8",
-    "expo-lynx": "workspace:*",
+    "expo-lynx-view": "workspace:*",
     "react": "19.2.3",
     "react-native": "0.86.2",
     "react-native-webview": "~13.16.0",

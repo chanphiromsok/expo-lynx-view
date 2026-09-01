@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "dev:device": "node scripts/dev.mjs --lan",
     "build": "pnpm typecheck && vite build",
     "preview": "pnpm build && wrangler dev --local --port 8787",
     "deploy": "pnpm build && wrangler deploy",

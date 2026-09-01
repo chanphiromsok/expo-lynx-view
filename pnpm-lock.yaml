@@ -128,7 +128,7 @@ importers:
       expo-constants:
         specifier: ~17.0.8
         version: 17.0.8(expo@57.0.17)(react-native@0.86.2(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.2.18)(react@19.2.3)(supports-color@10.2.2))(supports-color@8.1.1)
-      expo-lynx:
+      expo-lynx-view:
         specifier: workspace:*
         version: link:../../packages/expo-lynx
       react:

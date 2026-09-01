@@ -4,7 +4,7 @@ Pod::Spec.new do |s|
   s.summary        = 'Embed Lynx views in Expo and React Native apps'
   s.description    = 'An Expo module that hosts the Lynx iOS rendering engine in a native view.'
   s.author         = 'Rom'
-  s.homepage       = 'https://github.com/chanphiromsok/expo-lynx'
+  s.homepage       = 'https://github.com/chanphiromsok/expo-lynx-view'
   s.platforms      = { :ios => '16.4' }
   s.source         = { git: '' }
   s.static_framework = true

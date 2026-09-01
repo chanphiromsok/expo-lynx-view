@@ -1,20 +1,18 @@
 # Expo Lynx monorepo
 
-This repository contains the iOS Expo module that embeds Lynx mini-apps, a
-signed-bundle producer CLI, an example Expo application, and the starting
-point for the Cloudflare delivery service.
+This repository contains the iOS Expo module that embeds Lynx mini-apps, the
+release CLI, an example Expo application, and the Cloudflare delivery console.
 
 The intended production model is deliberately different from loading an
 arbitrary URL in a WebView:
 
 1. A mini-app feature has an embedded static bundle in the native app, which
    is always available as an offline fallback.
-2. The release producer builds that feature, packages its bundle and sidecars
-   into a deterministic `release.zip`, and signs an exact release payload with
-   the app's private RSA key.
-3. The native app uses its embedded public key to verify a signed channel
-   response and release before installing it. A verified release becomes active
-   on the next mini-app open; it never replaces a mounted view.
+2. The release CLI builds and packages an immutable `release.zip`, then uploads
+   it directly to R2 through a Worker-issued, checksum-bound PUT URL.
+3. The Worker verifies the ZIP, updates the one active deployment in D1, and
+   signs the exact deployment response. The native app verifies that response
+   with its embedded public key before installation.
 
 The implementation is iOS-first. Android delivery is intentionally deferred.
 
@@ -47,44 +45,35 @@ the normal setup or bundle-release workflow.
 
 | Path | Purpose |
 | --- | --- |
-| `packages/expo-lynx` | Expo native module, config plugin, and iOS managed-bundle implementation. |
-| `packages/lynx-bundle-cli` | Builds, packages, hashes, and signs each Lynx feature. |
+| `packages/expo-lynx` | Source for the published `expo-lynx-view` Expo native module, config plugin, and iOS managed-bundle implementation. |
+| `packages/lynx-bundle-cli` | Builds, packages, hashes, and uploads each Lynx feature. |
 | `apps/expo-lynx-example` | Reference Expo app and its `delivery` mini-app feature. |
 | `apps/expo-lynx-example/features/delivery` | The ReactLynx mini-app source, now part of this monorepo. |
 | `apps/docs` | MDX documentation website for setup, managed delivery, CLI, and troubleshooting. |
 | `apps/console` | Unified TanStack operator console and Elysia/Cloudflare Worker for signed delivery artifacts. |
-| `scripts/serve-local-lynx-release.mjs` | Local signed-release server for simulator or trusted-LAN device testing. |
 
 ## Everyday mini-app workflow
 
-Use the friendly `lynx` command for normal development. It generates internal
-release identities and local publisher tokens for you; no manual date version,
-release ID, PEM path, output directory, or upload route is required.
+Use these three commands for normal local development. No Wrangler flags or
+release directory paths are required.
 
 ```sh
-# First-time development-key setup. It deliberately requires this explicit
-# flag because it replaces the public key embedded in the example app.
-pnpm lynx local init --replace-app-key
+# Terminal 1: local Worker plus browser delivery console.
+pnpm lynx console
 
-# Starts the LAN-reachable local delivery service and stores its token only in
-# ignored .local-lynx-delivery/ state.
-pnpm lynx local start
+# Terminal 2: Expo example app for device testing.
+pnpm start
 
-# Rebuild static native-resource input from the actual delivery source.
-pnpm lynx bundle delivery
-
-# Build → sign → upload → promote the single active deployment.
+# Terminal 3: after changing apps/expo-lynx-example/features/delivery.
+# Builds, packages, and uploads. Then select and enable it in the console.
 pnpm lynx release delivery
-
-# Inspect the current local channel head.
-pnpm lynx status delivery
 ```
 
 `pnpm lynx release delivery` generates an immutable release ID and a display
-version automatically. Use `--draft` to package without publishing. The
-delivery contract has one fixed deployment named `active`. A changed
-embedded public key, feature registry, or channel-host mapping still requires
-one Expo prebuild and internal iOS build; a later `lynx release` does not.
+version automatically. It reads the local control token from the ignored
+`apps/console/.dev.vars` file and targets `http://127.0.0.1:8787` by default.
+Use `--draft` to package without publishing. A changed embedded public key or
+app endpoint requires a new native binary; a later `lynx release` does not.
 
 ## Set up a mini-app feature
 
@@ -164,7 +153,7 @@ public key and embedded resources in the Expo plugin:
   "expo": {
     "plugins": [
       [
-        "expo-lynx",
+        "expo-lynx-view",
         {
           "embeddedBundlesPath": "./generated/expo-lynx/embedded",
           "publicKeyPath": "./keys/lynx/updates.public.pem",

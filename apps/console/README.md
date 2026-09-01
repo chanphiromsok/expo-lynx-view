@@ -9,7 +9,8 @@ Worker.
 Review [SPEC.md](./SPEC.md) before work starts. It links the authoritative
 three-part v2 contract for the CLI, Worker, and mobile client.
 
-Start it from the repository root:
+Start it from the repository root. This is the phone-friendly command: it runs
+the Worker on your LAN and keeps the browser console on the Mac.
 
 ```sh
 pnpm lynx console
@@ -91,9 +92,25 @@ the public deployment response when a device fetches it.
 
 ## Testing Local
 
- pnpm exec wrangler dev \
-  --local \
-  --persist-to .wrangler/delivery-worker-v2 \
-  --ip 0.0.0.0 \
-  --port 8787 \
-  --var LOCAL_UPLOADS:true
+Use three terminals from the repository root:
+
+```sh
+# Terminal 1 — Worker + browser console. It prints the current LAN URL.
+pnpm lynx console
+
+# Terminal 2 — Expo example for the iPhone.
+pnpm start
+
+# Terminal 3 — after editing features/delivery, build and upload a new bundle.
+pnpm lynx release delivery
+```
+
+The release command reads `CONTROL_TOKEN` from the ignored
+`apps/console/.dev.vars` file and sends it only to `http://127.0.0.1:8787`.
+It never uploads the token to R2. Open the browser console URL, enter the same
+control token, select the new verified bundle, then enable delivery.
+
+For a physical phone, copy the LAN address printed by Terminal 1 into the
+example app's `deliveryEndpoints.delivery` value. The endpoint change is
+native build configuration; it needs a new app binary only when that address
+or the embedded public key changes—not for each release.

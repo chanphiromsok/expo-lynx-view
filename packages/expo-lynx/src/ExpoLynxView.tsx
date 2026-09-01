@@ -29,7 +29,9 @@ const ExpoLynxView = forwardRef<ExpoLynxViewRef, ExpoLynxViewProps>(
       } else if (source.kind === 'embedded') {
         nativeURL = 'static.lynx';
       } else {
-        throw new Error('expo-lynx: managed bundle delivery is currently implemented on iOS only.');
+        throw new Error(
+          'expo-lynx-view: managed bundle delivery is currently implemented on iOS only.'
+        );
       }
     }
 

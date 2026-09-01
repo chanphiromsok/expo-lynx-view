@@ -2,7 +2,7 @@
  * Augmented by the app-local `generated/expo-lynx/lynx-features.d.ts` file
  * written by the Expo config plugin during prebuild.
  *
- * The empty base keeps `expo-lynx` usable by libraries and by applications
+ * The empty base keeps `expo-lynx-view` usable by libraries and by applications
  * before their first prebuild. Once generated, `LynxFeatureName` becomes the
  * exact union of configured feature IDs and editors can autocomplete them.
  */

@@ -22,7 +22,7 @@ export type BuildMode = 'debug' | 'release';
 export function resolveSource(source: LynxSource, mode: BuildMode): LynxSource {
   if (mode === 'release' && source.kind === 'development') {
     throw new Error(
-      'expo-lynx: development source is forbidden in Release builds. ' +
+      'expo-lynx-view: development source is forbidden in Release builds. ' +
         'Use kind: "managed" with a verified channel pointer.'
     );
   }

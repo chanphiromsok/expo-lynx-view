@@ -1,5 +1,5 @@
 import Constants from "expo-constants";
-import { ExpoLynxView, type LynxSource } from "expo-lynx";
+import { ExpoLynxView, type LynxSource } from "expo-lynx-view";
 import { useState } from "react";
 import {
   ActivityIndicator,

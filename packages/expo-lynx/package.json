@@ -1,5 +1,5 @@
 {
-  "name": "expo-lynx",
+  "name": "expo-lynx-view",
   "version": "0.1.0",
   "description": "Embed Lynx views in Expo and React Native apps on iOS",
   "main": "build/index.js",
@@ -16,16 +16,28 @@
   "keywords": [
     "react-native",
     "expo",
-    "expo-lynx",
+    "expo-lynx-view",
     "ExpoLynx"
   ],
-  "repository": "https://github.com/chanphiromsok/expo-lynx",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chanphiromsok/expo-lynx-view.git"
+  },
   "bugs": {
-    "url": "https://github.com/chanphiromsok/expo-lynx/issues"
+    "url": "https://github.com/chanphiromsok/expo-lynx-view/issues"
   },
   "author": "Rom <chanphiromsok2109@gmail.com> (https://github.com/chanphiromsok)",
   "license": "MIT",
-  "homepage": "https://github.com/chanphiromsok/expo-lynx#readme",
+  "homepage": "https://github.com/chanphiromsok/expo-lynx-view#readme",
+  "files": [
+    "android/src",
+    "android/build.gradle",
+    "app.plugin.js",
+    "build",
+    "expo-module.config.json",
+    "ios/*.podspec",
+    "ios/*.swift"
+  ],
   "dependencies": {},
   "devDependencies": {
     "@babel/core": "^7.26.0",

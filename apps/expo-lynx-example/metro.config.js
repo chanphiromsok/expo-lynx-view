@@ -25,7 +25,7 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     );
   }
 
-  if (moduleName === 'expo-lynx') {
+  if (moduleName === 'expo-lynx-view') {
     return {
       filePath: path.join(moduleRoot, 'src', 'index.ts'),
       type: 'sourceFile',

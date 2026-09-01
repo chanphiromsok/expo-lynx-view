@@ -1,4 +1,4 @@
-# expo-lynx
+# expo-lynx-view
 
 Embed a compiled Lynx page inside an Expo or React Native app on iOS. The module wraps the native `LynxView` from Lynx 4.0 and keeps its exact layout constraints synchronized with the React Native view.
 
@@ -11,7 +11,7 @@ Add this package to an Expo development build, then regenerate/install the iOS n
   "expo": {
     "plugins": [
       [
-        "expo-lynx",
+        "expo-lynx-view",
         {
           "bundledResources": ["./assets/main.lynx", "./assets/static"]
         }
@@ -33,7 +33,7 @@ The config plugin keeps Lynx's CocoaPods target on its required GNU C++ dialect,
 ## Use
 
 ```tsx
-import { ExpoLynxView } from 'expo-lynx';
+import { ExpoLynxView } from 'expo-lynx-view';
 
 export function LynxScreen() {
   return (
@@ -62,7 +62,7 @@ For a bundled resource, add the `.lynx` bundle and every Rspeedy sidecar directo
 
 When V2 `embeddedBundlesPath` is configured, Expo prebuild validates its
 `registry.json` and writes a sibling declaration file at
-`generated/expo-lynx/lynx-features.d.ts`. The file augments `expo-lynx` with
+`generated/expo-lynx/lynx-features.d.ts`. The file augments `expo-lynx-view` with
 the exact canonical feature IDs. After prebuild, editors autocomplete those IDs
 and TypeScript rejects an unknown `source.feature` value:
 
@@ -116,7 +116,7 @@ installs the ZIP; that release activates on the next mini-app open.
   "expo": {
     "plugins": [
       [
-        "expo-lynx",
+        "expo-lynx-view",
         {
           "embeddedBundlesPath": "./generated/expo-lynx/embedded",
           "publicKeyPath": "./keys/lynx/updates.public.pem",
@@ -195,7 +195,7 @@ or `pending`; `pending` means the verified release is ready for the next open,
 not that the visible mini-app changed. The view ref retains only `reload()`.
 
 ```tsx
-import ExpoLynx, { ExpoLynxView } from 'expo-lynx';
+import ExpoLynx, { ExpoLynxView } from 'expo-lynx-view';
 
 const result = await ExpoLynx.checkForUpdate({
   feature: 'delivery',

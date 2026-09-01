@@ -15,7 +15,7 @@ root.render(
       <Routes>
         {/* Default landing for the demo: batch tracking. The games-list
             app lives at /batches so it's still reachable. */}
-        <Route path="/" element={<App />} />
+        <Route path="/" element={<BatchTrackingScreen />} />
         <Route path="/batches" element={<App />} />
         <Route path="/game-details/:id" element={<GameDetails />} />
         <Route path="/game-event/:id" element={<GameEventScreen />} />

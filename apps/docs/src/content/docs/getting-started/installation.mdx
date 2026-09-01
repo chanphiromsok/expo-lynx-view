@@ -22,14 +22,15 @@ The example already depends on the workspace package. For another workspace
 app, add this dependency and then install from the repository root:
 
 ```sh
-pnpm --filter your-expo-app add expo-lynx@workspace:*
+pnpm --filter your-expo-app add expo-lynx-view@workspace:*
 pnpm install
 ```
 
-`expo-lynx` is not published to a package registry yet, so do not use a
-registry install command until a published version exists. For an app outside
-this monorepo, first publish the package or use your organization's private
-package source; then install that exact published version.
+After `expo-lynx-view` has been published, an app outside this monorepo installs it with:
+
+```sh
+pnpm add expo-lynx-view
+```
 
 ## 2. Create the embedded baseline and local signing setup
 
@@ -44,7 +45,7 @@ root:
 pnpm lynx init
 ```
 
-`init` checks or configures the `expo-lynx` plugin in `app.json`, creates a
+`init` checks or configures the `expo-lynx-view` plugin in `app.json`, creates a
 matching local signing pair when one does not exist, and builds every embedded
 baseline from `lynx-bundle.config.mjs`. The private key and publisher settings
 stay in ignored local state; the public key is safe to compile into the app.
@@ -85,14 +86,14 @@ app. Never commit a private signing key or put it in an Expo `extra` field.
 ## 3. Review the Expo plugin configuration
 
 `pnpm lynx init` writes missing Expo Lynx configuration to `app.json`. Review
-the result; the example's [`app.json`](https://github.com/chanphiromsok/expo-lynx/blob/main/apps/expo-lynx-example/app.json)
+the result; the example's [`app.json`](https://github.com/chanphiromsok/expo-lynx-view/blob/main/apps/expo-lynx-example/app.json)
 uses this configuration shape:
 
 ```json
 {
   "expo": {
     "plugins": [[
-      "expo-lynx",
+      "expo-lynx-view",
       {
         "embeddedBundlesPath": "./generated/expo-lynx/embedded",
         "publicKeyPath": "./keys/lynx/updates.public.pem",
@@ -142,7 +143,7 @@ release.
 ## 5. Render a managed mini-app
 
 ```tsx
-import { ExpoLynxView } from 'expo-lynx';
+import { ExpoLynxView } from 'expo-lynx-view';
 
 export function DeliveryScreen() {
   return (
