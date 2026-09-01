@@ -152,11 +152,12 @@ cd apps/expo-lynx-example/ios
 LYNX_ALLOW_LOCAL_MANAGED_RELEASE=1 pod install
 ```
 
-The Podfile applies the Swift compilation condition to the `ExpoLynx` pod,
-where `ExpoLynxView.swift` is compiled. The native guard is
+The Podfile applies the Swift compilation condition to the `ExpoLynx` pod's
+Release configuration. The native guard is
 `#if !DEBUG && !LYNX_ALLOW_LOCAL_MANAGED_RELEASE`. Do not set this environment
-variable for production pod installs: the flag permits unsigned HTTP managed
-endpoints for local testing.
+variable for production pod installs: the flag permits cleartext HTTP managed
+endpoints for local testing. Deployment signatures and bundle hashes are still
+verified.
 
 ### React Native splash while a managed bundle loads
 
