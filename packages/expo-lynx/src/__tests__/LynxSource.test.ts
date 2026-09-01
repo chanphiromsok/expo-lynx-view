@@ -65,6 +65,7 @@ describe('LynxErrorEvent', () => {
       'download',
       'checksum',
       'resource',
+      'archive',
       'lynx',
     ];
     stages.forEach((stage) => {
@@ -86,6 +87,7 @@ describe('LynxErrorEvent', () => {
       'download',
       'checksum',
       'resource',
+      'archive',
       'lynx',
     ];
     expect(stages).not.toContain('crash_history');

@@ -31,7 +31,14 @@ export type LynxLoadEvent = {
 };
 
 export type LynxErrorStage =
-  'manifest' | 'signature' | 'compatibility' | 'download' | 'checksum' | 'resource' | 'lynx';
+  | 'manifest'
+  | 'signature'
+  | 'compatibility'
+  | 'download'
+  | 'checksum'
+  | 'resource'
+  | 'archive'
+  | 'lynx';
 
 export type LynxErrorEvent = {
   feature: string;
@@ -41,7 +48,14 @@ export type LynxErrorEvent = {
 };
 
 export type LynxUpdatePhase =
-  'checking' | 'disabled' | 'no-update' | 'downloaded' | 'staged' | 'reloading' | 'reloaded' | 'error';
+  | 'checking'
+  | 'disabled'
+  | 'no-update'
+  | 'downloaded'
+  | 'staged'
+  | 'reloading'
+  | 'reloaded'
+  | 'error';
 
 /** Privacy-safe, lifecycle-level delivery telemetry for a managed source. */
 export type LynxUpdateEvent = {

@@ -6,10 +6,8 @@ import {
   buildEmbedded,
   buildFeature,
   checkEmbedded,
-  generateKeys,
   loadConfigAsync,
   packRelease,
-  signPayloadFile,
 } from '../src/index.mjs';
 
 const [command, ...argumentsList] = process.argv.slice(2);
@@ -41,11 +39,7 @@ function required(value, name) {
 
 async function main() {
   if (!command || command === '--help') {
-    process.stdout.write(`Usage:\n  lynx-bundle build <feature> [--config file]\n  lynx-bundle build-embedded [feature...] --runtime-version version [--config file]\n  lynx-bundle check-embedded --runtime-version version [--config file]\n  lynx-bundle pack <feature> --release-id id --version version --platform ios --runtime-version version [--config file]\n  lynx-bundle keys generate --output-dir directory\n  lynx-bundle sign-release payload.json [--config file] [--output file]\n  lynx-bundle sign-channel payload.json [--config file] [--output file]\n`);
-    return;
-  }
-  if (command === 'keys' && argumentsList[0] === 'generate') {
-    writeResult(generateKeys(required(option('--output-dir'), '--output-dir')), option('--output'));
+    process.stdout.write(`Usage:\n  lynx-bundle build <feature> [--config file]\n  lynx-bundle build-embedded [feature...] --runtime-version version [--config file]\n  lynx-bundle check-embedded --runtime-version version [--config file]\n  lynx-bundle pack <feature> --release-id id --version version --platform ios --runtime-version version [--config file]\n`);
     return;
   }
   const config = await loadConfigAsync({ configPath: option('--config') });
@@ -71,13 +65,7 @@ async function main() {
       version: required(option('--version'), '--version'),
       platform: required(option('--platform'), '--platform'),
       runtimeVersion: required(option('--runtime-version'), '--runtime-version'),
-      minHostVersion: option('--min-host-version', '1.0.0'),
-      lynxEngineVersion: option('--lynx-engine-version', '4.0.0'),
     }), option('--output'));
-    return;
-  }
-  if (command === 'sign-release' || command === 'sign-channel') {
-    writeResult(signPayloadFile(config, required(positional()[0], 'payload path'), command === 'sign-release' ? 'lynx-release' : 'lynx-channel'), option('--output'));
     return;
   }
   throw new Error(`Unknown command: ${command}`);

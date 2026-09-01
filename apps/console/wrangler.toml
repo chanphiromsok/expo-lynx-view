@@ -5,7 +5,7 @@ compatibility_date = "2026-08-28"
 [assets]
 directory = "dist"
 not_found_handling = "single-page-application"
-run_worker_first = [ "/api", "/api/*", "/health", "/v1", "/v1/*" ]
+run_worker_first = [ "/__local-r2", "/__local-r2/*", "/api", "/api/*", "/health", "/v1", "/v1/*" ]
 
 [[r2_buckets]]
 binding = "ARTIFACTS"

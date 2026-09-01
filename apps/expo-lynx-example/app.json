@@ -10,7 +10,7 @@
           "embeddedBundlesPath": "./generated/expo-lynx/embedded",
           "publicKeyPath": "./keys/lynx/updates.public.pem",
           "deliveryEndpoints": {
-            "delivery": "http://192.168.18.144:3000/v1/deploy/delivery"
+            "delivery": "http://192.168.28.196:8787/v1/deploy/delivery"
           }
         }
       ]

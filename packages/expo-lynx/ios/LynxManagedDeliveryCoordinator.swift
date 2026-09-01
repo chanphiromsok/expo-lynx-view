@@ -2,6 +2,8 @@ import Foundation
 
 enum LynxManagedDeliveryConfiguration {
   private static let infoPlistDeliveryEndpoints = "ExpoLynxDeliveryEndpoints"
+  private static let infoPlistRuntimeVersion = "EXUpdatesRuntimeVersion"
+  private static let legacyInfoPlistRuntimeVersion = "ExpoLynxRuntimeVersion"
 
   static func deploymentURL(feature: String) throws -> URL {
     guard let endpoints = Bundle.main.object(
@@ -31,6 +33,19 @@ enum LynxManagedDeliveryConfiguration {
       }
     #endif
     return url
+  }
+
+  static func runtimeVersion() throws -> String {
+    let value = (Bundle.main.object(forInfoDictionaryKey: infoPlistRuntimeVersion) as? String)
+      ?? (Bundle.main.object(forInfoDictionaryKey: legacyInfoPlistRuntimeVersion) as? String)
+    guard let value, !value.isEmpty, value.utf8.count <= 128, !value.contains("\0") else {
+      throw LynxDeliveryError(
+        stage: .compatibility,
+        code: "ERR_LYNX_RUNTIME_CONFIGURATION",
+        message: "No build-time runtime version is configured for managed Lynx delivery."
+      )
+    }
+    return value
   }
 }
 
@@ -79,8 +94,9 @@ actor LynxManagedDeliveryCoordinator {
   ) async throws -> LynxManagedUpdateCheckResult {
     let state = await LynxManagedDeploymentState.shared.recover(feature: feature)
     let result = try await LynxManagedBundleStore.shared.checkForUpdate(
-      deploymentEnvelopeURL: deploymentURL,
+      deploymentURL: deploymentURL,
       expectedFeature: feature,
+      expectedRuntimeVersion: try LynxManagedDeliveryConfiguration.runtimeVersion(),
       eTag: state.lastETag,
       lastRevision: state.lastRevision,
       blockedReleaseIDs: Set(state.failedReleaseIDs)

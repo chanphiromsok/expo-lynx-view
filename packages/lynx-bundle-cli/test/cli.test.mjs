@@ -14,11 +14,9 @@ function run(root, argumentsList) {
   return spawnSync(process.execPath, [cli, ...argumentsList], { cwd: root, encoding: 'utf8' });
 }
 
-test('the public CLI creates keys, packages an iOS release, and rejects Android packaging', () => {
+test('the public CLI packages an iOS release and rejects Android packaging', () => {
   const root = mkdtempSync(resolve(tmpdir(), 'lynx-bundle-cli-command-'));
   cpSync(fixtureRoot, root, { recursive: true });
-  const keyResult = run(root, ['keys', 'generate', '--output-dir', './keys']);
-  assert.equal(keyResult.status, 0, keyResult.stderr);
   const packResult = run(root, [
     'pack',
     'shopping',
@@ -46,5 +44,5 @@ test('the public CLI creates keys, packages an iOS release, and rejects Android 
     'expo-57',
   ]);
   assert.notEqual(androidResult.status, 0);
-  assert.match(androidResult.stderr, /iOS release packaging only/);
+  assert.match(androidResult.stderr, /supports iOS only/);
 });

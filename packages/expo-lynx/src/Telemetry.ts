@@ -62,7 +62,6 @@ export function safeUpdateEvent(input: LynxUpdateEvent): LynxUpdateEvent | null 
   if (input.message && containsForbidden(input.message)) return null;
   return {
     feature: input.feature,
-    channel: input.channel,
     phase: input.phase,
     ...(input.releaseId ? { releaseId: input.releaseId.slice(0, 128) } : {}),
     ...(input.version ? { version: input.version.slice(0, 128) } : {}),

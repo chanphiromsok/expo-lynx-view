@@ -12,7 +12,7 @@
     "deploy": "pnpm build && wrangler deploy",
     "test": "node --experimental-strip-types tests/public-delivery.test.ts && node --experimental-strip-types tests/control-api.test.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
-    "db:migrate:local": "wrangler d1 migrations apply lynx-delivery --local --persist-to .wrangler/delivery-v2",
+    "db:migrate:local": "wrangler d1 migrations apply lynx-delivery --local --persist-to .wrangler/delivery-worker-v2",
     "lint": "oxlint",
     "format": "oxfmt"
   },

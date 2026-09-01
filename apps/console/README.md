@@ -6,9 +6,8 @@ with HMR alongside the local Elysia Worker; the same package builds and deploys
 the console assets, public delivery routes, D1 schema, and R2 bindings as one
 Worker.
 
-Review the small implementation contract in [SPEC.md](./SPEC.md) before work
-starts. The broader production scope, milestones, launch gates, and deferred
-work are defined in [MVP.md](./MVP.md).
+Review [SPEC.md](./SPEC.md) before work starts. It links the authoritative
+three-part v2 contract for the CLI, Worker, and mobile client.
 
 Start it from the repository root:
 
@@ -30,14 +29,14 @@ pnpm lynx console
 # Public Worker route contract, without Wrangler or a native build.
 pnpm --filter @expo-lynx/delivery-console test
 
-# D1's checked-in initial schema, applied only to local Worker state.
+# D1's checked-in v2 schema, applied only to local Worker state.
 pnpm --filter @expo-lynx/delivery-console db:migrate:local
 ```
 
-The console deliberately persists v2 local D1 and R2 state in
-`.wrangler/delivery-v2`, separate from the retired channel-based local schema.
-This keeps old local test data intact while a new local database is initialized
-from `migrations/0001_delivery_schema.sql`.
+The console deliberately persists the new local D1 and R2 state in
+`.wrangler/delivery-worker-v2`, separate from earlier local schemas. Existing
+local state is not deleted or migrated automatically; the new directory starts
+with the exact two-table schema in `migrations/0001_delivery_schema.sql`.
 
 Before opening the local console, create one local control credential. It is an
 application-specific admin token, not a Cloudflare API token or R2 key:
@@ -51,11 +50,25 @@ Copy the generated value into the ignored `apps/console/.dev.vars` file:
 
 ```dotenv
 CONTROL_TOKEN="paste-the-generated-value-here"
+LOCAL_UPLOADS="true"
 ```
 
 Restart `pnpm lynx console`, then paste the same value into the console's
 connection screen. Use `wrangler secret put CONTROL_TOKEN` to configure a
-different production secret before deployment.
+different production secret before deployment. `LOCAL_UPLOADS=true` enables a
+short-lived same-origin PUT capability only on loopback local development; do
+not configure it in production.
+
+The public deployment route also needs the one Worker-only signing secret:
+
+```sh
+wrangler secret put DELIVERY_SIGNING_PRIVATE_KEY
+```
+
+It must be a PKCS#8 RSA private-key PEM whose matching public key is embedded
+in the mobile app. The CLI does not receive this key. In production the CLI
+instead receives a checksum-bound R2 presigned PUT URL; it has no R2
+credentials and never sends the control token to that URL.
 
 `pnpm --filter @expo-lynx/delivery-console deploy` first builds the Vite app,
 then deploys the Elysia Worker and its static assets together. Replace the
@@ -71,16 +84,16 @@ a bundle, explicitly request a forced reload, and enable or disable remote
 delivery. TanStack Query owns the one deployment overview cache and updates it
 only after the Worker mutation succeeds.
 
-The browser never receives Cloudflare credentials or either signing key. The
-deployed Worker uses its D1/R2 bindings directly; releases remain signed by a
-trusted local or CI workflow before upload.
+The browser never receives Cloudflare credentials, the Worker private key, or
+an upload URL. The CLI produces unsigned local `release.json` metadata plus
+`release.zip`; the Worker verifies the ZIP after direct R2 upload and signs
+the public deployment response when a device fetches it.
 
-Copy the repository template before connecting the Cloudflare adapter:
+## Testing Local
 
-```sh
-cp .env.lynx-delivery.example .env.lynx-delivery
-```
-
-The real file is ignored by Git. It contains the Cloudflare API token/account
-details, R2 bucket and scoped S3 access keys, D1 database ID, Worker name, and
-the local public verification-key path.
+ pnpm exec wrangler dev \
+  --local \
+  --persist-to .wrangler/delivery-worker-v2 \
+  --ip 0.0.0.0 \
+  --port 8787 \
+  --var LOCAL_UPLOADS:true

@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 1,
   "type": "lynx-deployment",
   "feature": "shopping",
   "revision": 8,

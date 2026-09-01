@@ -4,8 +4,7 @@ CREATE TABLE bundles (
   id TEXT PRIMARY KEY NOT NULL,
   feature_id TEXT NOT NULL,
   version TEXT NOT NULL,
-  manifest_sha256 TEXT NOT NULL,
-  manifest_bytes INTEGER NOT NULL,
+  runtime_version TEXT NOT NULL,
   archive_sha256 TEXT NOT NULL,
   archive_bytes INTEGER NOT NULL,
   created_at TEXT NOT NULL
@@ -20,7 +19,5 @@ CREATE TABLE deployments (
   enabled INTEGER NOT NULL DEFAULT 0,
   force INTEGER NOT NULL DEFAULT 0,
   revision INTEGER NOT NULL DEFAULT 0,
-  envelope_text TEXT,
-  envelope_sha256 TEXT,
   updated_at TEXT NOT NULL
 );

@@ -7,8 +7,7 @@ enum LynxSignatureVerifier {
   enum VerificationError: Error, LocalizedError, Equatable {
     case missingEmbeddedPublicKey
     case invalidEmbeddedPublicKey
-    case malformedEnvelope
-    case unsupportedEnvelope
+    case missingSignature
     case invalidBase64URL
     case invalidSignature
     case invalidPayload
@@ -19,9 +18,8 @@ enum LynxSignatureVerifier {
       switch self {
       case .missingEmbeddedPublicKey: return "ERR_LYNX_TRUST_KEY_MISSING"
       case .invalidEmbeddedPublicKey: return "ERR_LYNX_TRUST_KEY_INVALID"
-      case .malformedEnvelope: return "ERR_LYNX_ENVELOPE_INVALID"
-      case .unsupportedEnvelope: return "ERR_LYNX_ENVELOPE_UNSUPPORTED"
-      case .invalidBase64URL: return "ERR_LYNX_ENVELOPE_BASE64"
+      case .missingSignature: return "ERR_LYNX_SIGNATURE_MISSING"
+      case .invalidBase64URL: return "ERR_LYNX_SIGNATURE_BASE64"
       case .invalidSignature: return "ERR_LYNX_SIGNATURE_INVALID"
       case .invalidPayload: return "ERR_LYNX_SIGNED_PAYLOAD_INVALID"
       case .wrongDocumentType: return "ERR_LYNX_SIGNED_PAYLOAD_TYPE"
@@ -32,50 +30,37 @@ enum LynxSignatureVerifier {
     var errorDescription: String? { code }
   }
 
-  private struct Envelope: Decodable {
-    let schemaVersion: Int
-    let algorithm: String
-    let payload: String
-    let signature: String
-  }
-
   static func verifyEmbedded(
-    envelopeData: Data,
+    documentData: Data,
+    signature: String?,
     expectedType: String,
     expectedFeature: String
   ) throws -> Data {
-    try verify(
-      envelopeData: envelopeData,
+    try verifyDetached(
+      documentData: documentData,
+      signature: signature,
       expectedType: expectedType,
       expectedFeature: expectedFeature,
       publicKeyPEM: try embeddedPublicKeyPEM()
     )
   }
 
-  static func verify(
-    envelopeData: Data,
+  static func verifyDetached(
+    documentData: Data,
+    signature: String?,
     expectedType: String,
     expectedFeature: String,
     publicKeyPEM: Data
   ) throws -> Data {
-    let envelope: Envelope
-    do {
-      envelope = try JSONDecoder().decode(Envelope.self, from: envelopeData)
-    } catch {
-      throw VerificationError.malformedEnvelope
-    }
-    guard envelope.schemaVersion == 1, envelope.algorithm == "RSA-SHA256" else {
-      throw VerificationError.unsupportedEnvelope
-    }
-    let payload = try decodeBase64URL(envelope.payload)
-    let signature = try decodeBase64URL(envelope.signature)
+    guard let signature else { throw VerificationError.missingSignature }
+    let signatureData = try decodeBase64URL(signature)
     let publicKey = try makePublicKey(from: publicKeyPEM)
     var verificationError: Unmanaged<CFError>?
     guard SecKeyVerifySignature(
       publicKey,
       .rsaSignatureMessagePKCS1v15SHA256,
-      payload as CFData,
-      signature as CFData,
+      documentData as CFData,
+      signatureData as CFData,
       &verificationError
     ) else {
       throw VerificationError.invalidSignature
@@ -83,7 +68,7 @@ enum LynxSignatureVerifier {
 
     let signedDocument: [String: Any]
     do {
-      guard let object = try JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+      guard let object = try JSONSerialization.jsonObject(with: documentData) as? [String: Any] else {
         throw VerificationError.invalidPayload
       }
       signedDocument = object
@@ -98,7 +83,7 @@ enum LynxSignatureVerifier {
     guard signedDocument["feature"] as? String == expectedFeature else {
       throw VerificationError.featureMismatch
     }
-    return payload
+    return documentData
   }
 
   static func embeddedPublicKeyPEM(bundle: Bundle = .main) throws -> Data {

@@ -1,11 +1,5 @@
 import {
-  constants,
   createHash,
-  createPrivateKey,
-  createPublicKey,
-  createSign,
-  createVerify,
-  generateKeyPairSync,
 } from 'node:crypto';
 import {
   cpSync,
@@ -119,14 +113,12 @@ export function checkEmbedded(config, runtimeVersion) {
 }
 
 export function packRelease(config, options) {
-  const { featureId, releaseId, version, platform, runtimeVersion, minHostVersion = '1.0.0', lynxEngineVersion = '4.0.0' } = options;
+  const { featureId, releaseId, version, platform, runtimeVersion } = options;
   const feature = getFeature(config, featureId);
   assertReleaseId(releaseId);
   assertDisplayVersion(version);
-  if (platform !== 'ios') throw new Error('S01 currently supports iOS release packaging only.');
+  if (platform !== 'ios') throw new Error('Release packaging currently supports iOS only.');
   assertVersion(runtimeVersion, 'runtimeVersion');
-  assertVersion(minHostVersion, 'minHostVersion');
-  assertVersion(lynxEngineVersion, 'lynxEngineVersion');
 
   const build = buildFeature(config, feature.id);
   const temporary = createSiblingTemporaryDirectory(resolve(config.releaseOutputDir, feature.id, releaseId));
@@ -134,111 +126,25 @@ export function packRelease(config, options) {
     const files = inspectRuntimeFiles(build.outputDirectory);
     const archive = createDeterministicZip(build.outputDirectory, files);
     const archiveHash = sha256(archive);
-    const totalBytes = files.reduce((total, file) => total + file.bytes, 0);
-    const payload = {
-      type: 'lynx-release',
-      feature: feature.id,
-      releaseId,
-      version,
-      platform,
-      compatibility: { runtimeVersion, minHostVersion, lynxEngineVersion },
-      archive: {
-        format: 'zip',
-        url: 'release.zip',
-        sha256: archiveHash,
-        bytes: archive.byteLength,
-        uncompressedBytes: totalBytes,
-        entryCount: files.length,
-      },
-      files: files.map(({ path, bytes, sha256: hash }) => ({ path, bytes, sha256: hash })),
-    };
-    validateReleasePayload(payload, feature.id);
-    const payloadBytes = Buffer.from(`${JSON.stringify(payload)}\n`, 'utf8');
-    const envelope = signPayloadBytes(payloadBytes, 'lynx-release', config.privateKeyPath);
-    const report = {
+    const release = {
       schemaVersion: 1,
       feature: feature.id,
       releaseId,
+      version,
+      runtimeVersion,
       archiveSha256: archiveHash,
       archiveBytes: archive.byteLength,
-      uncompressedBytes: totalBytes,
-      entryCount: files.length,
-      payloadSha256: sha256(payloadBytes),
-      publicKeyFingerprint: publicKeyFingerprint(config.privateKeyPath),
     };
     writeFileSync(resolve(temporary, 'release.zip'), archive, { mode: 0o600 });
-    writeFileSync(resolve(temporary, 'release-payload.json'), payloadBytes, { mode: 0o600 });
-    writeJson(resolve(temporary, 'release-envelope.json'), envelope);
-    writeJson(resolve(temporary, 'packaging-report.json'), report);
+    writeJson(resolve(temporary, 'release.json'), release);
     const destination = resolve(config.releaseOutputDir, feature.id, releaseId);
     atomicReplaceDirectory(temporary, destination);
-    return { outputDirectory: destination, payload, envelope, report };
+    return { outputDirectory: destination, release };
   } catch (error) {
     rmSync(temporary, { recursive: true, force: true });
     throw error;
   } finally {
     rmSync(build.outputDirectory, { recursive: true, force: true });
-  }
-}
-
-export function generateKeys(outputDirectory) {
-  const privatePath = resolve(outputDirectory, 'updates.private.pem');
-  const publicPath = resolve(outputDirectory, 'updates.public.pem');
-  if (existsSync(privatePath) || existsSync(publicPath)) {
-    throw new Error('Refusing to overwrite an existing signing key pair.');
-  }
-  mkdirSync(outputDirectory, { recursive: true, mode: 0o700 });
-  const pair = generateKeyPairSync('rsa', {
-    modulusLength: 3072,
-    publicExponent: 0x10001,
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-  });
-  validatePrivateKey(pair.privateKey);
-  validatePublicKey(pair.publicKey);
-  writeFileSync(privatePath, pair.privateKey, { mode: 0o600, flag: 'wx' });
-  writeFileSync(publicPath, normalizePem(pair.publicKey), { mode: 0o644, flag: 'wx' });
-  return { privateKeyPath: privatePath, publicKeyPath: publicPath, fingerprint: publicKeyFingerprint(privatePath) };
-}
-
-export function signPayloadFile(config, payloadPath, expectedType) {
-  const input = resolve(payloadPath);
-  const bytes = readFileSync(input);
-  return signPayloadBytes(bytes, expectedType, config.privateKeyPath);
-}
-
-export function signPayloadBytes(bytes, expectedType, privateKeyPath) {
-  const payload = parseJson(bytes, 'Payload');
-  validatePayloadForSigning(payload, expectedType);
-  const privateKey = readFileSync(privateKeyPath, 'utf8');
-  validatePrivateKey(privateKey);
-  const signer = createSign('RSA-SHA256');
-  signer.update(bytes);
-  signer.end();
-  const signature = signer.sign({ key: privateKey, padding: constants.RSA_PKCS1_PADDING });
-  return {
-    schemaVersion: 1,
-    algorithm: 'RSA-SHA256',
-    payload: Buffer.from(bytes).toString('base64url'),
-    signature: signature.toString('base64url'),
-  };
-}
-
-export function verifyEnvelope(envelope, publicKeyPath) {
-  if (envelope?.schemaVersion !== 1 || envelope.algorithm !== 'RSA-SHA256') return false;
-  if (typeof envelope.payload !== 'string' || typeof envelope.signature !== 'string') return false;
-  const publicKey = readFileSync(publicKeyPath, 'utf8');
-  try {
-    validatePublicKey(publicKey);
-    const verifier = createVerify('RSA-SHA256');
-    verifier.update(Buffer.from(envelope.payload, 'base64url'));
-    verifier.end();
-    return verifier.verify(
-      { key: publicKey, padding: constants.RSA_PKCS1_PADDING },
-      Buffer.from(envelope.signature, 'base64url')
-    );
-  } catch {
-    return false;
   }
 }
 
@@ -279,13 +185,10 @@ export async function loadConfigAsync({ configPath, cwd = process.cwd() } = {}) 
 function normalizeConfig(raw, configPath) {
   if (!isObject(raw)) throw new Error('lynx-bundle config must export an object.');
   const configDirectory = dirname(configPath);
-  const allowed = new Set(['featuresDir', 'features', 'embeddedOutputDir', 'releaseOutputDir', 'signing']);
+  const allowed = new Set(['featuresDir', 'features', 'embeddedOutputDir', 'releaseOutputDir']);
   assertKnownKeys(raw, allowed, 'config');
   if (!isObject(raw.features) || Object.keys(raw.features).length === 0) throw new Error('config.features must be a non-empty object.');
   if (typeof raw.embeddedOutputDir !== 'string' || !raw.embeddedOutputDir) throw new Error('config.embeddedOutputDir is required.');
-  if (!isObject(raw.signing) || typeof raw.signing.privateKeyPath !== 'string' || !raw.signing.privateKeyPath) {
-    throw new Error('config.signing.privateKeyPath is required.');
-  }
   const featuresDirectory = resolveContained(configDirectory, raw.featuresDir ?? '.');
   const seenPaths = new Set();
   const features = {};
@@ -316,7 +219,6 @@ function normalizeConfig(raw, configPath) {
     features,
     embeddedOutputDir: resolveContained(configDirectory, raw.embeddedOutputDir),
     releaseOutputDir: resolveContained(configDirectory, raw.releaseOutputDir ?? './dist/lynx-releases'),
-    privateKeyPath: resolveContained(configDirectory, raw.signing.privateKeyPath),
   };
 }
 
@@ -575,43 +477,6 @@ function sourceFiles(directory, root) {
     });
 }
 
-function validateReleasePayload(payload, expectedFeature) {
-  validatePayloadForSigning(payload, 'lynx-release');
-  if (payload.feature !== expectedFeature) throw new Error('Release payload feature does not match the selected feature.');
-  if (!isObject(payload.archive) || payload.archive.format !== 'zip') throw new Error('Release archive must be a ZIP.');
-  if (!Array.isArray(payload.files) || payload.files.length !== payload.archive.entryCount) throw new Error('Release archive entry count does not match files.');
-  const bytes = payload.files.reduce((total, file) => total + file.bytes, 0);
-  if (bytes !== payload.archive.uncompressedBytes) throw new Error('Release uncompressed bytes do not match files.');
-  validateFileSet(payload.files);
-  if (payload.files.filter((file) => file.path === ENTRY).length !== 1) throw new Error(`Release must contain exactly one ${ENTRY}.`);
-}
-
-function validatePayloadForSigning(payload, expectedType) {
-  if (!isObject(payload) || payload.type !== expectedType) throw new Error(`Payload type must be ${expectedType}.`);
-  assertFeatureId(payload.feature);
-}
-
-function validatePrivateKey(pem) {
-  const key = createPrivateKey(pem);
-  const details = key.asymmetricKeyDetails;
-  if (key.asymmetricKeyType !== 'rsa' || !details || details.modulusLength < 3072 || Number(details.publicExponent) !== 65537) {
-    throw new Error('Signing key must be RSA with a 3072-bit-or-larger modulus and exponent 65537.');
-  }
-}
-
-function validatePublicKey(pem) {
-  const key = createPublicKey(pem);
-  const details = key.asymmetricKeyDetails;
-  if (key.asymmetricKeyType !== 'rsa' || !details || details.modulusLength < 3072 || Number(details.publicExponent) !== 65537) {
-    throw new Error('Public key must be RSA with a 3072-bit-or-larger modulus and exponent 65537.');
-  }
-}
-
-function publicKeyFingerprint(privateKeyPath) {
-  const privateKey = createPrivateKey(readFileSync(privateKeyPath, 'utf8'));
-  const der = createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
-  return createHash('sha256').update(der).digest('base64url');
-}
 
 function createSiblingTemporaryDirectory(destination) {
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
@@ -696,9 +561,6 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
 }
 
-function normalizePem(pem) {
-  return `${pem.replace(/\r\n/g, '\n').trimEnd()}\n`;
-}
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');

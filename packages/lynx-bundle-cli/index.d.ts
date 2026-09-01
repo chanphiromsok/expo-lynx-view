@@ -16,7 +16,6 @@ export type LynxBundleConfig = {
   features: Record<string, LynxFeatureConfig>;
   embeddedOutputDir: string;
   releaseOutputDir?: string;
-  signing: { privateKeyPath: string };
 };
 
 export type EmbeddedRegistryV1 = {

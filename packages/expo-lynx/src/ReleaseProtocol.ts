@@ -35,8 +35,13 @@ export type SignedEnvelope = {
   signature: string;
 };
 
-export type DeploymentPayload =
+/**
+ * The direct Worker response consumed by the mobile updater. Its exact bytes
+ * are authorized by the detached `lynx-signature` response header.
+ */
+export type DirectDeploymentPayload =
   | {
+      schemaVersion: typeof RELEASE_PROTOCOL_SCHEMA_VERSION;
       type: 'lynx-deployment';
       feature: string;
       revision: number;
@@ -44,13 +49,17 @@ export type DeploymentPayload =
       issuedAt: string;
     }
   | {
+      schemaVersion: typeof RELEASE_PROTOCOL_SCHEMA_VERSION;
       type: 'lynx-deployment';
       feature: string;
       revision: number;
       enabled: true;
       releaseId: string;
-      manifestUrl: string;
-      manifestSha256: string;
+      version: string;
+      runtimeVersion: string;
+      archiveUrl: string;
+      archiveSha256: string;
+      archiveBytes: number;
       force: boolean;
       issuedAt: string;
     };
@@ -186,16 +195,21 @@ export function decodeEnvelopePayload(envelope: SignedEnvelope): ProtocolParseRe
 }
 
 /**
- * Parses a deployment payload after the native verifier has authenticated the
- * envelope. expectedFeature is mandatory domain separation.
+ * Parses a direct deployment response after native code has verified the
+ * detached response signature. expectedFeature is mandatory domain separation.
  */
 export function parseDeploymentPayload(
   input: unknown,
   expectedFeature: string
-): ProtocolParseResult<DeploymentPayload> {
+): ProtocolParseResult<DirectDeploymentPayload> {
   return parseResult(() => {
     assertFeature(expectedFeature);
     const value = parseJsonObject(input);
+    assert(
+      value.schemaVersion === RELEASE_PROTOCOL_SCHEMA_VERSION,
+      'unsupported-schema-version',
+      `Expected schemaVersion ${RELEASE_PROTOCOL_SCHEMA_VERSION}.`
+    );
     assert(
       value.type === 'lynx-deployment',
       'invalid-type',
@@ -211,16 +225,20 @@ export function parseDeploymentPayload(
       value.enabled
         ? [
             'type',
+            'schemaVersion',
             'feature',
             'revision',
             'enabled',
             'releaseId',
-            'manifestUrl',
-            'manifestSha256',
+            'version',
+            'runtimeVersion',
+            'archiveUrl',
+            'archiveSha256',
+            'archiveBytes',
             'force',
             'issuedAt',
           ]
-        : ['type', 'feature', 'revision', 'enabled', 'issuedAt']
+        : ['schemaVersion', 'type', 'feature', 'revision', 'enabled', 'issuedAt']
     );
     assertString(value.feature, 'invalid-feature', 'Deployment feature must be a string.');
     assertFeature(value.feature);
@@ -239,6 +257,7 @@ export function parseDeploymentPayload(
 
     if (!value.enabled) {
       return {
+        schemaVersion: RELEASE_PROTOCOL_SCHEMA_VERSION,
         type: 'lynx-deployment',
         feature: value.feature,
         revision: value.revision,
@@ -249,19 +268,37 @@ export function parseDeploymentPayload(
 
     assertString(value.releaseId, 'invalid-release-id', 'Release ID must be a string.');
     assertReleaseId(value.releaseId);
-    assertString(value.manifestUrl, 'invalid-url', 'Manifest URL must be a string.');
-    assertArtifactUrl(value.manifestUrl, 'manifestUrl');
-    assertSha256(value.manifestSha256, 'manifestSha256');
+    assertString(value.version, 'invalid-version', 'Release version must be a string.');
+    assert(DISPLAY_VERSION.test(value.version), 'invalid-version', 'Release version is not safe.');
+    assertString(value.runtimeVersion, 'invalid-version', 'Runtime version must be a string.');
+    assertProtocolVersion(value.runtimeVersion, 'runtimeVersion');
+    assertString(value.archiveUrl, 'invalid-url', 'Archive URL must be a string.');
+    assertArtifactUrl(value.archiveUrl, 'archiveUrl');
+    assertSha256(value.archiveSha256, 'archiveSha256');
+    assertPositiveSafeInteger(
+      value.archiveBytes,
+      'invalid-size',
+      'archiveBytes must be a positive safe integer.'
+    );
+    assert(
+      value.archiveBytes <= RELEASE_PROTOCOL_LIMITS.maxArchiveBytes,
+      'archive-limit-exceeded',
+      'Archive exceeds the compiled archive-size ceiling.'
+    );
     assert(typeof value.force === 'boolean', 'invalid-force', 'Force must be a boolean.');
 
     return {
+      schemaVersion: RELEASE_PROTOCOL_SCHEMA_VERSION,
       type: 'lynx-deployment',
       feature: value.feature,
       revision: value.revision,
       enabled: true,
       releaseId: value.releaseId,
-      manifestUrl: value.manifestUrl,
-      manifestSha256: value.manifestSha256,
+      version: value.version,
+      runtimeVersion: value.runtimeVersion,
+      archiveUrl: value.archiveUrl,
+      archiveSha256: value.archiveSha256,
+      archiveBytes: value.archiveBytes,
       force: value.force,
       issuedAt: value.issuedAt,
     };
@@ -580,15 +617,19 @@ function assertArtifactUrl(value: string, field: string): void {
       'invalid-url',
       `${field} must not contain credentials.`
     );
-    assert(url.hash.length === 0, 'invalid-url', `${field} must not contain a fragment.`);
+    assert(
+      url.hash.length === 0 && url.search.length === 0,
+      'invalid-url',
+      `${field} must not contain a query or fragment.`
+    );
     return;
   }
   assert(
-    !value.startsWith('/') && !value.includes('?') && !value.includes('#') && !value.includes(':'),
+    !value.startsWith('//') && !value.includes('?') && !value.includes('#') && !value.includes(':'),
     'invalid-url',
     `${field} must be an HTTP(S) URL or a safe relative artifact URL.`
   );
-  assertSafeRelativePath(value);
+  assertSafeRelativePath(value.startsWith('/') ? value.slice(1) : value);
 }
 
 function assertSafeRelativePath(path: string): void {

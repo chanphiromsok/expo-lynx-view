@@ -3,6 +3,7 @@ import Foundation
 
 enum LynxDeliveryStage: String {
   case manifest
+  case signature
   case compatibility
   case download
   case checksum

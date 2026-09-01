@@ -17,6 +17,7 @@ const EMBEDDED_DIRECTORY = 'ExpoLynxEmbedded.bundle';
 const INFO_PLIST_PUBLIC_KEY = 'ExpoLynxPublicKey';
 const INFO_PLIST_PUBLIC_KEY_FINGERPRINT = 'ExpoLynxPublicKeyFingerprint';
 const INFO_PLIST_DELIVERY_ENDPOINTS = 'ExpoLynxDeliveryEndpoints';
+const INFO_PLIST_RUNTIME_VERSION = 'ExpoLynxRuntimeVersion';
 const FEATURE_ID = /^[a-z][a-z0-9-]{0,63}$/;
 const SHA_256 = /^[a-f0-9]{64}$/;
 const MAX_PUBLIC_KEY_BYTES = 16 * 1024;
@@ -395,7 +396,7 @@ function validateEmbeddedBundles(sourcePath) {
     if (JSON.stringify(actual) !== JSON.stringify(declared))
       throw new Error(`expo-lynx embedded baseline is stale or incomplete for ${feature}.`);
   }
-  return { registry, features };
+  return { registry, features, runtimeVersion: registry.runtimeVersion };
 }
 
 function writeFeatureDeclaration(sourcePath, features) {
@@ -509,6 +510,7 @@ function applyV2InfoPlist(infoPlist, projectRoot, options) {
   const embedded = validateEmbeddedBundles(embeddedPath);
   infoPlist[INFO_PLIST_PUBLIC_KEY] = publicKey.pem;
   infoPlist[INFO_PLIST_PUBLIC_KEY_FINGERPRINT] = publicKey.fingerprint;
+  infoPlist[INFO_PLIST_RUNTIME_VERSION] = embedded.runtimeVersion;
   infoPlist[INFO_PLIST_DELIVERY_ENDPOINTS] = normalizeDeliveryEndpoints(
     options.deliveryEndpoints,
     embedded.features
@@ -612,6 +614,7 @@ module.exports._internal = {
   INFO_PLIST_PUBLIC_KEY,
   INFO_PLIST_PUBLIC_KEY_FINGERPRINT,
   INFO_PLIST_DELIVERY_ENDPOINTS,
+  INFO_PLIST_RUNTIME_VERSION,
   addExpoLynxPostInstall,
   addResource,
   applyV2InfoPlist,

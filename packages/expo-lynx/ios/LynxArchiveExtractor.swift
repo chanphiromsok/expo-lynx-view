@@ -11,30 +11,22 @@ enum LynxArchiveLimits {
   static let maxPathDepth = 16
 }
 
-struct LynxArchiveExpectedFile: Sendable {
-  let path: String
-  let bytes: Int64
-  let sha256: String
-}
-
 enum LynxSafeArchive {
   static func extract(
     archiveURL: URL,
-    to directoryURL: URL,
-    expectedFiles: [LynxArchiveExpectedFile]
+    to directoryURL: URL
   ) throws {
-    let expected = Dictionary(uniqueKeysWithValues: expectedFiles.map { ($0.path, $0) })
     try LynxZipArchiveExtractor.extract(
       archiveURL: archiveURL,
-      destinationURL: directoryURL,
-      expectedFiles: expected
+      destinationURL: directoryURL
     )
   }
 }
 
-/// ZIP-only, signed-release extractor. This is adapted from the small zlib
-/// approach reviewed in Hot Updater, narrowed to our exact signed file set:
-/// directories, links, ZIP64, and unknown files are all rejected.
+/// ZIP-only archive extractor. The archive SHA-256 is authenticated by the
+/// signed deployment document; this layer defensively validates every ZIP
+/// entry before extraction. Directories, links, ZIP64, and unsafe features are
+/// rejected.
 private enum LynxZipArchiveExtractor {
   private static let centralSignature: UInt32 = 0x02014b50
   private static let localSignature: UInt32 = 0x04034b50
@@ -53,29 +45,33 @@ private enum LynxZipArchiveExtractor {
 
   static func extract(
     archiveURL: URL,
-    destinationURL: URL,
-    expectedFiles: [String: LynxArchiveExpectedFile]
+    destinationURL: URL
   ) throws {
     let fileSize = try archiveURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) ?? -1
     guard fileSize > 21, fileSize <= LynxArchiveLimits.maxArchiveBytes else { throw invalid("Archive size exceeds limits.") }
     let handle = try FileHandle(forReadingFrom: archiveURL)
     defer { try? handle.close() }
-    let entries = try centralDirectory(handle: handle, fileSize: UInt64(fileSize), expectedFiles: expectedFiles)
-    guard entries.count == expectedFiles.count else { throw invalid("Archive file count differs from signed release.") }
+    let entries = try centralDirectory(handle: handle, fileSize: UInt64(fileSize))
     try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
     var total: UInt64 = 0
     var seen = Set<String>()
+    var storagePaths = Set<String>()
+    var mainBundleCount = 0
     for entry in entries {
-      guard seen.insert(entry.path).inserted, let expected = expectedFiles[entry.path], expected.bytes == Int64(entry.bytes) else { throw invalid("Archive contains an unexpected file.") }
+      guard seen.insert(entry.path).inserted else { throw invalid("Archive contains duplicate files.") }
+      guard storagePaths.insert(entry.path.lowercased()).inserted else {
+        throw invalid("Archive contains case-colliding files.")
+      }
+      if entry.path == "main.lynx.bundle" { mainBundleCount += 1 }
       total += entry.bytes
       guard total <= UInt64(LynxArchiveLimits.maxUncompressedBytes) else { throw invalid("Archive expanded size exceeds limits.") }
       try extract(entry: entry, archive: handle, destinationURL: destinationURL)
     }
-    guard seen.count == expectedFiles.count else { throw invalid("Archive is missing a signed file.") }
+    guard mainBundleCount == 1 else { throw invalid("Archive must contain exactly one main.lynx.bundle.") }
   }
 
   private static func centralDirectory(
-    handle: FileHandle, fileSize: UInt64, expectedFiles: [String: LynxArchiveExpectedFile]
+    handle: FileHandle, fileSize: UInt64
   ) throws -> [Entry] {
     let tailCount = Int(min(fileSize, UInt64(65_557)))
     try handle.seek(toOffset: fileSize - UInt64(tailCount))
@@ -85,7 +81,7 @@ private enum LynxZipArchiveExtractor {
     let disk = tail.u16(end + 4), centralDisk = tail.u16(end + 6), count = tail.u16(end + 10)
     let centralBytes = tail.u32(end + 12), centralOffset = tail.u32(end + 16)
     guard disk == 0, centralDisk == 0, count != .max, centralBytes != .max, centralOffset != .max,
-      count <= LynxArchiveLimits.maxEntries, count == expectedFiles.count,
+      count > 0, count <= LynxArchiveLimits.maxEntries,
       UInt64(centralOffset) + UInt64(centralBytes) <= fileSize else { throw invalid("ZIP64, multi-disk, or oversized ZIP is unsupported.") }
     try handle.seek(toOffset: UInt64(centralOffset))
     var entries: [Entry] = []

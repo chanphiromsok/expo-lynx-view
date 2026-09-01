@@ -110,7 +110,6 @@ describe('safeUpdateEvent', () => {
     expect(
       safeUpdateEvent({
         feature: 'delivery',
-        channel: 'active',
         phase: 'staged',
         releaseId: 'delivery-2026.08.29.1',
         version: '2026.08.29',
@@ -119,7 +118,6 @@ describe('safeUpdateEvent', () => {
       })
     ).toEqual({
       feature: 'delivery',
-      channel: 'active',
       phase: 'staged',
       releaseId: 'delivery-2026.08.29.1',
       version: '2026.08.29',
@@ -132,7 +130,6 @@ describe('safeUpdateEvent', () => {
     expect(
       safeUpdateEvent({
         feature: 'delivery',
-        channel: 'active',
         phase: 'error',
         message: 'HTTP request failed with Authorization: Bearer secret',
       })

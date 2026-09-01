@@ -16,7 +16,4 @@ export default {
   },
   embeddedOutputDir: './generated/expo-lynx/embedded',
   releaseOutputDir: './dist/lynx-releases',
-  signing: {
-    privateKeyPath: './keys/updates.private.pem',
-  },
 };

@@ -4,8 +4,7 @@ export type Bundle = {
   id: string;
   feature: string;
   version: string;
-  manifestSha256: string;
-  manifestBytes: number;
+  runtimeVersion: string;
   archiveSha256: string;
   archiveBytes: number;
   createdAt: string;

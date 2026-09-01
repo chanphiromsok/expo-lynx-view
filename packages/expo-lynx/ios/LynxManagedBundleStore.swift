@@ -149,64 +149,23 @@ actor LynxManagedBundleStore {
     return installed
   }
 
-  /// V2 accepts only an exact signed release envelope. Its archive is never
-  /// trusted until RSA verification, central-directory validation, extraction,
-  /// and per-file hashes have succeeded in an app-private transaction.
-  func install(
-    releaseEnvelopeURL: URL,
-    expectedFeature: String
-  ) async throws -> LynxManagedRelease {
-    let (envelope, response) = try await URLSession.shared.data(for: noCacheURLRequest(releaseEnvelopeURL))
-    try validateHTTPResponse(response, url: releaseEnvelopeURL)
-    return try await install(
-      releaseEnvelopeData: envelope,
-      releaseEnvelopeURL: releaseEnvelopeURL,
-      expectedFeature: expectedFeature
-    )
-  }
-
-  /// Installation still owns the expensive cryptographic, archive, and file
-  /// verification. Deployment checks call this only after a signed pointer has
-  /// identified a different immutable release.
-  func install(
-    releaseEnvelopeData: Data,
-    releaseEnvelopeURL: URL,
-    expectedFeature: String
-  ) async throws -> LynxManagedRelease {
-    let payload = try LynxReleasePayload.decodeVerified(
-      LynxSignatureVerifier.verifyEmbedded(envelopeData: releaseEnvelopeData, expectedType: "lynx-release", expectedFeature: expectedFeature),
-      expectedFeature: expectedFeature
-    )
-    let key = "\(expectedFeature)/\(payload.releaseId)"
-    if let installed = try installedV2Release(feature: expectedFeature, releaseID: payload.releaseId) { return installed }
-    if let task = v2Installs[key] { return try await task.value }
-    let task = Task { [self] in
-      try await performV2Install(
-        payload: payload,
-        envelope: releaseEnvelopeData,
-        envelopeURL: releaseEnvelopeURL
-      )
-    }
-    v2Installs[key] = task
-    defer { v2Installs[key] = nil }
-    return try await task.value
-  }
-
-  /// Reads the small signed deployment envelope with ETag and revision replay
+  /// Fetches the one signed deployment document with ETag and revision replay
   /// protection. Artifact bytes are requested only for a new, unblocked ID.
   func checkForUpdate(
-    deploymentEnvelopeURL: URL,
+    deploymentURL: URL,
     expectedFeature: String,
+    expectedRuntimeVersion: String,
     eTag: String?,
     lastRevision: Int?,
     blockedReleaseIDs: Set<String>
   ) async throws -> LynxDeploymentUpdateResult {
-    let key = "\(expectedFeature)/\(deploymentEnvelopeURL.absoluteString)"
+    let key = "\(expectedFeature)/\(deploymentURL.absoluteString)"
     if let task = deploymentChecks[key] { return try await task.value }
     let task = Task { [self] in
       try await performDeploymentCheck(
-        deploymentEnvelopeURL: deploymentEnvelopeURL,
+        deploymentURL: deploymentURL,
         expectedFeature: expectedFeature,
+        expectedRuntimeVersion: expectedRuntimeVersion,
         eTag: eTag,
         lastRevision: lastRevision,
         blockedReleaseIDs: blockedReleaseIDs
@@ -218,25 +177,32 @@ actor LynxManagedBundleStore {
   }
 
   private func performDeploymentCheck(
-    deploymentEnvelopeURL: URL,
+    deploymentURL: URL,
     expectedFeature: String,
+    expectedRuntimeVersion: String,
     eTag: String?,
     lastRevision: Int?,
     blockedReleaseIDs: Set<String>
   ) async throws -> LynxDeploymentUpdateResult {
-    var request = noCacheURLRequest(deploymentEnvelopeURL)
+    var request = noCacheURLRequest(deploymentURL)
     if let eTag, !eTag.isEmpty { request.setValue(eTag, forHTTPHeaderField: "If-None-Match") }
-    let (deploymentEnvelope, response) = try await URLSession.shared.data(for: request)
+    let (deploymentBytes, response) = try await URLSession.shared.bytes(for: request)
     guard let httpResponse = response as? HTTPURLResponse else {
       throw LynxDeliveryError(stage: .download, code: "ERR_LYNX_HTTP_0", message: "The Lynx deployment response was not HTTP.")
     }
     if httpResponse.statusCode == 304 {
       return .notModified(eTag: httpResponse.value(forHTTPHeaderField: "ETag") ?? eTag)
     }
-    try validateHTTPResponse(httpResponse, url: deploymentEnvelopeURL)
+    try validateHTTPResponse(httpResponse, url: deploymentURL)
+    let deploymentData = try await readBoundedResponse(
+      deploymentBytes,
+      response: httpResponse,
+      limit: 16 * 1024
+    )
     let deployment = try LynxDeploymentPayload.decodeVerified(
       LynxSignatureVerifier.verifyEmbedded(
-        envelopeData: deploymentEnvelope,
+        documentData: deploymentData,
+        signature: httpResponse.value(forHTTPHeaderField: "lynx-signature"),
         expectedType: "lynx-deployment",
         expectedFeature: expectedFeature
       ),
@@ -267,14 +233,18 @@ actor LynxManagedBundleStore {
       return .disabled(eTag: responseETag, revision: deployment.revision)
     }
     guard let releaseID = deployment.releaseId,
-      let manifestURL = deployment.manifestUrl,
-      let manifestSha256 = deployment.manifestSha256,
+      let runtimeVersion = deployment.runtimeVersion,
+      runtimeVersion == expectedRuntimeVersion,
+      let archiveURL = deployment.archiveUrl,
+      let archiveSHA256 = deployment.archiveSha256,
+      let archiveBytes = deployment.archiveBytes,
+      let version = deployment.version,
       let force = deployment.force
     else {
       throw LynxDeliveryError(
-        stage: .manifest,
-        code: "ERR_LYNX_DEPLOYMENT_INVALID",
-        message: "The enabled deployment is missing release fields."
+        stage: .compatibility,
+        code: "ERR_LYNX_RUNTIME_INCOMPATIBLE",
+        message: "The enabled deployment is missing release fields or targets another runtime version."
       )
     }
     if blockedReleaseIDs.contains(releaseID) {
@@ -294,31 +264,14 @@ actor LynxManagedBundleStore {
       )
     }
 
-    let releaseEnvelopeURL = try resolveRemoteURL(manifestURL, relativeTo: deploymentEnvelopeURL)
-    let (releaseEnvelope, releaseResponse) = try await URLSession.shared.data(
-      for: noCacheURLRequest(releaseEnvelopeURL)
-    )
-    try validateHTTPResponse(releaseResponse, url: releaseEnvelopeURL)
-    let releaseHash = SHA256.hash(data: releaseEnvelope).map { String(format: "%02x", $0) }.joined()
-    guard releaseHash == manifestSha256 else {
-      throw LynxDeliveryError(
-        stage: .checksum,
-        code: "ERR_LYNX_DEPLOYMENT_MANIFEST_SHA256",
-        message: "The release envelope does not match the signed deployment."
-      )
-    }
     let release = try await install(
-      releaseEnvelopeData: releaseEnvelope,
-      releaseEnvelopeURL: releaseEnvelopeURL,
-      expectedFeature: expectedFeature
+      feature: expectedFeature,
+      releaseID: releaseID,
+      version: version,
+      archiveURL: try resolveRemoteURL(archiveURL, relativeTo: deploymentURL),
+      archiveBytes: archiveBytes,
+      archiveSHA256: archiveSHA256
     )
-    guard release.manifestID == releaseID else {
-      throw LynxDeliveryError(
-        stage: .manifest,
-        code: "ERR_LYNX_DEPLOYMENT_RELEASE_ID",
-        message: "The signed deployment release ID does not match the signed release envelope."
-      )
-    }
     return .selected(
       release: release,
       force: force,
@@ -328,29 +281,65 @@ actor LynxManagedBundleStore {
     )
   }
 
-  private func performV2Install(
-    payload: LynxReleasePayload,
-    envelope: Data,
-    envelopeURL: URL
+  private func install(
+    feature: String,
+    releaseID: String,
+    version: String,
+    archiveURL: URL,
+    archiveBytes: Int64,
+    archiveSHA256: String
   ) async throws -> LynxManagedRelease {
-    try ensureDiskSpace(requiredBytes: payload.archive.bytes + payload.archive.uncompressedBytes)
-    let featureRoot = featureRoot(feature: payload.feature)
+    let key = "\(feature)/\(releaseID)"
+    if let installed = try installedV2Release(feature: feature, releaseID: releaseID) { return installed }
+    if let task = v2Installs[key] { return try await task.value }
+    let task = Task { [self] in
+      try ensureDiskSpace(requiredBytes: archiveBytes + LynxArchiveLimits.maxUncompressedBytes)
+      return try await performArchiveInstall(
+        feature: feature,
+        releaseID: releaseID,
+        version: version,
+        archiveURL: archiveURL,
+        archiveBytes: archiveBytes,
+        archiveSHA256: archiveSHA256
+      )
+    }
+    v2Installs[key] = task
+    defer { v2Installs[key] = nil }
+    return try await task.value
+  }
+
+  private func performArchiveInstall(
+    feature: String,
+    releaseID: String,
+    version: String,
+    archiveURL: URL,
+    archiveBytes: Int64,
+    archiveSHA256: String
+  ) async throws -> LynxManagedRelease {
+    let featureRoot = featureRoot(feature: feature)
     let staging = featureRoot.appendingPathComponent("staging", isDirectory: true).appendingPathComponent(UUID().uuidString, isDirectory: true)
     let extracted = staging.appendingPathComponent("release", isDirectory: true)
     let archive = staging.appendingPathComponent("release.zip.part")
     try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
     defer { try? fileManager.removeItem(at: staging) }
-    try await download(from: try resolveRemoteURL(payload.archive.url, relativeTo: envelopeURL), to: archive, expectedBytes: payload.archive.bytes, expectedHash: payload.archive.sha256)
-    let expected = payload.files.map { LynxArchiveExpectedFile(path: $0.path, bytes: $0.bytes, sha256: $0.sha256) }
-    try LynxSafeArchive.extract(archiveURL: archive, to: extracted, expectedFiles: expected)
-    for file in expected { try verify(url: extracted.appendingPathComponent(file.path), expectedBytes: file.bytes, expectedHash: file.sha256) }
-    try envelope.write(to: extracted.appendingPathComponent("release-envelope.json"), options: .atomic)
-    let completion = V2Completion(feature: payload.feature, releaseID: payload.releaseId, version: payload.version, archiveSHA256: payload.archive.sha256, files: expected.map(\.path))
+    try await downloadArchive(
+      from: archiveURL,
+      to: archive,
+      expectedBytes: archiveBytes,
+      expectedHash: archiveSHA256
+    )
+    try LynxSafeArchive.extract(archiveURL: archive, to: extracted)
+    let completion = V2Completion(
+      feature: feature,
+      releaseID: releaseID,
+      version: version,
+      archiveSHA256: archiveSHA256
+    )
     try JSONEncoder().encode(completion).write(to: extracted.appendingPathComponent("completion.json"), options: .atomic)
-    let final = v2ReadyURL(feature: payload.feature, releaseID: payload.releaseId)
+    let final = v2ReadyURL(feature: feature, releaseID: releaseID)
     try fileManager.createDirectory(at: final.deletingLastPathComponent(), withIntermediateDirectories: true)
     if !fileManager.fileExists(atPath: final.path) { try fileManager.moveItem(at: extracted, to: final) }
-    guard let installed = try installedV2Release(feature: payload.feature, releaseID: payload.releaseId) else { throw LynxDeliveryError(stage: .archive, code: "ERR_LYNX_RELEASE_INSTALL", message: "The completed signed Lynx release could not be reopened.") }
+    guard let installed = try installedV2Release(feature: feature, releaseID: releaseID) else { throw LynxDeliveryError(stage: .archive, code: "ERR_LYNX_RELEASE_INSTALL", message: "The completed Lynx release could not be reopened.") }
     return installed
   }
 
@@ -363,12 +352,9 @@ actor LynxManagedBundleStore {
       return try installedV2Release(feature: feature, releaseID: releaseID)
     }
     guard isRegularFile(completionURL), isRegularFile(bundleURL), let completion = try? JSONDecoder().decode(V2Completion.self, from: Data(contentsOf: completionURL)), completion.feature == feature, completion.releaseID == releaseID else { return nil }
-    // Cache opens perform only bounded metadata/entry checks. Archive, RSA,
-    // CRC, and file-hash verification are install-time work and are never
-    // repeated for a healthy completed directory.
-    for path in completion.files ?? ["main.lynx.bundle"] {
-      guard isRegularFile(directory.appendingPathComponent(path)) else { return nil }
-    }
+    // Archive SHA-256 and ZIP structure were checked during installation. A
+    // healthy cache reopen needs only its atomic completion marker and entry
+    // bundle; it never rereads every installed asset.
     return LynxManagedRelease(feature: feature, manifestID: releaseID, version: completion.version, bundleURL: bundleURL)
   }
 
@@ -504,6 +490,116 @@ actor LynxManagedBundleStore {
     try verify(url: destinationURL, expectedBytes: expectedBytes, expectedHash: expectedHash)
   }
 
+  /// Streams the authenticated ZIP to the private transaction directory. The
+  /// signed deployment supplies both exact byte length and SHA-256, so a
+  /// misleading Content-Length is rejected before extraction and a response
+  /// that exceeds the contract is never fully written to disk.
+  private func downloadArchive(
+    from remoteURL: URL,
+    to destinationURL: URL,
+    expectedBytes: Int64,
+    expectedHash: String
+  ) async throws {
+    var request = noCacheURLRequest(remoteURL)
+    request.timeoutInterval = 60
+    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+    try validateHTTPResponse(response, url: remoteURL)
+    if let response = response as? HTTPURLResponse,
+      let contentLength = response.value(forHTTPHeaderField: "Content-Length")
+    {
+      guard let length = Int64(contentLength), length == expectedBytes else {
+        throw LynxDeliveryError(
+          stage: .checksum,
+          code: "ERR_LYNX_SIZE_MISMATCH",
+          message: "The release ZIP Content-Length does not match the signed deployment."
+        )
+      }
+    }
+
+    try fileManager.createDirectory(
+      at: destinationURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    guard fileManager.createFile(atPath: destinationURL.path, contents: nil) else {
+      throw LynxDeliveryError(
+        stage: .resource,
+        code: "ERR_LYNX_ARCHIVE_CREATE",
+        message: "The release ZIP transaction file could not be created."
+      )
+    }
+
+    let output = try FileHandle(forWritingTo: destinationURL)
+    defer { try? output.close() }
+    var hasher = SHA256()
+    var written: Int64 = 0
+    var buffer = Data()
+    buffer.reserveCapacity(64 * 1024)
+    for try await byte in bytes {
+      guard written < expectedBytes else {
+        throw LynxDeliveryError(
+          stage: .checksum,
+          code: "ERR_LYNX_SIZE_MISMATCH",
+          message: "The release ZIP exceeds the signed byte length."
+        )
+      }
+      buffer.append(byte)
+      written += 1
+      if buffer.count == 64 * 1024 {
+        output.write(buffer)
+        hasher.update(data: buffer)
+        buffer.removeAll(keepingCapacity: true)
+      }
+    }
+    if !buffer.isEmpty {
+      output.write(buffer)
+      hasher.update(data: buffer)
+    }
+    guard written == expectedBytes else {
+      throw LynxDeliveryError(
+        stage: .checksum,
+        code: "ERR_LYNX_SIZE_MISMATCH",
+        message: "The release ZIP byte length does not match the signed deployment."
+      )
+    }
+    let actualHash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    guard actualHash == expectedHash else {
+      throw LynxDeliveryError(
+        stage: .checksum,
+        code: "ERR_LYNX_SHA256_MISMATCH",
+        message: "The release ZIP SHA-256 does not match the signed deployment."
+      )
+    }
+  }
+
+  private func readBoundedResponse(
+    _ bytes: URLSession.AsyncBytes,
+    response: HTTPURLResponse,
+    limit: Int
+  ) async throws -> Data {
+    if let contentLength = response.value(forHTTPHeaderField: "Content-Length") {
+      guard let length = Int(contentLength), length >= 0, length <= limit else {
+        throw LynxDeliveryError(
+          stage: .signature,
+          code: "ERR_LYNX_DEPLOYMENT_TOO_LARGE",
+          message: "The signed Lynx deployment response exceeds 16 KiB."
+        )
+      }
+    }
+    var body = Data()
+    body.reserveCapacity(min(limit, 1024))
+    for try await byte in bytes {
+      guard body.count < limit else {
+        throw LynxDeliveryError(
+          stage: .signature,
+          code: "ERR_LYNX_DEPLOYMENT_TOO_LARGE",
+          message: "The signed Lynx deployment response exceeds 16 KiB."
+        )
+      }
+      body.append(byte)
+    }
+    return body
+  }
+
   private func verify(url: URL, expectedBytes: Int64, expectedHash: String) throws {
     guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
       Int64(values.fileSize ?? -1) == expectedBytes
@@ -547,6 +643,15 @@ actor LynxManagedBundleStore {
         message: "A Lynx release file URL could not be resolved: \(value)"
       )
     }
+    #if !DEBUG && !LYNX_ALLOW_LOCAL_MANAGED_RELEASE
+      guard scheme == "https" else {
+        throw LynxDeliveryError(
+          stage: .manifest,
+          code: "ERR_LYNX_LOCAL_HTTP_FORBIDDEN",
+          message: "Cleartext managed delivery is allowed only in an internal Release build."
+        )
+      }
+    #endif
     return url
   }
 

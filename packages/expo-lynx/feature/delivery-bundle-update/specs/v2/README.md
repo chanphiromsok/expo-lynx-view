@@ -1,199 +1,153 @@
-# Remote Lynx bundle V2 consolidated implementation specs
+# Lynx delivery MVP implementation specs
 
-These are the assignable implementation contracts for the
-[architecture](../../ARCHITECTURE.md). The [Hot Updater archive review](../../HOT-UPDATER-ARCHIVE-REVIEW.md)
-is required context for ZIP/store work.
+Status: draft for review. These documents define the next implementation; they
+do not authorize a production deployment or secret rotation.
 
-V2 uses one app-wide RSA-SHA256 trust root, signed document type + feature,
-generated per-feature embedded baselines, deterministic remote ZIPs, install-
-only expensive verification, last-known-good recovery, and monotonic signed
-channel revisions.
+Only these three specs are normative for the MVP:
 
-## Why the specs are consolidated
+| Area | Spec | Result |
+|---|---|---|
+| CLI | [C01 — Build and upload](./cli/c01-release-build-upload.md) | Builds one ZIP and uploads it directly to R2 without a signing key |
+| Worker | [W01 — Store and deliver](./worker/w01-delivery-worker.md) | Stores two D1 tables and signs the current deployment response with one Worker key |
+| Mobile | [M01 — Verify and activate](./mobile/m01-shared-release-protocol.md) | Verifies the signed response and ZIP SHA-256 before installing |
 
-The earlier V2 draft separated dependency steps so narrowly that a developer
-had to infer handoffs between several PRs. The new work order merges tasks when
-they:
+The older `mobile/m02-*` through `mobile/m08-*` and `server/s01-*` through
+`server/s05-*` documents describe the superseded two-document design. They are
+historical context only and must not be used as implementation requirements.
 
-- edit the same package/native coordinator/server transaction;
-- share one atomic correctness boundary; or
-- are not independently useful in production.
-
-Examples: ZIP extraction is part of installation, a channel update check can
-produce the pending state consumed by activation only when it finds a new
-release, and channel reads are the exact output of promotion.
-
-Optional optimization and final E2E gates remain separate. A developer should
-be able to read one assigned spec and understand the complete usable result.
-
-## Architecture checkpoint
-
-These decisions are frozen for every implementation slice:
-
-- Every configured feature ships a native embedded baseline; remote delivery is
-  an update overlay, not the only source.
-- The `lynx-bundle.config.ts` feature-map key is canonical and automatically
-  derives its project directory. No repeated `featureId`/per-feature
-  `projectRoot`.
-- Features build independently; the same validated Rspeedy output feeds the
-  expanded embedded tree and deterministic remote ZIP.
-- Generated baselines live under dedicated `generated/expo-lynx/embedded`,
-  outside Expo normal assets, and the plugin packages them once.
-- Expo config exposes one `embeddedBundlesPath` and one app-wide
-  `publicKeyPath`; private keys exist only in producer/server secret contexts.
-- One RSA key signs release/channel payloads. Signed `type` and `feature`
-  provide domain separation.
-- Full signature/archive/file verification occurs on installation. Cached and
-  embedded opens perform bounded structural checks only.
-- An RN channel update check cannot replace a mounted view. It requests a ZIP
-  only when the advertised release differs from ready/pending state.
-  `next-open` is default; `on-launch` requires a separately healthy candidate
-  view.
-- Android implementation is deferred to the development roadmap. When it
-  resumes, engine reuse is optional and cannot cross feature/release/template
-  identity; correctness remains defined with reuse disabled.
-
-Changing a checkpoint decision requires an architecture/spec PR with migration
-impact before implementation.
-
-## Agent/PR contract
-
-One implementation agent owns one consolidated spec and normally one PR. The
-spec's named phases are internal implementation/commit checkpoints, not separate
-contracts. A PR must not implement only an unsafe temporary phase—for example,
-an extractor without signed install containment or an Android unsigned managed
-path.
-
-The first non-blank PR-body line must be:
+## Frozen MVP flow
 
 ```text
-Spec: feature/delivery-bundle-update/specs/v2/<mobile|server>/<file>.md
+CLI
+  build feature
+  -> create release.zip
+  -> compute ZIP SHA-256
+  -> request a short-lived upload URL with the control token
+  -> PUT release.zip directly to R2
+  -> complete registration
+
+Console
+  list registered bundles
+  -> select one bundle
+  -> enable/disable delivery
+  -> request force reload when explicitly chosen
+
+Worker
+  validate control requests
+  -> verify the uploaded R2 object
+  -> store bundle metadata in D1
+  -> atomically update the one deployment row per feature
+  -> sign the exact public deployment response
+
+Mobile
+  fetch public deployment response
+  -> verify its signature with the public key embedded in the app
+  -> validate feature, runtime, revision, and enabled state
+  -> download release.zip
+  -> verify ZIP bytes and SHA-256
+  -> install safely and apply according to force
 ```
 
-The body must contain:
+## Decisions
 
-```text
-Implementation:
-- completed phases and concise summary
+- There is one deployment per feature. There are no channels, environments,
+  rollout cohorts, or stable/beta/active names.
+- The CLI has no private signing key. Its control token authorizes upload API
+  calls but is never sent to R2 and never shipped in mobile.
+- The Worker has the only delivery private key. Mobile embeds its corresponding
+  public key.
+- The Worker signs the exact plain JSON response body. There is no base64
+  `payload` wrapper, release envelope, or separately signed release manifest.
+- R2 stores one immutable object per registered bundle: `release.zip`.
+- The signed response contains one ZIP SHA-256. There are no per-file hashes in
+  the wire protocol. Mobile enforces ZIP/path/size limits while installing.
+- D1 contains exactly `bundles` and `deployments`. It has no upload-status,
+  channel, settings, audit, signing-key-fingerprint, patch, or file table.
+- `enabled: false` stops new distribution. It does not delete, deactivate, or
+  roll back a verified release already present on a device.
+- `force: false` stages a new verified release for the next feature open.
+  `force: true` reloads a mounted matching view only after download,
+  verification, and installation succeed.
+- Production public delivery uses HTTPS. Public reads do not require the
+  control token because authenticity comes from the signed response and ZIP
+  hash.
+- The current implementation target is iOS. Android must implement the same
+  wire contract later and is not part of this MVP gate.
 
-Verification:
-- exact command and result
-- manual device/server result when required
+## Shared wire contract
 
-Known limitations:
-- none, or explicit remaining limitation permitted by the spec
+The Worker returns `GET /v1/deploy/:feature` with:
+
+```http
+content-type: application/json; charset=utf-8
+cache-control: no-store
+lynx-signature: <unpadded-base64url-signature>
 ```
 
-The implementation agent must:
+The signature is RSASSA-PKCS1-v1_5 with SHA-256 over the exact UTF-8 response
+body bytes. Protocol version 1 fixes this algorithm; it is not selected by an
+untrusted response field.
 
-1. Read architecture, this index, and the assigned spec; also read the archive
-   review for ZIP/store work.
-2. Inspect the dirty worktree and preserve unrelated changes.
-3. Implement every in-scope phase and acceptance criterion; do not leave an
-   unsigned/unpacked compatibility path usable in production.
-4. Add tests for every automatable acceptance criterion and record exact
-   verification results.
-5. Keep network/hash/ZIP/file work off UI and RN JS threads; mutate native views
-   on platform UI threads.
-6. Never weaken signing, type/feature binding, containment, limits, atomicity,
-   rollback, or Release guards to pass a test.
-7. Never commit private keys, credentials, device identifiers, or R2/D1 secrets.
+Enabled body:
 
-### Copy/paste implementation prompt
-
-```text
-Implement <SPEC_PATH> in this repository. Read ARCHITECTURE.md,
-specs/v2/README.md, and the assigned consolidated spec before editing; read
-HOT-UPDATER-ARCHIVE-REVIEW.md for ZIP/store work. Treat the spec's phases as one
-complete correctness boundary, preserve unrelated changes, implement all
-in-scope acceptance criteria/tests, and run exact required verification. Do not
-deploy, publish production state, rotate production secrets, or weaken a safety
-invariant. Prepare the PR body using the Spec, Implementation, Verification, and
-Known limitations contract in specs/v2/README.md.
+```json
+{
+  "schemaVersion": 1,
+  "type": "lynx-deployment",
+  "feature": "delivery",
+  "revision": 7,
+  "enabled": true,
+  "force": false,
+  "releaseId": "delivery-20260901T011848990Z-ac8c0e",
+  "version": "2026.09.01",
+  "runtimeVersion": "expo-57",
+  "archiveUrl": "/v1/bundles/delivery/delivery-20260901T011848990Z-ac8c0e/release.zip",
+  "archiveSha256": "9da2223840940f013b8ffa763b4a1dde4959c8647cee8a9c1b465d16b7dd692f",
+  "archiveBytes": 344959,
+  "issuedAt": "2026-09-01T01:20:00.000Z"
+}
 ```
 
-Use [PR-REVIEW-CHECKLIST.md](./PR-REVIEW-CHECKLIST.md) after the PR is ready.
-Do not assign the final-gate issues M06 or S05 before their dependencies are
-complete. Android roadmap items remain unassigned until the iOS/server
-milestone is accepted and Android work is explicitly resumed.
+Disabled body:
 
-## Consolidated dependency graph
-
-```mermaid
-flowchart TB
-  M01[M01 protocol + fixtures]
-  S01[S01 build + embed + pack + sign]
-  M02[M02 Expo resources + trust]
-  S02[S02 D1 release store + upload]
-  S03[S03 public API + channel operations]
-  S04[S04 local signed parity server]
-  M03[M03 iOS extract + install]
-  M04[M04 RN update check + iOS activation]
-  M05[M05 iOS cache + disk + recovery]
-  M06[M06 iOS telemetry + E2E]
-  S05[S05 server security + E2E]
-
-  M01 --> S01
-  M01 --> M02
-  S01 --> M02
-  S01 --> S02
-  M01 --> S02
-  S02 --> S03
-  S01 --> S03
-  S01 --> S04
-  M02 --> M03
-  S04 --> M03
-  M03 --> M04
-  M04 --> M05
-  M05 --> M06
-  S03 --> M06
-  S04 --> M06
-  S02 --> S05
-  S03 --> S05
-  S04 --> S05
+```json
+{
+  "schemaVersion": 1,
+  "type": "lynx-deployment",
+  "feature": "delivery",
+  "revision": 8,
+  "enabled": false,
+  "issuedAt": "2026-09-01T01:30:00.000Z"
+}
 ```
 
-M01 starts first. After M01, S01 can run; M02 consumes its embedded/signature
-fixtures. S04 local delivery can start from M01/S01 without waiting for the
-Cloudflare S02/S03 implementation, so M03/M04 establish iOS first while server
-work proceeds in parallel. M05 hardens the iOS cache and recovery path, and M06
-is the iOS telemetry/internal Release gate. Android work is preserved in
-`DEVELOPMENT-ROADMAP.md` and is not part of this active graph.
+Unknown fields fail closed. The disabled form must not contain `force` or any
+release/archive field. The enabled form requires every field shown above.
 
-## Mobile work order
+## Implementation order
 
-| Order | Consolidated spec | Complete result |
-|---:|---|---|
-| M01 | [Shared release protocol](./mobile/m01-shared-release-protocol.md) | Exact typed signed payload/archive contract and fixtures |
-| M02 | [Expo resources and trust verification](./mobile/m02-trust-roots-signature-verification.md) | Generated baselines + one public key embedded once; Swift verifies |
-| M03 | [iOS ZIP extraction and installation](./mobile/m03-ios-archive-installation.md) | Signed bounded extract, one-time verification, atomic ready store |
-| M04 | [RN update check and iOS activation/recovery](./mobile/m04-update-check-activation-recovery.md) | Channel check, conditional download, progress, next-open/candidate activation, rollback |
-| M05 | [iOS cache, disk, and recovery](./mobile/m05-ios-cache-disk-recovery.md) | iOS bounded retention and deterministic recovery |
-| M06 | [iOS telemetry and E2E](./mobile/m06-ios-telemetry-e2e.md) | iOS internal Release failure matrix and evidence |
+1. C01 replaces the current pack/sign/upload output with the two-file unsigned
+   local release directory.
+2. W01 replaces release verification plus stored deployment envelopes with
+   direct ZIP registration and Worker response signing.
+3. M01 replaces release-envelope fetching with verification of the signed
+   deployment response and direct ZIP installation.
 
-## Server/producer work order
+Each implementation must preserve unrelated working-tree changes. Automated
+work must not start Xcode, an iOS simulator, CocoaPods, or any native iOS build
+unless the user explicitly asks for it.
 
-| Order | Consolidated spec | Complete result |
-|---:|---|---|
-| S01 | [Build, embedded, package, and sign CLI](./server/s01-build-package-sign.md) | Friendly config through exact signed deterministic artifact |
-| S02 | [Release storage and upload](./server/s02-release-storage-upload.md) | D1 invariants + authenticated immutable R2 publication transaction |
-| S03 | [Public API and channel operations](./server/s03-channel-api-operations.md) | Cache-correct reads + atomic promote/force/rollback |
-| S04 | [Local signed static parity](./server/s04-local-static-parity.md) | Physical devices test production-equivalent contract over LAN |
-| S05 | [Server security and E2E](./server/s05-server-security-e2e.md) | Complete isolated service failure/security/performance gate |
+## Required shared verification
 
-## Merge gates
+```bash
+pnpm --filter @expo-lynx/bundle-cli lint
+pnpm --filter @expo-lynx/bundle-cli test
+pnpm --filter @expo-lynx/delivery-console typecheck
+pnpm --filter @expo-lynx/delivery-console test
+pnpm --filter expo-lynx exec jest --runInBand --no-watchman
+git diff --check
+```
 
-- S01: two isolated features, atomic/stale-checked embedded tree, deterministic
-  ZIP, cross-language signatures, and no private-key leak.
-- M02: generated baselines/public key appear exactly once in native resources,
-  not Metro; no private key.
-- S02: R2 read-back hash succeeds before ready; idempotent/conflict/failure
-  transaction tests pass.
-- S03: exact stored/returned signed bytes, ETag/304, monotonic concurrent
-  promotion, and newer-revision rollback pass.
-- M03: malicious archive corpus and interrupted atomic install pass on iOS.
-- M04: process-death recovery, terminal splash behavior, and candidate-view
-  no-blank/safe-area evidence pass.
-- M05: interrupted-state, low-disk, quota, and cache-isolation tests pass on
-  iOS.
-- M06 and S05 are both required before production-ready status.
+Tests must include one fixture whose exact Worker response bytes verify in both
+TypeScript and Swift. Private keys, control tokens, R2 credentials, and
+production data must never be committed or printed.

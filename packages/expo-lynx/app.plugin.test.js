@@ -212,6 +212,7 @@ test('materializes one iOS-only baseline namespace and emits trust configuration
   });
   assert.match(infoPlist[_internal.INFO_PLIST_PUBLIC_KEY], /BEGIN PUBLIC KEY/);
   assert.match(infoPlist[_internal.INFO_PLIST_PUBLIC_KEY_FINGERPRINT], /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(infoPlist[_internal.INFO_PLIST_RUNTIME_VERSION], 'expo-57');
   assert.deepEqual(infoPlist[_internal.INFO_PLIST_DELIVERY_ENDPOINTS], {
     shopping: 'https://delivery.example.com/v1/deploy/shopping',
   });

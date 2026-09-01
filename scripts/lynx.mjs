@@ -4,24 +4,20 @@
  * Developer-facing Lynx workflow. Low-level release IDs, version strings,
  * token plumbing, and individual upload steps stay behind this small CLI.
  */
-import { createPublicKey, randomBytes } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { generateKeys, loadConfigAsync } from '../packages/lynx-bundle-cli/src/index.mjs';
+import { loadConfigAsync } from '../packages/lynx-bundle-cli/src/index.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const exampleRoot = resolve(repositoryRoot, 'apps/expo-lynx-example');
 const bundleCli = resolve(repositoryRoot, 'packages/lynx-bundle-cli/bin/lynx-bundle.mjs');
-const deliveryCli = resolve(repositoryRoot, 'scripts/local-lynx-delivery.mjs');
 const deliveryConsolePackage = '@expo-lynx/delivery-console';
-const localRoot = resolve(repositoryRoot, '.local-lynx-delivery');
-const localSettingsPath = resolve(localRoot, 'lynx-cli.json');
-const privateKeyPath = resolve(exampleRoot, '.local-lynx-keys/updates.private.pem');
-const publicKeyPath = resolve(exampleRoot, 'keys/lynx/updates.public.pem');
 const bundleConfigPath = resolve(exampleRoot, 'lynx-bundle.config.mjs');
+const operationalCli = resolve(repositoryRoot, 'packages/lynx-bundle-cli/bin/lynx.mjs');
 const runtimeVersion = 'expo-57';
 const FEATURE_ID = /^[a-z][a-z0-9-]{0,63}$/;
 
@@ -29,33 +25,33 @@ function help() {
   process.stdout.write(`Lynx mini-app workflow
 
 Usage:
-  pnpm lynx init [--app path] [--feature id] [--channel-url url] [--skip-bundle] [--dry-run] [--replace-app-key]
+  pnpm lynx init [--app path] [--feature id] [--channel-url url] [--skip-bundle] [--dry-run]
   pnpm lynx console
-  pnpm lynx local init [--replace-app-key]
-  pnpm lynx local start [--host 0.0.0.0] [--port 3000]
   pnpm lynx bundle <feature>
-  pnpm lynx release <feature> [--activation next-open|on-launch] [--draft]
-  pnpm lynx status <feature>
+  pnpm lynx release <feature> [--server url] [--token value] [--draft]
+  pnpm lynx release upload <release-directory> --server url [--token value]
 
 Examples:
   pnpm lynx init
   pnpm lynx console
-  pnpm lynx init --channel-url http://192.168.1.20:3000/v1/channels/delivery/active
-  pnpm lynx local init --replace-app-key
-  pnpm lynx local start
+  pnpm lynx init --channel-url https://delivery.example/v1/deploy/delivery
   pnpm lynx bundle delivery
-  pnpm lynx release delivery
+  LYNX_DELIVERY_SERVER=https://delivery.example LYNX_DELIVERY_CONTROL_TOKEN=... pnpm lynx release delivery
+  LYNX_DELIVERY_CONTROL_TOKEN=... pnpm lynx release upload ./dist/lynx-releases/delivery/delivery-20260830T143512-a1b2c3 --server http://127.0.0.1:8787
 
-release generates the immutable release ID and display version automatically.
-Use --draft to package only; use the default command to package, upload, and
-promote the release to the local channel.
+release generates the immutable release ID and display version automatically,
+then builds, packages, and uploads it to the delivery Worker. Use
+--draft to stop after packaging. Uploading never promotes or enables a bundle;
+make that explicit choice in the console.
 
 init prepares the Expo app's managed-delivery inputs. It never creates
 Cloudflare resources or deploys a Worker; those are explicit future commands.
 
-console starts the unified delivery console and its local Cloudflare Worker
-runtime. Its hosted control-plane API is not connected yet, so it currently
-displays safe local preview data only.
+release upload sends a packed release.json and release.zip to the delivery Worker.
+The Worker returns a short-lived R2 PUT URL, validates the uploaded immutable bytes, then
+records the verified bundle. It does not activate the bundle.
+
+console starts the unified delivery console and its local Cloudflare Worker runtime.
 `);
 }
 
@@ -68,7 +64,7 @@ function parseOptions(values) {
       positionals.push(value);
       continue;
     }
-    if (value === '--draft' || value === '--replace-app-key' || value === '--skip-bundle' || value === '--dry-run') {
+    if (value === '--draft' || value === '--json' || value === '--skip-bundle' || value === '--dry-run') {
       options.set(value, true);
       continue;
     }
@@ -85,35 +81,10 @@ function requireFeature(value) {
   return value;
 }
 
-function requireActiveChannel(value) {
-  if (value === undefined || value === 'active') return 'active';
-  throw new Error('Only the active deployment is supported; remove --channel or use --channel active.');
-}
-
 function run(command, argumentsList) {
   const result = spawnSync(command, argumentsList, { cwd: repositoryRoot, stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} failed with exit code ${result.status}.`);
-}
-
-function ensureLocalRoot() {
-  mkdirSync(localRoot, { recursive: true, mode: 0o700 });
-}
-
-function saveSettings(value) {
-  ensureLocalRoot();
-  writeFileSync(localSettingsPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-}
-
-function loadSettings() {
-  if (!existsSync(localSettingsPath)) throw new Error('Local delivery is not initialized. Run: pnpm lynx local start');
-  try {
-    const value = JSON.parse(readFileSync(localSettingsPath, 'utf8'));
-    if (!value || typeof value.server !== 'string' || typeof value.token !== 'string') throw new Error('invalid');
-    return value;
-  } catch {
-    throw new Error('Local delivery settings are unreadable. Delete .local-lynx-delivery/lynx-cli.json and run: pnpm lynx local start');
-  }
 }
 
 function generatedReleaseId(feature) {
@@ -143,7 +114,7 @@ async function resolveAppPaths(appArgument) {
   if (!existsSync(configPath)) throw new Error(`Lynx bundle config was not found: ${configPath}`);
   const bundle = await loadConfigAsync({ configPath });
   const publicKeyPath = resolve(appRoot, 'keys/lynx/updates.public.pem');
-  return { appRoot, appJsonPath, configPath, bundle, privateKeyPath: bundle.privateKeyPath, publicKeyPath };
+  return { appRoot, appJsonPath, configPath, bundle, publicKeyPath };
 }
 
 function writeJson(path, value) {
@@ -212,12 +183,10 @@ function ensureAppPlugin(paths, featureArgument, channelUrl, dryRun) {
       : requireFeature(featureArgument);
     if (!feature) throw new Error('--channel-url needs --feature when the bundle config contains more than one feature.');
     if (!featureIds.includes(feature)) throw new Error(`The configured Lynx feature does not exist: ${feature}`);
-    const channels = options.deliveryChannels ?? {};
-    if (!channels || typeof channels !== 'object' || Array.isArray(channels)) throw new Error('expo-lynx deliveryChannels must be an object.');
-    const featureChannels = channels[feature] ?? {};
-    if (!featureChannels || typeof featureChannels !== 'object' || Array.isArray(featureChannels)) throw new Error(`expo-lynx deliveryChannels.${feature} must be an object.`);
-    if (featureChannels.active !== channelUrl) {
-      options.deliveryChannels = { ...channels, [feature]: { active: channelUrl } };
+    const endpoints = options.deliveryEndpoints ?? {};
+    if (!endpoints || typeof endpoints !== 'object' || Array.isArray(endpoints)) throw new Error('expo-lynx deliveryEndpoints must be an object.');
+    if (endpoints[feature] !== channelUrl) {
+      options.deliveryEndpoints = { ...endpoints, [feature]: channelUrl };
       changed = true;
     }
   }
@@ -233,48 +202,15 @@ function ensureAppPlugin(paths, featureArgument, channelUrl, dryRun) {
   }
 }
 
-function ensureSigningKeys(paths, replaceAppKey, dryRun) {
-  const hasPrivate = existsSync(paths.privateKeyPath);
-  const hasPublic = existsSync(paths.publicKeyPath);
-  if (hasPrivate && hasPublic) {
-    process.stdout.write(`Signing trust root is already ready: ${paths.publicKeyPath}\n`);
-    return;
-  }
-  if (hasPrivate && !hasPublic) {
-    if (dryRun) {
-      process.stdout.write(`Would restore the public verification key at ${paths.publicKeyPath}\n`);
-      return;
-    }
-    mkdirSync(dirname(paths.publicKeyPath), { recursive: true, mode: 0o700 });
-    const publicPem = createPublicKey(readFileSync(paths.privateKeyPath, 'utf8')).export({ type: 'spki', format: 'pem' });
-    writeFileSync(paths.publicKeyPath, publicPem, { mode: 0o644 });
-    process.stdout.write(`Restored the public verification key at ${paths.publicKeyPath}\n`);
-    return;
-  }
-  if (!hasPrivate && hasPublic && !replaceAppKey) {
-    throw new Error(`The app already embeds a public key but the matching private key is unavailable. Refusing to replace the trust root. Restore the private key or run: pnpm lynx init --replace-app-key`);
-  }
-  if (dryRun) {
-    process.stdout.write(`Would generate a local RSA signing pair at ${dirname(paths.privateKeyPath)}\n`);
-    process.stdout.write(`Would write the public verification key at ${paths.publicKeyPath}\n`);
-    return;
-  }
-  const keyDirectory = dirname(paths.privateKeyPath);
-  const generated = generateKeys(keyDirectory);
-  mkdirSync(dirname(paths.publicKeyPath), { recursive: true, mode: 0o700 });
-  cpSync(generated.publicKeyPath, paths.publicKeyPath, { force: replaceAppKey });
-  process.stdout.write(`Generated a local signing pair. The private key is ignored at ${generated.privateKeyPath}.\n`);
-  process.stdout.write(`Updated the app public key at ${paths.publicKeyPath}.\n`);
-  process.stdout.write('Run Expo prebuild and make one new internal iOS build before this new trust root can be used.\n');
-}
-
 async function initProject(options) {
   const paths = await resolveAppPaths(options.get('--app'));
   const dryRun = options.get('--dry-run') === true;
   const feature = options.get('--feature');
   const channelUrl = options.get('--channel-url');
+  if (!existsSync(paths.publicKeyPath)) {
+    throw new Error(`The mobile verification public key is missing: ${paths.publicKeyPath}. Provision the matching Worker signing key and public key before running pnpm lynx init.`);
+  }
   ensureAppPlugin(paths, feature, channelUrl, dryRun);
-  ensureSigningKeys(paths, options.get('--replace-app-key') === true, dryRun);
   if (options.get('--skip-bundle') === true) {
     process.stdout.write('Skipped embedded baseline build (--skip-bundle).\n');
   } else if (dryRun) {
@@ -285,30 +221,6 @@ async function initProject(options) {
   }
   process.stdout.write(`\nNext required native step:\n  cd ${relative(repositoryRoot, paths.appRoot)} && pnpm exec expo prebuild --platform ios\n`);
   process.stdout.write('Then install one new iOS development build. Cloudflare provisioning and Worker deployment are not run by this command yet.\n');
-}
-
-function localInit(replaceAppKey) {
-  const paths = {
-    privateKeyPath,
-    publicKeyPath,
-  };
-  ensureSigningKeys(paths, replaceAppKey, false);
-}
-
-function localStart(options) {
-  if (!existsSync(privateKeyPath) || !existsSync(publicKeyPath)) {
-    throw new Error('Missing local signing keys. Run: pnpm lynx local init --replace-app-key');
-  }
-  const host = options.get('--host') ?? '0.0.0.0';
-  const port = Number(options.get('--port') ?? '3000');
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('--port must be between 1 and 65535.');
-  const prior = existsSync(localSettingsPath) ? loadSettings() : null;
-  const settings = { server: `http://127.0.0.1:${port}`, token: prior?.token ?? randomBytes(32).toString('hex'), host, port };
-  saveSettings(settings);
-  process.stdout.write('Local publisher token is stored in ignored .local-lynx-delivery/lynx-cli.json.\n');
-  const child = spawn(process.execPath, [deliveryCli, 'serve', '--host', host, '--port', String(port), '--token', settings.token, '--private-key', privateKeyPath, '--public-key', publicKeyPath], { cwd: repositoryRoot, stdio: 'inherit' });
-  child.once('error', (error) => { throw error; });
-  child.once('exit', (code) => { process.exitCode = code ?? 1; });
 }
 
 function startConsole() {
@@ -323,9 +235,9 @@ function buildEmbedded(feature) {
 }
 
 function release(feature, options) {
-  const channel = requireActiveChannel(options.get('--channel'));
-  const selectedActivation = options.get('--activation') ?? 'next-open';
-  if (selectedActivation !== 'next-open' && selectedActivation !== 'on-launch') throw new Error('--activation must be next-open or on-launch.');
+  if (options.has('--channel') || options.has('--activation')) {
+    throw new Error('Release channels and activation flags were retired. Upload first, then select and enable the bundle in the console.');
+  }
   const releaseId = generatedReleaseId(feature);
   const version = generatedVersion();
   process.stdout.write(`Preparing ${feature}. Release identity is generated automatically.\n`);
@@ -335,23 +247,14 @@ function release(feature, options) {
     process.stdout.write(`Draft package ready: ${releaseDirectory}\n`);
     return;
   }
-  const settings = loadSettings();
-  run(process.execPath, [deliveryCli, 'publish', '--server', settings.server, '--token', settings.token, '--release-dir', releaseDirectory, '--channel', channel, '--activation', selectedActivation]);
-  process.stdout.write(`Ready: ${feature}/${channel}. The signed update activates according to ${selectedActivation}.\n`);
-}
-
-async function status(feature, options) {
-  const channel = requireActiveChannel(options.get('--channel'));
-  const settings = loadSettings();
-  const response = await fetch(`${settings.server}/v1/channels/${feature}/${channel}`);
-  if (response.status === 404) {
-    process.stdout.write(`No local release has been promoted for ${feature}/${channel}.\n`);
-    return;
-  }
-  if (!response.ok) throw new Error(`Local server returned ${response.status}. Start it with: pnpm lynx local start`);
-  const envelope = await response.json();
-  const payload = JSON.parse(Buffer.from(envelope.payload, 'base64url').toString('utf8'));
-  process.stdout.write(`${JSON.stringify({ feature: payload.feature, channel: payload.channel, releaseId: payload.releaseId, revision: payload.revision, activation: payload.activation, force: payload.force, issuedAt: payload.issuedAt }, null, 2)}\n`);
+  const uploadArguments = [operationalCli, 'release:upload', releaseDirectory];
+  const server = options.get('--server');
+  const token = options.get('--token');
+  if (server) uploadArguments.push('--server', server);
+  if (token) uploadArguments.push('--token', token);
+  if (options.get('--json')) uploadArguments.push('--json');
+  run(process.execPath, uploadArguments);
+  process.stdout.write(`Registered bundle uploaded for ${feature}. Select it and enable delivery in the console when ready.\n`);
 }
 
 async function main() {
@@ -372,25 +275,17 @@ async function main() {
     return;
   }
   const [command, ...rest] = argumentsList;
+  if (scope === 'release' && command === 'upload') {
+    run(process.execPath, [operationalCli, 'release:upload', ...rest]);
+    return;
+  }
   const { options, positionals } = parseOptions(rest);
-  if (scope === 'local' && command === 'init') {
-    localInit(options.get('--replace-app-key') === true);
-    return;
-  }
-  if (scope === 'local' && command === 'start') {
-    localStart(options);
-    return;
-  }
   if (scope === 'bundle' && command) {
     buildEmbedded(requireFeature(command));
     return;
   }
   if (scope === 'release' && command) {
     release(requireFeature(command), options);
-    return;
-  }
-  if (scope === 'status' && command) {
-    await status(requireFeature(command), options);
     return;
   }
   if (positionals.length > 0) throw new Error(`Unexpected arguments: ${positionals.join(' ')}`);

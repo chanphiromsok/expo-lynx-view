@@ -238,7 +238,7 @@ function TrustCard() {
         <CardTitle className="mt-2 text-base text-white">Trust status</CardTitle>
         <CardDescription className="text-slate-300">Artifacts reach this list only after Worker verification.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-2 text-sm text-slate-200"><p>Release signature</p><p>R2 object SHA-256</p><p>Immutable bundle bytes</p></CardContent>
+      <CardContent className="space-y-2 text-sm text-slate-200"><p>Worker-signed deployment</p><p>R2 object SHA-256</p><p>Immutable bundle bytes</p></CardContent>
     </Card>
   );
 }

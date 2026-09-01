@@ -1,28 +1,21 @@
 import assert from 'node:assert/strict';
-import { generateKeyPairSync } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 
-import {
-  parseDeploymentPayload,
-  parseSignedEnvelope,
-  parseUnverifiedEnvelopePayload,
-} from '../../../packages/expo-lynx/src/ReleaseProtocol.ts';
 import {
   completeUpload,
   getDeploymentOverview,
+  handleLocalUpload,
   registerUpload,
   updateDeployment,
   type ControlEnv,
+  type ReleaseMetadata,
 } from '../worker/control-api.ts';
-import { sha256Hex } from '../worker/protocol.ts';
+import { hexToBase64, sha256Hex } from '../worker/protocol.ts';
 
 type StoredBundle = {
   id: string;
   featureId: string;
   version: string;
-  manifestSha256: string;
-  manifestBytes: number;
+  runtimeVersion: string;
   archiveSha256: string;
   archiveBytes: number;
   createdAt: string;
@@ -34,17 +27,8 @@ type StoredDeployment = {
   enabled: number;
   force: number;
   revision: number;
-  envelopeText: string;
-  envelopeSha256: string;
   updatedAt: string;
 };
-
-function hexBytes(value: string): Uint8Array {
-  return Uint8Array.from(
-    { length: value.length / 2 },
-    (_, index) => Number.parseInt(value.slice(index * 2, index * 2 + 2), 16),
-  );
-}
 
 function createDatabase() {
   const bundles = new Map<string, StoredBundle>();
@@ -55,23 +39,15 @@ function createDatabase() {
         bind(...values: unknown[]) {
           return {
             async first() {
-              if (sql.includes('FROM deployments')) {
-                return deployments.get(String(values[0])) ?? null;
-              }
+              if (sql.includes('FROM deployments')) return deployments.get(String(values[0])) ?? null;
               if (sql.includes('FROM bundles')) {
-                const feature = String(values[0]);
                 const bundle = bundles.get(String(values[1]));
-                return bundle?.featureId === feature ? bundle : null;
+                return bundle?.featureId === String(values[0]) ? bundle : null;
               }
               return null;
             },
             async all() {
-              const feature = String(values[0]);
-              return {
-                results: [...bundles.values()].filter(
-                  (bundle) => bundle.featureId === feature,
-                ),
-              };
+              return { results: [...bundles.values()].filter((bundle) => bundle.featureId === String(values[0])) };
             },
             async run() {
               if (sql.includes('INSERT INTO bundles')) {
@@ -81,30 +57,25 @@ function createDatabase() {
                   id,
                   featureId: String(values[1]),
                   version: String(values[2]),
-                  manifestSha256: String(values[3]),
-                  manifestBytes: Number(values[4]),
-                  archiveSha256: String(values[5]),
-                  archiveBytes: Number(values[6]),
-                  createdAt: String(values[7]),
+                  runtimeVersion: String(values[3]),
+                  archiveSha256: String(values[4]),
+                  archiveBytes: Number(values[5]),
+                  createdAt: String(values[6]),
                 });
                 return { meta: { changes: 1 } };
               }
               if (sql.includes('INSERT INTO deployments')) {
                 const feature = String(values[0]);
-                const expectedRevision = Number(values[8]);
                 const current = deployments.get(feature);
-                if (current && current.revision !== expectedRevision) {
-                  return { meta: { changes: 0 } };
-                }
+                const expectedRevision = Number(values[6]);
+                if (current && current.revision !== expectedRevision) return { meta: { changes: 0 } };
                 deployments.set(feature, {
                   featureId: feature,
                   bundleId: values[1] === null ? null : String(values[1]),
                   enabled: Number(values[2]),
                   force: Number(values[3]),
                   revision: Number(values[4]),
-                  envelopeText: String(values[5]),
-                  envelopeSha256: String(values[6]),
-                  updatedAt: String(values[7]),
+                  updatedAt: String(values[5]),
                 });
                 return { meta: { changes: 1 } };
               }
@@ -118,171 +89,160 @@ function createDatabase() {
   return { database, bundles, deployments };
 }
 
-const fixtures = resolve(
-  import.meta.dirname,
-  '../../../packages/expo-lynx/feature/delivery-bundle-update/fixtures/v2',
-);
-const releaseEnvelopeText = readFileSync(
-  resolve(fixtures, 'crypto-development/valid-release-envelope.json'),
-  'utf8',
-);
-const releasePublicKey = readFileSync(
-  resolve(fixtures, 'crypto-development/updates.public.pem'),
-  'utf8',
-);
-const deploymentKeys = generateKeyPairSync('rsa', {
-  modulusLength: 3072,
-  publicExponent: 65_537,
-});
-const deploymentPrivateKey = deploymentKeys.privateKey.export({
-  type: 'pkcs8',
-  format: 'pem',
-}).toString();
-const authorization = { Authorization: 'Bearer test-control-token' };
-const manifestSha256 = await sha256Hex(new TextEncoder().encode(releaseEnvelopeText));
-const archiveSha256 = '2'.repeat(64);
-const objects = new Map([
-  [
-    'shopping/releases/shopping-2026.08.29.1/manifest.json',
-    { size: new TextEncoder().encode(releaseEnvelopeText).byteLength, sha256: manifestSha256 },
-  ],
-  [
-    'shopping/releases/shopping-2026.08.29.1/release.zip',
-    { size: 16, sha256: archiveSha256 },
-  ],
-]);
+const archive = new Uint8Array([80, 75, 3, 4, 1, 2, 3, 4]);
+const release: ReleaseMetadata = {
+  schemaVersion: 1,
+  feature: 'delivery',
+  releaseId: 'delivery-20260901T011848990Z-ac8c0e',
+  version: '2026.09.01',
+  runtimeVersion: 'expo-57',
+  archiveSha256: await sha256Hex(archive),
+  archiveBytes: archive.byteLength,
+};
+const authorization = { Authorization: 'Bearer local-control-token' };
 const storage = createDatabase();
+const objects = new Map<string, Uint8Array>();
 const environment: ControlEnv = {
   DB: storage.database,
   ARTIFACTS: {
     async head(key: string) {
-      const object = objects.get(key);
-      if (!object) return null;
-      return {
-        size: object.size,
-        checksums: { sha256: hexBytes(object.sha256).buffer },
-      };
+      const bytes = objects.get(key);
+      return bytes ? { size: bytes.byteLength, checksums: { sha256: undefined } } : null;
+    },
+    async get(key: string) {
+      const bytes = objects.get(key);
+      return bytes ? { body: new Blob([bytes]).stream(), size: bytes.byteLength } : null;
+    },
+    async put(key: string, value: ArrayBuffer | ArrayBufferView) {
+      const bytes = value instanceof ArrayBuffer
+        ? new Uint8Array(value)
+        : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      objects.set(key, new Uint8Array(bytes));
+      return { key, size: bytes.byteLength } as R2Object;
     },
   } as R2Bucket,
-  CONTROL_TOKEN: 'test-control-token',
-  RELEASE_PUBLIC_KEY: releasePublicKey,
-  DEPLOYMENT_PRIVATE_KEY: deploymentPrivateKey,
-  PUBLIC_BASE_URL: 'https://delivery.example',
-  R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
-  R2_BUCKET_NAME: 'lynx-artifacts',
-  R2_ACCESS_KEY_ID: 'test-access-key',
-  R2_SECRET_ACCESS_KEY: 'test-secret-key',
+  CONTROL_TOKEN: 'local-control-token',
+  DELIVERY_SIGNING_PRIVATE_KEY: 'not used by control tests',
+  LOCAL_UPLOADS: 'true',
 };
 
 {
   const response = await getDeploymentOverview(
     environment,
-    new Request('https://delivery.example/api/deploy/shopping'),
-    'shopping',
+    new Request('http://127.0.0.1:8787/api/deploy/delivery'),
+    'delivery',
   );
   assert.equal(response.status, 401);
 }
 
+const registered = await registerUpload(
+  environment,
+  new Request('http://127.0.0.1:8787/api/uploads', { headers: authorization }),
+  release,
+);
+assert.equal(registered.status, 200);
+const registration = await registered.json() as {
+  complete: boolean;
+  upload: { method: 'PUT'; url: string; headers: Record<string, string> };
+};
+assert.equal(registration.complete, false);
+assert.equal(registration.upload.method, 'PUT');
+assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\//);
+
 {
-  const response = await registerUpload(
+  const response = await handleLocalUpload(
     environment,
-    new Request('https://delivery.example/api/uploads', { headers: authorization }),
-    releaseEnvelopeText,
+    new Request(registration.upload.url, {
+      method: 'PUT',
+      headers: registration.upload.headers,
+      body: archive,
+    }),
+    release.feature,
+    release.releaseId,
   );
   assert.equal(response.status, 200);
-  const body = (await response.json()) as {
-    uploads: { manifest: { uploaded: boolean }; archive: { uploaded: boolean } };
-  };
-  assert.equal(body.uploads.manifest.uploaded, true);
-  assert.equal(body.uploads.archive.uploaded, true);
 }
 
 {
   const response = await completeUpload(
     environment,
-    new Request('https://delivery.example/api/uploads/release/complete', {
-      headers: authorization,
-    }),
-    'shopping-2026.08.29.1',
-    releaseEnvelopeText,
+    new Request(`http://127.0.0.1:8787/api/uploads/${release.releaseId}/complete`, { headers: authorization }),
+    release.releaseId,
+    release,
   );
   assert.equal(response.status, 201);
   assert.equal(storage.bundles.size, 1);
   const repeated = await completeUpload(
     environment,
-    new Request('https://delivery.example/api/uploads/release/complete', {
-      headers: authorization,
-    }),
-    'shopping-2026.08.29.1',
-    releaseEnvelopeText,
+    new Request(`http://127.0.0.1:8787/api/uploads/${release.releaseId}/complete`, { headers: authorization }),
+    release.releaseId,
+    release,
   );
   assert.equal(repeated.status, 200);
-  assert.equal(storage.bundles.size, 1);
+}
+
+{
+  const response = await registerUpload(
+    { ...environment, LOCAL_UPLOADS: undefined },
+    new Request('https://delivery.example/api/uploads', { headers: authorization }),
+    { ...release, releaseId: 'delivery-unconfigured' },
+  );
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    error: { code: 'upload-not-configured', message: 'R2 upload is not configured.' },
+  });
 }
 
 {
   const promote = await updateDeployment(
     environment,
-    new Request('https://delivery.example/api/deploy/shopping', {
-      headers: authorization,
-    }),
-    'shopping',
-    { bundleId: 'shopping-2026.08.29.1', force: false },
+    new Request('http://127.0.0.1:8787/api/deploy/delivery', { headers: authorization }),
+    'delivery',
+    { bundleId: release.releaseId, force: false },
   );
   assert.equal(promote.status, 200);
-  assert.equal(storage.deployments.get('shopping')?.revision, 1);
-  assert.equal(storage.deployments.get('shopping')?.enabled, 0);
+  assert.equal(storage.deployments.get('delivery')?.revision, 1);
+  assert.equal(storage.deployments.get('delivery')?.enabled, 0);
 
   const enabled = await updateDeployment(
     environment,
-    new Request('https://delivery.example/api/deploy/shopping', {
-      headers: authorization,
-    }),
-    'shopping',
+    new Request('http://127.0.0.1:8787/api/deploy/delivery', { headers: authorization }),
+    'delivery',
     { enabled: true },
   );
   assert.equal(enabled.status, 200);
-  const stored = storage.deployments.get('shopping');
-  assert.equal(stored?.revision, 2);
-  assert.equal(stored?.enabled, 1);
+  assert.equal(storage.deployments.get('delivery')?.revision, 2);
+  assert.equal(storage.deployments.get('delivery')?.enabled, 1);
 
-  const envelope = parseSignedEnvelope(stored?.envelopeText);
-  assert.equal(envelope.ok, true);
-  if (!envelope.ok) throw envelope.error;
-  const rawPayload = parseUnverifiedEnvelopePayload(envelope.value);
-  assert.equal(rawPayload.ok, true);
-  if (!rawPayload.ok) throw rawPayload.error;
-  const payload = parseDeploymentPayload(rawPayload.value, 'shopping');
-  assert.equal(payload.ok, true);
-  if (!payload.ok) throw payload.error;
-  assert.equal(payload.value.enabled, true);
-  if (payload.value.enabled) {
-    assert.equal(payload.value.releaseId, 'shopping-2026.08.29.1');
-    assert.equal(payload.value.force, false);
-  }
+  const noOp = await updateDeployment(
+    environment,
+    new Request('http://127.0.0.1:8787/api/deploy/delivery', { headers: authorization }),
+    'delivery',
+    { bundleId: release.releaseId, force: false },
+  );
+  assert.equal(noOp.status, 200);
+  assert.equal(storage.deployments.get('delivery')?.revision, 2);
 
   const forced = await updateDeployment(
     environment,
-    new Request('https://delivery.example/api/deploy/shopping', {
-      headers: authorization,
-    }),
-    'shopping',
-    { bundleId: 'shopping-2026.08.29.1', force: true },
+    new Request('http://127.0.0.1:8787/api/deploy/delivery', { headers: authorization }),
+    'delivery',
+    { bundleId: release.releaseId, force: true },
   );
   assert.equal(forced.status, 200);
-  assert.equal(storage.deployments.get('shopping')?.revision, 3);
+  assert.equal(storage.deployments.get('delivery')?.revision, 3);
+  assert.equal(storage.deployments.get('delivery')?.force, 1);
 
   const disabled = await updateDeployment(
     environment,
-    new Request('https://delivery.example/api/deploy/shopping', {
-      headers: authorization,
-    }),
-    'shopping',
+    new Request('http://127.0.0.1:8787/api/deploy/delivery', { headers: authorization }),
+    'delivery',
     { enabled: false },
   );
   assert.equal(disabled.status, 200);
-  assert.equal(storage.deployments.get('shopping')?.bundleId, 'shopping-2026.08.29.1');
-  assert.equal(storage.deployments.get('shopping')?.enabled, 0);
+  assert.equal(storage.deployments.get('delivery')?.bundleId, release.releaseId);
+  assert.equal(storage.deployments.get('delivery')?.force, 0);
 }
 
+assert.equal(hexToBase64(release.archiveSha256).length, 44);
 console.log('Cloudflare control API tests passed.');
