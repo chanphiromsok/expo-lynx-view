@@ -79,7 +79,7 @@ The Expo plugin validates one endpoint per embedded feature:
 ```json
 {
   "deliveryEndpoints": {
-    "delivery": "https://example.com/v1/deploy/delivery"
+    "delivery": "https://example.com/v1/default/delivery"
   }
 }
 ```
@@ -88,7 +88,7 @@ It writes the native property-list map:
 
 ```text
 ExpoLynxDeliveryEndpoints
-  delivery -> https://example.com/v1/deploy/delivery
+  delivery -> https://example.com/v1/default/delivery
 ```
 
 Production endpoints require HTTPS. HTTP remains limited to Debug or the

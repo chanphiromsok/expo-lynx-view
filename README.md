@@ -8,8 +8,8 @@ arbitrary URL in a WebView:
 
 1. A mini-app feature has an embedded static bundle in the native app, which
    is always available as an offline fallback.
-2. The release CLI builds and packages an immutable `release.zip`, then uploads
-   it directly to R2 through a Worker-issued, checksum-bound PUT URL.
+2. The release CLI builds and packages an immutable `release.zip`, then signs
+   and uploads it directly to R2 with its local R2 credential.
 3. The Worker verifies the ZIP, updates the one active deployment in D1, and
    signs the exact deployment response. The native app verifies that response
    with its embedded public key before installation.
@@ -70,7 +70,7 @@ pnpm lynx release delivery
 ```
 
 `pnpm lynx release delivery` generates an immutable release ID and a display
-version automatically. It reads the local control token from the ignored
+version automatically. It reads the local delivery API key from the ignored
 `apps/console/.dev.vars` file and targets `http://127.0.0.1:8787` by default.
 Use `--draft` to package without publishing. A changed embedded public key or
 app endpoint requires a new native binary; a later `lynx release` does not.
@@ -137,11 +137,10 @@ This produces:
 | `updates.private.pem` | 3072-bit RSA PKCS#8 private signing key | Secret. Owner-only permissions (`0600`); never commit, upload to R2, or include in the mobile app. |
 | `updates.public.pem` | RSA SubjectPublicKeyInfo public verification key | Safe to embed in the app and distribute with its build configuration. |
 
-The CLI will refuse to overwrite an existing pair. It signs exact payload bytes
-with RSA PKCS#1 v1.5 plus SHA-256 (`RSA-SHA256`) and emits base64url
-signatures. SHA-256 by itself is only a digest: it detects accidental changes
-but cannot prove who published the release. The private-key signature provides
-that authenticity; the app verifies it using the embedded public key.
+The CLI refuses to overwrite an existing pair. The Worker holds the private key
+and signs its exact public deployment response with RSA-SHA256; the CLI never
+receives that key. The mobile app verifies the response with the embedded public
+key.
 
 For the example, copy or replace the development public key at
 `apps/expo-lynx-example/keys/lynx/updates.public.pem`, and keep the matching
@@ -157,10 +156,8 @@ public key and embedded resources in the Expo plugin:
         {
           "embeddedBundlesPath": "./generated/expo-lynx/embedded",
           "publicKeyPath": "./keys/lynx/updates.public.pem",
-          "deliveryChannels": {
-            "shopping": {
-              "active": "https://delivery.example.com/v1/channels/shopping/active"
-            }
+          "deliveryEndpoints": {
+            "shopping": "https://delivery.example.com/v1/shop/shopping"
           }
         }
       ]
@@ -176,196 +173,29 @@ releases with its private counterpart. Do not use a different key merely
 because a feature is different unless isolation or separate publisher control
 is an explicit requirement.
 
-## Build and package a remote release
+## Release and delivery workflow
 
-The static embedded bundle is the baseline; a remote release is a separate
-signed artifact. Packaging a new release does **not** alter or rebuild the
-React Native JavaScript bundle.
-
-```sh
-pnpm lynx-bundle pack shopping \
-  --release-id shopping-2026.08.30.1 \
-  --version 2026.08.30.1 \
-  --platform ios \
-  --runtime-version expo-57
-```
-
-The configured `releaseOutputDir` receives:
-
-```text
-dist/lynx-releases/shopping/shopping-2026.08.30.1/
-  release.zip
-  release-payload.json
-  release-envelope.json
-  packaging-report.json
-```
-
-Upload the immutable ZIP and signed envelope to your artifact store only after
-the server-side channel pointer is ready. A channel endpoint is then the small
-signed decision document that points a feature/channel at the new immutable
-release. The mobile app uses these canonical routes:
-
-```text
-GET /v1/channels/:feature/:channel
-GET /v1/releases/:feature/:releaseId/manifest
-GET /v1/releases/:feature/:releaseId/release.zip
-```
-
-## Test signed delivery locally
-
-### Persistent, production-shaped local service
-
-For a realistic phone test, use the persistent local delivery service. It has
-the same public client route shape as the Worker, requires a bearer token for
-operator requests, accepts a signed manifest and ZIP through separate bounded
-upload routes, makes artifacts public only after the ZIP hash/length match, and
-promotes channels by creating a new signed monotonic revision. It stores only
-local test data in the ignored `.local-lynx-delivery/` directory.
-
-Generate a local publisher token and start the service. The private key remains
-on the development Mac; the service uses it only to sign channel envelopes.
-If this is a fresh development pair, first copy its **public** half to the Expo
-plugin path and make a new internal build so the app embeds the matching trust
-root. Do not copy the private PEM anywhere outside `.local-lynx-keys/`.
+The embedded bundle remains the offline fallback. A remote release is a new
+immutable `release.zip`; creating one does not rebuild React Native or iOS.
+For local testing, start the Console and Expo app, then build/upload:
 
 ```sh
-cp apps/expo-lynx-example/.local-lynx-keys/updates.public.pem \
-  apps/expo-lynx-example/keys/lynx/updates.public.pem
-
-# Required once after changing the embedded public key; not required per release.
-cd apps/expo-lynx-example
-npx expo prebuild --platform ios
-cd ../..
-
-export LYNX_DELIVERY_LOCAL_TOKEN="$(openssl rand -hex 32)"
-
-pnpm lynx-delivery serve -- \
-  --host 0.0.0.0 \
-  --port 3000 \
-  --token "$LYNX_DELIVERY_LOCAL_TOKEN" \
-  --private-key apps/expo-lynx-example/.local-lynx-keys/updates.private.pem \
-  --public-key apps/expo-lynx-example/keys/lynx/updates.public.pem
+pnpm lynx console
+pnpm start
+pnpm lynx release delivery
 ```
 
-It prints a loopback URL and every reachable LAN channel URL. Use the printed
-LAN URL—not `localhost`—in the `deliveryChannels` entry embedded in an iPhone
-build. Because that map is native `Info.plist` configuration, changing the
-host/IP requires a prebuild and new internal app build; publishing subsequent
-remote releases to the same URL does not.
-
-Build and package a named release, then upload and promote it from the
-publisher CLI. The `publish` command reads only `release-envelope.json` and
-`release.zip` from the given release directory; it does not expose the private
-key to the phone or upload it to the server storage.
-
-```sh
-pnpm lynx-bundle pack delivery \
-  --config apps/expo-lynx-example/lynx-bundle.config.mjs \
-  --release-id delivery-2026.08.30.1 \
-  --version 2026.08.30.1 \
-  --platform ios \
-  --runtime-version expo-57
-
-pnpm lynx-delivery publish -- \
-  --server http://192.168.18.144:3000 \
-  --token "$LYNX_DELIVERY_LOCAL_TOKEN" \
-  --release-dir apps/expo-lynx-example/dist/lynx-releases/delivery/delivery-2026.08.30.1 \
-  --activation next-open
-```
-
-Replace `192.168.18.144` with the LAN address printed by your service. This
-publishes these exact routes:
-
-```text
-PUT  /v1/admin/releases/:feature/:releaseId/manifest
-PUT  /v1/admin/releases/:feature/:releaseId/archive
-POST /v1/admin/channels/:feature/:channel/promote
-
-GET  /v1/channels/:feature/:channel
-GET  /v1/releases/:feature/:releaseId/manifest
-GET  /v1/releases/:feature/:releaseId/release.zip
-```
-
-The three `PUT`/`POST` routes are operator-only and require the bearer token.
-The three `GET` routes are client-facing: channel responses use `no-cache` plus a strong
-ETag/`304`, while the feature-scoped manifest and ZIP are immutable and use
-long-lived cache headers. Repeating the same upload and CLI idempotency key is
-safe; attempting different content under an existing release ID fails rather
-than overwriting an artifact.
-
-Run the no-native integration test at any time:
-
-```sh
-pnpm test:lynx-delivery
-```
-
-It runs a loopback-only temporary server and verifies unauthorized upload
-rejection, signed upload, promotion, idempotent republish, ETag `304`, and exact
-manifest/ZIP response bytes. It does not run Expo prebuild, Pods, Xcode, or an
-iOS simulator.
-
-### One-shot static server
-
-The root static server remains the fastest smoke test. It builds and signs a
-fresh local `delivery` release, serves it from `0.0.0.0:3000`, and prints a
-simulator URL plus reachable LAN addresses for a physical iPhone:
-
-```sh
-pnpm serve:lynx-local
-```
-
-Use the printed LAN IP in the example app's local development configuration;
-never use `localhost` from a phone. First open the printed channel URL in
-Mobile Safari on the phone. If it cannot load, the app cannot load it either:
-check that both devices share Wi-Fi, VPN/client isolation is disabled, and the
-macOS firewall allows the port.
-
-The local server is for a trusted development LAN only. Production release
-endpoints must use HTTPS and remain protected by the embedded-key signature,
-archive hash, streamed ZIP checks, and extracted-file hashes.
-
-For a test fault, pass one of the supported fault modes:
-
-```sh
-pnpm serve:lynx-local -- --fault corrupt-archive
-pnpm serve:lynx-local -- --fault invalid-signature
-pnpm serve:lynx-local -- --fault 404
-pnpm serve:lynx-local -- --fault delay
-```
+For Cloudflare setup, release promotion, remote endpoint configuration, and
+recovery, follow the [Delivery Console guide](./apps/console/README.md).
 
 ## Cloudflare delivery console and Worker
 
-`apps/console` is the checked-in package for both the TanStack
-console and its Elysia-powered **read-only public data plane**. It serves signed
-channel envelopes from D1 and immutable manifest/ZIP objects from R2 through
-the same three public routes used by the mobile client. The deployed browser
-bundle has no Cloudflare credentials or private signing key; authenticated
-publisher routes remain future work.
-
-The Worker includes an initial D1 schema migration. After replacing the D1
-placeholder ID, apply it locally before starting the Worker:
-
-```sh
-cd apps/console
-pnpm exec wrangler d1 migrations apply lynx-delivery --local
-pnpm dev
-curl http://127.0.0.1:8787/health
-```
-
-Provision its Cloudflare resources, then replace the placeholder D1
-`database_id` in `apps/console/wrangler.toml` with the returned
-value:
-
-```sh
-cd apps/console
-pnpm exec wrangler r2 bucket create lynx-artifacts
-pnpm exec wrangler d1 create lynx-delivery
-```
-
-Run `pnpm test` and `pnpm typecheck` from the Worker package before a staging
-deployment. Deploying the Worker does not make updates available by itself: the
-local console service must first validate and publish immutable artifacts, then
-create a signed D1 channel-head revision.
+`apps/console` is the single TanStack Console and Elysia/Cloudflare Worker
+package. The browser signs in with username/password, the CLI uploads through
+its API key, and mobile reads only the public signed deployment route. See the
+[Delivery Console guide](./apps/console/README.md) for local integration,
+one-time Cloudflare deployment, mobile endpoint configuration, release upload,
+promotion, rollback, and recovery.
 
 ## When an iOS prebuild is required
 
@@ -374,13 +204,27 @@ inputs change, for example:
 
 - adding or removing an embedded feature;
 - changing `embeddedBundlesPath`, `publicKeyPath`, or the configured delivery
-  channel map;
+  endpoint map;
 - rotating the embedded public key; or
 - updating the native module/plugin.
 
 Creating, signing, uploading, or switching to a new remote release does **not**
 need prebuild or a new iOS binary. The app verifies the new signed release at
 installation time and opens it on the next mini-app launch.
+
+## First real-device remote test
+
+1. Configure the app with the deployed HTTPS endpoint
+   `https://<worker>.workers.dev/v1/<appId>/<feature>`, then run Expo prebuild
+   and install one new native binary. The endpoint and public key are compiled
+   into the app.
+2. Build and upload a release, then select it and set `enabled: true` in the
+   Console. Use `force: false` to apply it on the next feature open, or
+   `force: true` to reload a mounted matching feature after verification.
+3. If that device previously used a different Worker (for example a LAN Worker)
+   with a higher revision, delete and reinstall the app once before testing the
+   new Worker. This clears its installed remote bundle and recorded revision;
+   do not use it as a normal release workflow.
 
 For detailed iOS local testing and the delivery architecture, see
 [`docs/ios-local-signed-lynx-testing.md`](./docs/ios-local-signed-lynx-testing.md)

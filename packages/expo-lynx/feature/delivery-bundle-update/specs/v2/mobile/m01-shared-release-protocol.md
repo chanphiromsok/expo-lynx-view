@@ -40,10 +40,14 @@ key path:
   "embeddedBundlesPath": "./generated/expo-lynx/embedded",
   "publicKeyPath": "./keys/lynx/delivery.public.pem",
   "deliveryEndpoints": {
-    "delivery": "https://delivery.example.com/v1/deploy/delivery"
+    "delivery": "https://delivery.example.com/v1/default/delivery"
   }
 }
 ```
+
+For a non-default app namespace, use
+`https://delivery.example.com/v1/<appId>/delivery`. The endpoint and public key
+are native build inputs; remote release changes are not.
 
 The app embeds only the public key. It must reject private-key PEM blocks,
 inline keys, response-supplied keys, and runtime key discovery. JavaScript may

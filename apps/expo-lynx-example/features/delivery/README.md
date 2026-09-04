@@ -1,31 +1,23 @@
-## Rspeedy project
+# Delivery mini-app
 
-This is a ReactLynx project bootstrapped with `create-rspeedy`.
+Edit this feature, then run these commands from the repository root:
 
-## Getting Started
+```sh
+# Local Worker and Console
+pnpm lynx console
 
-First, install the dependencies:
+# Expo example app
+pnpm start
 
-```bash
-pnpm install
+# Build, package, and upload this feature
+pnpm lynx release delivery
 ```
 
-Then, run the development server:
+Open the Console, sign in, select the verified bundle, and enable it. The full
+local and Cloudflare deployment guide is
+[apps/console/README.md](../../../console/README.md).
 
-```bash
-pnpm run dev
-```
-
-Scan the QRCode in the terminal with your LynxExplorer App to see the result.
-
-You can start editing the page by modifying `src/App.tsx`. The page auto-updates as you edit the file.
-
-at root: pnpm lynx release delivery after make change
-console: pnpm exec wrangler dev \
-  --local \
-  --persist-to .wrangler/delivery-worker-v2 \
-  --ip 0.0.0.0 \
-  --port 8787 \
-  --var LOCAL_UPLOADS:true
-
-expo-lynx-example:  pnpm run start
+For a real device, configure this feature's Expo plugin endpoint as
+`https://<worker>.workers.dev/v1/default/delivery`, prebuild and install one
+new binary, then follow the **First real-device release** section in that guide.
+Changing a remote release later does not need another native build.

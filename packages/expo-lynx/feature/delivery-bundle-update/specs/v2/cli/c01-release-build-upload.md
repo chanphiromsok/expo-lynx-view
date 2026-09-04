@@ -6,7 +6,7 @@
 
 Provide one oclif-backed command that builds a configured Lynx feature,
 packages one deterministic `release.zip`, computes its SHA-256, uploads it
-directly to a Worker-issued R2 URL, and completes registration.
+directly to R2 with the CLI's local S3 credential, and completes registration.
 
 The CLI does not generate, read, or require a PEM signing key. It does not
 create a signed release manifest or upload bundle bytes through the Worker.
@@ -29,7 +29,7 @@ The normal workflow is one command:
 
 ```bash
 export LYNX_DELIVERY_SERVER="http://127.0.0.1:5173"
-export LYNX_DELIVERY_CONTROL_TOKEN="<local-control-token>"
+export LYNX_DELIVERY_API_KEY="lynx_live_<your-api-key>"
 
 pnpm lynx release delivery
 ```
@@ -37,12 +37,14 @@ pnpm lynx release delivery
 Supported configuration:
 
 - `--server` overrides `LYNX_DELIVERY_SERVER`.
-- `--token` overrides `LYNX_DELIVERY_CONTROL_TOKEN` without printing it.
+- `--api-key` overrides `LYNX_DELIVERY_API_KEY` without printing it.
 - `--json` emits one machine-readable result.
 - `--draft` builds the local two-file release directory without network calls.
 
-There is no `--private-key`, channel, activation, browser-upload, or R2
-credential option.
+There is no `--private-key`, channel, activation, or browser-upload option.
+Production direct upload uses `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+`R2_ACCOUNT_ID` (or `CLOUDFLARE_ACCOUNT_ID`), and `R2_BUCKET_NAME` (or
+`LYNX_DELIVERY_R2_BUCKET`), normally from ignored `.env.lynx`.
 
 ## Local release directory
 
@@ -58,6 +60,7 @@ manifest and is never uploaded to public R2 storage:
 ```json
 {
   "schemaVersion": 1,
+  "appId": "shop",
   "feature": "delivery",
   "releaseId": "delivery-20260901T011848990Z-ac8c0e",
   "version": "2026.09.01",
@@ -69,7 +72,7 @@ manifest and is never uploaded to public R2 storage:
 
 The CLI writes no `release-payload.json`, `release-envelope.json`,
 `packaging-report.json`, signature, public-key fingerprint, per-file hash list,
-or embedded control token.
+or embedded API key.
 
 ## Build and package contract
 
@@ -94,52 +97,43 @@ The CLI sends the exact parsed `release.json` fields to:
 
 ```http
 POST /api/uploads
-authorization: Bearer <control-token>
+authorization: Bearer <api-key>
 content-type: application/json
 ```
 
-The Worker returns either `complete: true` for an identical registered release,
-or one upload instruction:
+The Worker returns `complete: true` for an identical registered release or a
+pending `bundleId`. The CLI signs a PUT to the canonical R2 object key with its
+local S3 credential:
 
 ```json
 {
   "bundleId": "delivery-20260901T011848990Z-ac8c0e",
-  "complete": false,
-  "upload": {
-    "method": "PUT",
-    "url": "https://<account>.r2.cloudflarestorage.com/<signed-url>",
-    "headers": {
-      "content-type": "application/zip",
-      "x-amz-checksum-sha256": "<base64-sha256>"
-    }
-  }
+  "complete": false
 }
 ```
 
-The CLI follows the returned method, URL, and exact allowed headers, sends only
-the raw ZIP bytes, and never forwards the control token to the upload URL.
+The CLI sends only raw ZIP bytes with `application/zip` and the archive SHA-256
+to R2; it never forwards its delivery API key to R2.
 After a successful PUT it sends the same release metadata to:
 
 ```http
 POST /api/uploads/:bundleId/complete
-authorization: Bearer <control-token>
+authorization: Bearer <api-key>
 content-type: application/json
 ```
 
 The CLI treats the registration and completion APIs as idempotent. Re-running
 upload for the same ID and exact metadata succeeds; the same ID with different
-metadata fails as conflict. HTTP redirects on the R2 PUT are rejected so ZIP
-bytes and signed headers cannot be redirected to another origin.
+metadata fails as conflict. HTTP redirects on the R2 PUT are rejected.
 
-For local Miniflare testing, W01 may return a same-origin development PUT URL
-with the same instruction shape. The CLI must not contain a separate local
-upload algorithm.
+For local Miniflare testing, `LOCAL_UPLOADS=true` uses the local R2 binding;
+the CLI needs no production R2 S3 credential.
 
 ## Output and errors
 
 Success prints the feature, release ID, ZIP path, SHA-256, byte length, and
-registration result. It never prints tokens, R2 credentials, presigned query
-parameters, private environment values, or ZIP content.
+registration result. It never prints tokens, R2 credentials, private
+environment values, or ZIP content.
 
 Errors identify the failing stage and actionable endpoint:
 
@@ -147,7 +141,7 @@ Errors identify the failing stage and actionable endpoint:
 Build failed: <safe cause>
 Package failed: <safe cause>
 Registration failed at http://127.0.0.1:5173/api/uploads: <status and safe API message>
-R2 upload failed: <status without the presigned URL>
+R2 upload failed with HTTP 403 — R2 AccessDenied. Check the local R2 S3 credential has Object Read & Write for this bucket.
 Completion failed: <status and safe API message>
 ```
 
@@ -162,9 +156,10 @@ failure.
       network request.
 - [ ] Repeated equal inputs create byte-identical ZIPs and metadata hashes.
 - [ ] The CLI starts with no private/public release-signing key configuration.
-- [ ] The control token appears only on Worker control API requests and never
+- [ ] The API key appears only on Worker upload API requests and never
       on the R2/local PUT request or in output.
-- [ ] The Worker-provided checksum and content-type headers are sent exactly.
+- [ ] The CLI signs an R2 PUT with only its local S3 credential; the delivery
+      API key is never sent to R2.
 - [ ] Identical retry succeeds and conflicting reuse fails clearly.
 - [ ] Missing artifacts, invalid metadata, unreachable Worker, 401, 503, R2
       failure, and completion failure produce safe actionable messages.
