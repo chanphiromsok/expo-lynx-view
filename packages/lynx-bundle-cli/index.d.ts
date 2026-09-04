@@ -12,6 +12,8 @@ export type LynxFeatureConfig = {
 };
 
 export type LynxBundleConfig = {
+  /** Worker namespace. Defaults to `default` for backward compatibility. */
+  appId?: string;
   featuresDir?: string;
   features: Record<string, LynxFeatureConfig>;
   embeddedOutputDir: string;

@@ -15,13 +15,14 @@ const keys = generateKeyPairSync('rsa', { modulusLength: 2048, publicExponent: 6
 const privateKey = keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 const publicKey = keys.publicKey.export({ type: 'spki', format: 'pem' }).toString();
 
-function environment(options: { deployment?: boolean; bundle?: boolean; signingKey?: string } = {}): DeliveryEnv {
+function environment(options: { deployment?: boolean; bundle?: boolean; legacyOnly?: boolean; signingKey?: string } = {}): DeliveryEnv {
   const includeDeployment = options.deployment ?? true;
   const includeBundle = options.bundle ?? true;
   return {
     DELIVERY_SIGNING_PRIVATE_KEY: options.signingKey ?? privateKey,
     DB: {
       prepare(sql: string) {
+        const query = sql.toLowerCase();
         return {
           bind() {
             return {
@@ -41,17 +42,59 @@ function environment(options: { deployment?: boolean; bundle?: boolean; signingK
                 }
                 return includeBundle ? { archiveSha256, archiveBytes: archive.byteLength } : null;
               },
+              async raw() {
+                if (query.includes('from "deployments"')) {
+                  return includeDeployment ? [[
+                    'default',
+                    feature,
+                    releaseId,
+                    1,
+                    0,
+                    7,
+                    '2026-09-01T01:20:00.000Z',
+                  ]] : [];
+                }
+                return includeBundle ? [[
+                  'default',
+                  releaseId,
+                  feature,
+                  '2026.09.01',
+                  'expo-57',
+                  archiveSha256,
+                  archive.byteLength,
+                  '2026-09-01T01:20:00.000Z',
+                ]] : [];
+              },
             };
           },
         };
       },
     } as D1Database,
     ARTIFACTS: {
-      async get() {
+      async get(key) {
+        if (options.legacyOnly && key.startsWith('default/')) return null;
         return includeBundle ? { body: new Blob([archive]).stream(), size: archive.byteLength } : null;
       },
     } as R2Bucket,
   };
+}
+
+{
+  const response = await handlePublicDeliveryRequest(
+    environment({ legacyOnly: true }),
+    new Request(`https://delivery.example/v1/bundles/${feature}/${releaseId}/release.zip`),
+  );
+  assert.equal(response.status, 200);
+}
+
+{
+  const response = await handlePublicDeliveryRequest(
+    environment(),
+    new Request(`https://delivery.example/v1/shop/${feature}`),
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json() as { archiveUrl: string };
+  assert.equal(body.archiveUrl, `/v1/shop/${feature}/${releaseId}/release.zip`);
 }
 
 {

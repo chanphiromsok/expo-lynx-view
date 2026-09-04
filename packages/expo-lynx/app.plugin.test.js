@@ -164,10 +164,25 @@ test('validates canonical build-time deployment URLs against the embedded regist
   assert.deepEqual(_internal.normalizeDeliveryEndpoints(options.deliveryEndpoints, ['shopping']), {
     shopping: 'https://delivery.example.com/v1/deploy/shopping',
   });
+  assert.deepEqual(
+    _internal.normalizeDeliveryEndpoints(
+      { shopping: 'https://delivery.example.com/v1/shop/shopping' },
+      ['shopping']
+    ),
+    { shopping: 'https://delivery.example.com/v1/shop/shopping' }
+  );
   assert.throws(
     () =>
       _internal.normalizeDeliveryEndpoints(
         { shopping: 'https://delivery.example.com/v1/deploy/other' },
+        ['shopping']
+      ),
+    /canonical deployment URL/
+  );
+  assert.throws(
+    () =>
+      _internal.normalizeDeliveryEndpoints(
+        { shopping: 'https://delivery.example.com/v1/shop/other' },
         ['shopping']
       ),
     /canonical deployment URL/

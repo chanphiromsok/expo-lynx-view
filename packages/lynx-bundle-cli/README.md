@@ -1,17 +1,16 @@
 # `@expo-lynx/bundle-cli`
 
 The bundle CLI builds an isolated Lynx feature, creates one deterministic ZIP,
-and uploads it through the delivery Worker. It does not sign releases, read a
-release PEM, or receive R2 credentials.
+signs its R2 request locally, and asks the delivery Worker to verify it. It
+does not sign releases or read a release PEM.
 
 ## Release workflow
 
 ```sh
 export LYNX_DELIVERY_SERVER="http://127.0.0.1:8787"
-export LYNX_DELIVERY_CONTROL_TOKEN="<local-control-token>"
+export LYNX_DELIVERY_API_KEY="<local-delivery-api-key>"
 
-# Build, package, request a short-lived upload URL, upload the ZIP directly,
-# and ask the Worker to verify and register it.
+# Build, package, upload the ZIP, and ask the Worker to verify and register it.
 pnpm lynx release delivery
 
 # Build only. This performs no network request.
@@ -41,11 +40,13 @@ mobile and is never stored in R2:
 }
 ```
 
-The command sends this exact metadata only to the authenticated Worker control
-API. The Worker returns one short-lived PUT instruction. The CLI sends only raw
-`release.zip` bytes and the Worker-provided headers to that URL—never the
-control token. It then calls completion, where the Worker validates the R2
-object’s exact SHA-256 and byte length before inserting an immutable bundle.
+The command sends this exact metadata to the authenticated Worker upload API,
+uploads only `release.zip` directly to R2, then calls completion. The Worker
+validates the R2 object's exact SHA-256 and byte length before inserting an
+immutable bundle. Production upload requires `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID` (or `CLOUDFLARE_ACCOUNT_ID`), and
+`R2_BUCKET_NAME` (or `LYNX_DELIVERY_R2_BUCKET`). Local Worker mode needs none
+of these because it uses its local R2 binding.
 
 To retry an already-built draft:
 
@@ -54,7 +55,7 @@ pnpm lynx release upload \
   ./dist/lynx-releases/delivery/delivery-20260901T011848990Z-ac8c0e
 ```
 
-`--server` and `--token` override the two environment variables. `--json`
+`--server` and `--api-key` override the two environment variables. `--json`
 prints the registered bundle record. The command never selects a bundle,
 enables delivery, or requests force reload; make those choices in the console.
 

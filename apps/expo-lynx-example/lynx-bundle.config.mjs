@@ -1,4 +1,5 @@
 export default {
+  appId: "default",
   featuresDir: "./features",
   features: {
     delivery: {},

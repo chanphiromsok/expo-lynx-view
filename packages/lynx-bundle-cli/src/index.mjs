@@ -31,6 +31,7 @@ export const PROTOCOL_LIMITS = Object.freeze({
 });
 
 const FEATURE_ID = /^[a-z][a-z0-9-]{0,63}$/;
+const APP_ID = /^[a-z][a-z0-9-]{0,63}$/;
 const RELEASE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const DISPLAY_VERSION = /^[A-Za-z0-9][A-Za-z0-9.+-]{0,127}$/;
 const SHA_256 = /^[a-f0-9]{64}$/;
@@ -128,6 +129,7 @@ export function packRelease(config, options) {
     const archiveHash = sha256(archive);
     const release = {
       schemaVersion: 1,
+      appId: config.appId,
       feature: feature.id,
       releaseId,
       version,
@@ -185,8 +187,10 @@ export async function loadConfigAsync({ configPath, cwd = process.cwd() } = {}) 
 function normalizeConfig(raw, configPath) {
   if (!isObject(raw)) throw new Error('lynx-bundle config must export an object.');
   const configDirectory = dirname(configPath);
-  const allowed = new Set(['featuresDir', 'features', 'embeddedOutputDir', 'releaseOutputDir']);
+  const allowed = new Set(['appId', 'featuresDir', 'features', 'embeddedOutputDir', 'releaseOutputDir']);
   assertKnownKeys(raw, allowed, 'config');
+  const appId = raw.appId ?? 'default';
+  if (typeof appId !== 'string' || !APP_ID.test(appId)) throw new Error('config.appId must be a lowercase identifier.');
   if (!isObject(raw.features) || Object.keys(raw.features).length === 0) throw new Error('config.features must be a non-empty object.');
   if (typeof raw.embeddedOutputDir !== 'string' || !raw.embeddedOutputDir) throw new Error('config.embeddedOutputDir is required.');
   const featuresDirectory = resolveContained(configDirectory, raw.featuresDir ?? '.');
@@ -215,6 +219,7 @@ function normalizeConfig(raw, configPath) {
   return {
     configPath,
     configDirectory,
+    appId,
     featuresDirectory,
     features,
     embeddedOutputDir: resolveContained(configDirectory, raw.embeddedOutputDir),

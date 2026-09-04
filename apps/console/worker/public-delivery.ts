@@ -1,4 +1,8 @@
+import { and, eq } from 'drizzle-orm';
+
 import { sha256Hex, signDocument } from './protocol.ts';
+import { createDeliveryDatabase } from './db/client.ts';
+import { bundles, deployments } from './db/schema.ts';
 
 export interface DeliveryEnv {
   ARTIFACTS: R2Bucket;
@@ -6,21 +10,13 @@ export interface DeliveryEnv {
   DELIVERY_SIGNING_PRIVATE_KEY: string;
 }
 
-type DeploymentRow = {
-  bundleId: string | null;
-  enabled: number;
-  force: number;
-  revision: number;
-  updatedAt: string;
-  version: string | null;
-  runtimeVersion: string | null;
-  archiveSha256: string | null;
-  archiveBytes: number | null;
-};
+type DeploymentRow = typeof deployments.$inferSelect & Partial<Pick<typeof bundles.$inferSelect,
+  'version' | 'runtimeVersion' | 'archiveSha256' | 'archiveBytes'>>;
 
-type BundleRow = { archiveSha256: string; archiveBytes: number };
+type BundleRow = typeof bundles.$inferSelect;
 
 const featureId = /^[a-z][a-z0-9-]{0,63}$/;
+const appId = /^[a-z][a-z0-9-]{0,63}$/;
 const bundleId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const sha256 = /^[a-f0-9]{64}$/;
 const immutableCacheControl = 'public, max-age=31536000, immutable';
@@ -40,13 +36,23 @@ export async function handlePublicDeliveryRequest(
     if (parts[1] === 'deploy' && parts.length === 3) {
       const feature = parts[2];
       if (!feature || !featureId.test(feature)) return notFound();
-      return getDeployment(environment, request, feature);
+      return getDeployment(environment, request, 'default', feature, false);
     }
     if (parts[1] === 'bundles' && parts.length === 5 && parts[4] === 'release.zip') {
       const feature = parts[2];
       const releaseId = parts[3];
       if (!feature || !releaseId || !featureId.test(feature) || !bundleId.test(releaseId)) return notFound();
-      return getArchive(environment, request, feature, releaseId);
+      return getArchive(environment, request, 'default', feature, releaseId);
+    }
+    if (parts.length === 3) {
+      const [app, feature] = [parts[1], parts[2]];
+      if (!app || !feature || !appId.test(app) || !featureId.test(feature)) return notFound();
+      return getDeployment(environment, request, app, feature, true);
+    }
+    if (parts.length === 5 && parts[4] === 'release.zip') {
+      const [app, feature, releaseId] = [parts[1], parts[2], parts[3]];
+      if (!app || !feature || !releaseId || !appId.test(app) || !featureId.test(feature) || !bundleId.test(releaseId)) return notFound();
+      return getArchive(environment, request, app, feature, releaseId);
     }
     return notFound();
   } catch {
@@ -57,20 +63,28 @@ export async function handlePublicDeliveryRequest(
 async function getDeployment(
   environment: DeliveryEnv,
   request: Request,
+  app: string,
   feature: string,
+  scopedRoute: boolean,
 ): Promise<Response> {
   if (!environment.DELIVERY_SIGNING_PRIVATE_KEY?.trim()) {
     return jsonResponse(503, { error: { code: 'signing-not-configured', message: 'Delivery signing is unavailable.' } });
   }
-  const row = await environment.DB.prepare(
-    `SELECT d.bundle_id AS bundleId, d.enabled, d.force, d.revision, d.updated_at AS updatedAt,
-      b.version, b.runtime_version AS runtimeVersion, b.archive_sha256 AS archiveSha256,
-      b.archive_bytes AS archiveBytes
-     FROM deployments d
-     LEFT JOIN bundles b ON b.id = d.bundle_id AND b.feature_id = d.feature_id
-     WHERE d.feature_id = ? LIMIT 1`,
-  ).bind(feature).first<DeploymentRow>();
-  const document = deploymentDocument(feature, row);
+  const database = createDeliveryDatabase(environment.DB);
+  const [deployment] = await database.select().from(deployments)
+    .where(and(eq(deployments.appId, app), eq(deployments.featureId, feature)))
+    .limit(1);
+  const [bundle] = deployment?.bundleId
+    ? await database.select().from(bundles).where(and(
+      eq(bundles.appId, app),
+      eq(bundles.featureId, feature),
+      eq(bundles.id, deployment.bundleId),
+    )).limit(1)
+    : [];
+  const row: DeploymentRow | null = deployment
+    ? { ...deployment, ...(bundle ?? {}) }
+    : null;
+  const document = deploymentDocument(feature, row, app, scopedRoute);
   if (!document) return unavailable();
   try {
     const signed = await signDocument(document, environment.DELIVERY_SIGNING_PRIVATE_KEY);
@@ -94,8 +108,8 @@ async function getDeployment(
   }
 }
 
-function deploymentDocument(feature: string, row: DeploymentRow | null): Record<string, unknown> | null {
-  if (!row || row.enabled !== 1) {
+function deploymentDocument(feature: string, row: DeploymentRow | null, app: string, scopedRoute: boolean): Record<string, unknown> | null {
+  if (!row || !row.enabled) {
     return {
       schemaVersion: 1,
       type: 'lynx-deployment',
@@ -116,11 +130,13 @@ function deploymentDocument(feature: string, row: DeploymentRow | null): Record<
     feature,
     revision: row.revision,
     enabled: true,
-    force: row.force === 1,
+    force: row.force,
     releaseId: row.bundleId,
     version: row.version,
     runtimeVersion: row.runtimeVersion,
-    archiveUrl: `/v1/bundles/${encodeURIComponent(feature)}/${encodeURIComponent(row.bundleId)}/release.zip`,
+    archiveUrl: scopedRoute
+      ? `/v1/${encodeURIComponent(app)}/${encodeURIComponent(feature)}/${encodeURIComponent(row.bundleId)}/release.zip`
+      : `/v1/bundles/${encodeURIComponent(feature)}/${encodeURIComponent(row.bundleId)}/release.zip`,
     archiveSha256: row.archiveSha256,
     archiveBytes,
     issuedAt: row.updatedAt,
@@ -130,20 +146,25 @@ function deploymentDocument(feature: string, row: DeploymentRow | null): Record<
 async function getArchive(
   environment: DeliveryEnv,
   request: Request,
+  app: string,
   feature: string,
   releaseId: string,
 ): Promise<Response> {
-  const row = await environment.DB.prepare(
-    `SELECT archive_sha256 AS archiveSha256, archive_bytes AS archiveBytes
-     FROM bundles WHERE feature_id = ? AND id = ? LIMIT 1`,
-  ).bind(feature, releaseId).first<BundleRow>();
+  const [row] = await createDeliveryDatabase(environment.DB)
+    .select()
+    .from(bundles)
+    .where(and(eq(bundles.appId, app), eq(bundles.featureId, feature), eq(bundles.id, releaseId)))
+    .limit(1);
   if (!row) return notFound();
   if (!sha256.test(row.archiveSha256) || !Number.isSafeInteger(row.archiveBytes) || row.archiveBytes <= 0) {
     return unavailable();
   }
   const etag = `"${row.archiveSha256}"`;
   if (matchesIfNoneMatch(request, etag)) return notModified(etag);
-  const object = await environment.ARTIFACTS.get(archiveObjectKey(feature, releaseId));
+  const object = await environment.ARTIFACTS.get(archiveObjectKey(app, feature, releaseId))
+    // D1 rows from before 0003 are migrated into `default`; their immutable R2
+    // objects keep the old key until a later retention cleanup.
+    ?? (app === 'default' ? await environment.ARTIFACTS.get(legacyArchiveObjectKey(feature, releaseId)) : null);
   if (!object?.body || object.size !== row.archiveBytes) return unavailable();
   return new Response(object.body, {
     status: 200,
@@ -159,7 +180,11 @@ async function getArchive(
   });
 }
 
-function archiveObjectKey(feature: string, releaseId: string): string {
+function archiveObjectKey(app: string, feature: string, releaseId: string): string {
+  return `${app}/${feature}/releases/${releaseId}/release.zip`;
+}
+
+function legacyArchiveObjectKey(feature: string, releaseId: string): string {
   return `${feature}/releases/${releaseId}/release.zip`;
 }
 

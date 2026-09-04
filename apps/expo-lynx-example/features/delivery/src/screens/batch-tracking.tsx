@@ -161,11 +161,11 @@ const BatchTrackingScreen = ({
         paddingRight: `${safeArea.safeAreaRight ?? 0}px`,
       }}
     >
-      <view className="bt-appbar">
+      {/* <view className="bt-appbar">
         <BackButton />
         <text className="bt-appbar-title">{batch.invoiceNumber}</text>
         <view className="bt-appbar-spacer" />
-      </view>
+      </view> */}
 
       {/* Hero — receiver-first */}
       <view className="bt-hero">

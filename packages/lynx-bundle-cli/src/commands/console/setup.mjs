@@ -1,0 +1,78 @@
+import { Command, Flags } from '@oclif/core';
+import { createInterface } from 'node:readline/promises';
+
+import { listCloudflareAccounts, setupConsole } from '../../console-setup.mjs';
+
+async function prompt(question) {
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await terminal.question(question)).trim();
+  } finally {
+    terminal.close();
+  }
+}
+
+async function promptSecret(question) {
+  if (!process.stdin.isTTY) throw new Error('Set R2_SECRET_ACCESS_KEY when console:setup is not running in a terminal.');
+  process.stdout.write(question);
+  return await new Promise((resolve, reject) => {
+    let value = '';
+    const cleanup = () => {
+      process.stdin.removeListener('data', onData);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+    };
+    const finish = () => {
+      cleanup();
+      process.stdout.write('\n');
+      resolve(value);
+    };
+    const onData = (chunk) => {
+      const key = chunk.toString();
+      if (key === '\u0003') {
+        cleanup();
+        reject(new Error('Setup cancelled.'));
+      } else if (key === '\r' || key === '\n') finish();
+      else if (key === '\u007f') value = value.slice(0, -1);
+      else value += key;
+    };
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.on('data', onData);
+  });
+}
+
+async function selectAccount() {
+  const accounts = listCloudflareAccounts();
+  process.stdout.write('Account List\n');
+  accounts.forEach(({ name, id }, index) => process.stdout.write(`${index + 1}) ${name} (${id})\n`));
+  const selected = await prompt(`Select account [1-${accounts.length}]: `);
+  const index = Number(selected) - 1;
+  if (!Number.isInteger(index) || !accounts[index]) throw new Error('Select one listed Cloudflare account.');
+  return accounts[index].id;
+}
+
+export default class ConsoleSetup extends Command {
+  static description = 'Provision D1, R2, Worker secrets, and a deployed delivery Console.';
+
+  static flags = {
+    'account-id': Flags.string({ description: 'Cloudflare account ID', env: 'CLOUDFLARE_ACCOUNT_ID' }),
+    'r2-access-key-id': Flags.string({ description: 'R2 S3 access key ID', env: 'R2_ACCESS_KEY_ID' }),
+    'r2-secret-access-key': Flags.string({ description: 'R2 S3 secret access key (prefer the hidden prompt)', env: 'R2_SECRET_ACCESS_KEY' }),
+    username: Flags.string({ description: 'first Console username', required: true }),
+    'dry-run': Flags.boolean({ description: 'validate local prerequisites without Cloudflare changes' }),
+  };
+
+  async run() {
+    const { flags } = await this.parse(ConsoleSetup);
+    if (flags['dry-run']) {
+      setupConsole({ username: flags.username, dryRun: true });
+      return;
+    }
+    const accountId = flags['account-id'] ?? await selectAccount();
+    process.stdout.write(`R2 S3 API Tokens: https://dash.cloudflare.com/${accountId}/r2/api-tokens\nRequired permission: Object Read & Write; target bucket: lynx-artifacts\n`);
+    const r2AccessKeyId = flags['r2-access-key-id'] ?? await prompt('R2 S3 Access Key ID: ');
+    const r2SecretAccessKey = flags['r2-secret-access-key'] ?? await promptSecret('R2 S3 Secret Access Key: ');
+    setupConsole({ username: flags.username, accountId, r2AccessKeyId, r2SecretAccessKey });
+  }
+}

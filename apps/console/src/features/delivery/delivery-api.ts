@@ -2,6 +2,7 @@ export type BundleStatus = 'active' | 'ready';
 
 export type Bundle = {
   id: string;
+  appId: string;
   feature: string;
   version: string;
   runtimeVersion: string;
@@ -14,6 +15,7 @@ export type Bundle = {
 export type DeploymentStatus = 'active' | 'disabled' | 'empty';
 
 export type Deployment = {
+  appId: string;
   feature: string;
   bundleId: string | null;
   enabled: boolean;
@@ -28,13 +30,22 @@ export type DeliveryOverview = {
   bundles: Bundle[];
 };
 
+export type DeliveryScope = Pick<Deployment, 'appId' | 'feature'>;
+
 export type UpdateDeployment =
   | { enabled: boolean }
   | { bundleId: string; force: boolean };
 
 export const deliveryQueryKeys = {
-  overview: (feature: string, credentialsRevision: number) =>
-    ['delivery', 'overview', feature, credentialsRevision] as const,
+  session: ['auth', 'session'] as const,
+  scopes: ['delivery', 'scopes'] as const,
+  overview: (appId: string, feature: string, sessionRevision: number) =>
+    ['delivery', 'overview', appId, feature, sessionRevision] as const,
+};
+
+export type ConsoleUser = {
+  id: string;
+  username: string;
 };
 
 export class DeliveryApiError extends Error {
@@ -48,13 +59,12 @@ export class DeliveryApiError extends Error {
 
 async function request<T>(
   path: string,
-  token: string,
   init?: RequestInit,
 ): Promise<T> {
   const response = await fetch(path, {
     ...init,
+    credentials: 'same-origin',
     headers: {
-      Authorization: `Bearer ${token}`,
       Accept: 'application/json',
       ...init?.headers,
     },
@@ -77,21 +87,44 @@ async function request<T>(
 }
 
 export const deliveryApi = {
-  getOverview(feature: string, token: string): Promise<DeliveryOverview> {
+  getCurrentUser(): Promise<{ user: ConsoleUser }> {
+    return request<{ user: ConsoleUser }>('/api/auth/me');
+  },
+
+  login(username: string, password: string): Promise<{ user: ConsoleUser }> {
+    return request<{ user: ConsoleUser }>('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+  },
+
+  async logout(): Promise<void> {
+    const response = await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) throw new DeliveryApiError(response.status, `Request failed with HTTP ${response.status}.`);
+  },
+
+  getOverview(appId: string, feature: string): Promise<DeliveryOverview> {
     return request<DeliveryOverview>(
-      `/api/deploy/${encodeURIComponent(feature)}`,
-      token,
+      `/api/deploy/${encodeURIComponent(appId)}/${encodeURIComponent(feature)}`,
     );
   },
 
+  getScopes(): Promise<DeliveryScope[]> {
+    return request<DeliveryScope[]>('/api/deployments');
+  },
+
   updateDeployment(
+    appId: string,
     feature: string,
-    token: string,
     update: UpdateDeployment,
   ): Promise<DeliveryOverview> {
     return request<DeliveryOverview>(
-      `/api/deploy/${encodeURIComponent(feature)}`,
-      token,
+      `/api/deploy/${encodeURIComponent(appId)}/${encodeURIComponent(feature)}`,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

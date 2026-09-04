@@ -243,6 +243,9 @@ function normalizeDeliveryEndpoints(value, allowedFeatures) {
     } catch {
       throw new Error(`expo-lynx-view deliveryEndpoints.${feature} must be an HTTP(S) URL.`);
     }
+    const scopedRoute = url.pathname.match(
+      /^\/v1\/([a-z][a-z0-9-]{0,63})\/([a-z][a-z0-9-]{0,63})$/
+    );
     if (
       (url.protocol !== 'https:' && url.protocol !== 'http:') ||
       !url.hostname ||
@@ -250,7 +253,7 @@ function normalizeDeliveryEndpoints(value, allowedFeatures) {
       url.password ||
       url.search ||
       url.hash ||
-      url.pathname !== `/v1/deploy/${feature}`
+      (url.pathname !== `/v1/deploy/${feature}` && scopedRoute?.[2] !== feature)
     ) {
       throw new Error(
         `expo-lynx-view deliveryEndpoints.${feature} must be a credential-free canonical deployment URL.`

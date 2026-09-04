@@ -1,58 +1,42 @@
+import { and, desc, eq } from 'drizzle-orm';
+
 import { hexToBase64, sha256Hex } from './protocol.ts';
-import { presignR2Put } from './r2-presign.ts';
+import {
+  authenticateApiKey,
+  authenticatePassword,
+  authenticateSession,
+  clearSessionCookie,
+  createSessionCookie,
+  type AuthEnv,
+} from './auth.ts';
+import {
+  type DeploymentUpdateInput,
+  type LoginInput,
+  type ReleaseMetadata,
+} from './schema.ts';
+import { createDeliveryDatabase } from './db/client.ts';
+import { bundles, deployments } from './db/schema.ts';
 
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const UPLOAD_EXPIRY_SECONDS = 15 * 60;
 const featureId = /^[a-z][a-z0-9-]{0,63}$/;
+const appId = /^[a-z][a-z0-9-]{0,63}$/;
 const bundleId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const sha256 = /^[a-f0-9]{64}$/;
-const protocolVersion = /^[\u0020-\u007e]{1,128}$/;
 
-export interface ControlEnv {
+export interface ControlEnv extends AuthEnv {
   ARTIFACTS: R2Bucket;
-  DB: D1Database;
-  CONTROL_TOKEN: string;
   DELIVERY_SIGNING_PRIVATE_KEY: string;
-  R2_ACCESS_KEY_ID?: string;
-  R2_ACCOUNT_ID?: string;
-  R2_BUCKET_NAME?: string;
-  R2_SECRET_ACCESS_KEY?: string;
   /** Set only by the local Wrangler configuration. Never set in production. */
   LOCAL_UPLOADS?: string | boolean;
 }
 
-export type UpdateDeployment =
+type UpdateDeployment =
   | { enabled: boolean }
   | { bundleId: string; force: boolean };
 
-export type ReleaseMetadata = {
-  schemaVersion: 1;
-  feature: string;
-  releaseId: string;
-  version: string;
-  runtimeVersion: string;
-  archiveSha256: string;
-  archiveBytes: number;
-};
-
-type BundleRow = {
-  id: string;
-  featureId: string;
-  version: string;
-  runtimeVersion: string;
-  archiveSha256: string;
-  archiveBytes: number;
-  createdAt: string;
-};
-
-type DeploymentRow = {
-  featureId: string;
-  bundleId: string | null;
-  enabled: number;
-  force: number;
-  revision: number;
-  updatedAt: string;
-};
+type BundleRow = typeof bundles.$inferSelect;
+type DeploymentRow = typeof deployments.$inferSelect;
 
 type UploadInstruction = {
   method: 'PUT';
@@ -79,25 +63,56 @@ class ApiError extends Error {
 export async function getDeploymentOverview(
   environment: ControlEnv,
   request: Request,
-  feature: string,
+  appOrFeature: string,
+  requestedFeature?: string,
 ): Promise<Response> {
-  return handleControlRequest(environment, request, async () => {
+  return handleConsoleRequest(environment, request, async () => {
+    const [app, feature] = deploymentScope(appOrFeature, requestedFeature);
+    assertApp(app);
     assertFeature(feature);
-    return jsonResponse(200, await readOverview(environment, feature));
+    return jsonResponse(200, await readOverview(environment, app, feature));
+  });
+}
+
+export async function getDeploymentScopes(
+  environment: ControlEnv,
+  request: Request,
+): Promise<Response> {
+  return handleConsoleRequest(environment, request, async () => {
+    const database = createDeliveryDatabase(environment.DB);
+    const [bundleScopes, deploymentScopes] = await Promise.all([
+      database.select({ appId: bundles.appId, feature: bundles.featureId })
+        .from(bundles)
+        .groupBy(bundles.appId, bundles.featureId),
+      database.select({ appId: deployments.appId, feature: deployments.featureId })
+        .from(deployments)
+        .groupBy(deployments.appId, deployments.featureId),
+    ]);
+    const scopes = new Map<string, { appId: string; feature: string }>();
+    for (const scope of [...bundleScopes, ...deploymentScopes]) {
+      scopes.set(`${scope.appId}/${scope.feature}`, scope);
+    }
+    return jsonResponse(200, [...scopes.values()].sort((left, right) =>
+      left.appId.localeCompare(right.appId) || left.feature.localeCompare(right.feature),
+    ));
   });
 }
 
 export async function updateDeployment(
   environment: ControlEnv,
   request: Request,
-  feature: string,
-  update: UpdateDeployment,
+  appOrFeature: string,
+  requestedFeatureOrInput: string | DeploymentUpdateInput,
+  maybeInput?: DeploymentUpdateInput,
 ): Promise<Response> {
-  return handleControlRequest(environment, request, async () => {
+  return handleConsoleRequest(environment, request, async () => {
+    const [app, feature] = deploymentScope(appOrFeature, typeof requestedFeatureOrInput === 'string' ? requestedFeatureOrInput : undefined);
+    const input = (maybeInput ?? requestedFeatureOrInput) as DeploymentUpdateInput;
+    assertApp(app);
     assertFeature(feature);
-    validateUpdate(update);
-    const current = await readDeployment(environment, feature);
-    const enabled = current?.enabled === 1;
+    const update = normalizeUpdate(input);
+    const current = await readDeployment(environment, app, feature);
+    const enabled = current?.enabled ?? false;
     const currentBundleId = current?.bundleId ?? null;
     const currentRevision = current?.revision ?? 0;
 
@@ -106,16 +121,16 @@ export async function updateDeployment(
     let nextForce = false;
 
     if ('enabled' in update) {
-      if (update.enabled === enabled) return jsonResponse(200, await readOverview(environment, feature));
+      if (update.enabled === enabled) return jsonResponse(200, await readOverview(environment, app, feature));
       if (update.enabled && !currentBundleId) {
         throw new ApiError(409, 'deployment-empty', 'Select a bundle before enabling delivery.');
       }
       nextEnabled = update.enabled;
     } else {
-      const bundle = await readBundle(environment, feature, update.bundleId);
+      const bundle = await readBundle(environment, app, feature, update.bundleId);
       if (!bundle) throw new ApiError(404, 'bundle-not-found', 'Registered bundle was not found.');
       if (currentBundleId === bundle.id && !update.force) {
-        return jsonResponse(200, await readOverview(environment, feature));
+        return jsonResponse(200, await readOverview(environment, app, feature));
       }
       nextBundleId = bundle.id;
       nextForce = update.force;
@@ -123,43 +138,45 @@ export async function updateDeployment(
 
     const revision = currentRevision + 1;
     const updatedAt = new Date().toISOString();
-    const result = await environment.DB.prepare(
-      `INSERT INTO deployments (
-        feature_id, bundle_id, enabled, force, revision, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(feature_id) DO UPDATE SET
-        bundle_id = excluded.bundle_id,
-        enabled = excluded.enabled,
-        force = excluded.force,
-        revision = excluded.revision,
-        updated_at = excluded.updated_at
-      WHERE deployments.revision = ?`,
-    )
-      .bind(
-        feature,
-        nextBundleId,
-        nextEnabled ? 1 : 0,
-        nextForce ? 1 : 0,
+    const result = await createDeliveryDatabase(environment.DB)
+      .insert(deployments)
+      .values({
+        appId: app,
+        featureId: feature,
+        bundleId: nextBundleId,
+        enabled: nextEnabled,
+        force: nextForce,
         revision,
         updatedAt,
-        currentRevision,
-      )
+      })
+      .onConflictDoUpdate({
+        target: [deployments.appId, deployments.featureId],
+        set: {
+          bundleId: nextBundleId,
+          enabled: nextEnabled,
+          force: nextForce,
+          revision,
+          updatedAt,
+        },
+        where: eq(deployments.revision, currentRevision),
+      })
       .run();
     if (Number(result.meta.changes ?? 0) !== 1) {
       throw new ApiError(409, 'deployment-conflict', 'Deployment changed concurrently; refresh and try again.');
     }
-    return jsonResponse(200, await readOverview(environment, feature));
+    return jsonResponse(200, await readOverview(environment, app, feature));
   });
 }
 
 export async function registerUpload(
   environment: ControlEnv,
   request: Request,
-  input: unknown,
+  release: ReleaseMetadata,
 ): Promise<Response> {
-  return handleControlRequest(environment, request, async () => {
-    const release = parseReleaseMetadata(input);
-    const existing = await readBundle(environment, release.feature, release.releaseId);
+  return handleApiKeyRequest(environment, request, async () => {
+    const app = release.appId ?? 'default';
+    assertApp(app);
+    const existing = await readBundle(environment, app, release.feature, release.releaseId);
     if (existing) {
       if (sameBundle(existing, release)) {
         return jsonResponse(200, { bundleId: release.releaseId, complete: true });
@@ -167,22 +184,27 @@ export async function registerUpload(
       throw new ApiError(409, 'bundle-conflict', 'Bundle ID is already assigned to different immutable metadata.');
     }
 
-    const key = archiveObjectKey(release.feature, release.releaseId);
+    const key = archiveObjectKey(app, release.feature, release.releaseId);
     const head = await environment.ARTIFACTS.head(key);
     if (head) {
       await requireObject(environment.ARTIFACTS, key, release.archiveSha256, release.archiveBytes);
       return jsonResponse(200, {
         bundleId: release.releaseId,
         complete: false,
-        upload: { method: 'PUT', url: null, headers: {}, uploaded: true } satisfies UploadInstruction,
+        uploaded: true,
       });
     }
 
     return jsonResponse(200, {
       bundleId: release.releaseId,
       complete: false,
-      expiresIn: UPLOAD_EXPIRY_SECONDS,
-      upload: await createUploadInstruction(environment, request, key, release.archiveSha256),
+      uploaded: false,
+      ...(localUploadsEnabled(environment, request)
+        ? {
+            expiresIn: UPLOAD_EXPIRY_SECONDS,
+            upload: await createLocalUploadInstruction(environment, request, key, release.archiveSha256),
+          }
+        : {}),
     });
   });
 }
@@ -191,17 +213,18 @@ export async function completeUpload(
   environment: ControlEnv,
   request: Request,
   routeBundleId: string,
-  input: unknown,
+  release: ReleaseMetadata,
 ): Promise<Response> {
-  return handleControlRequest(environment, request, async () => {
+  return handleApiKeyRequest(environment, request, async () => {
+    const app = release.appId ?? 'default';
+    assertApp(app);
     if (!bundleId.test(routeBundleId)) {
       throw new ApiError(400, 'invalid-request', 'Bundle ID is invalid.');
     }
-    const release = parseReleaseMetadata(input);
     if (release.releaseId !== routeBundleId) {
       throw new ApiError(409, 'bundle-conflict', 'Route bundle ID does not match release metadata.');
     }
-    const existing = await readBundle(environment, release.feature, routeBundleId);
+    const existing = await readBundle(environment, app, release.feature, routeBundleId);
     if (existing) {
       if (sameBundle(existing, release)) return jsonResponse(200, { bundle: publicBundle(existing), created: false });
       throw new ApiError(409, 'bundle-conflict', 'Bundle ID is already assigned to different immutable metadata.');
@@ -209,45 +232,81 @@ export async function completeUpload(
 
     await requireObject(
       environment.ARTIFACTS,
-      archiveObjectKey(release.feature, release.releaseId),
+      archiveObjectKey(app, release.feature, release.releaseId),
       release.archiveSha256,
       release.archiveBytes,
     );
     const createdAt = new Date().toISOString();
-    const result = await environment.DB.prepare(
-      `INSERT INTO bundles (
-        id, feature_id, version, runtime_version, archive_sha256, archive_bytes, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO NOTHING`,
-    )
-      .bind(
-        release.releaseId,
-        release.feature,
-        release.version,
-        release.runtimeVersion,
-        release.archiveSha256,
-        release.archiveBytes,
+    const result = await createDeliveryDatabase(environment.DB)
+      .insert(bundles)
+      .values({
+        appId: app,
+        id: release.releaseId,
+        featureId: release.feature,
+        version: release.version,
+        runtimeVersion: release.runtimeVersion,
+        archiveSha256: release.archiveSha256,
+        archiveBytes: release.archiveBytes,
         createdAt,
-      )
+      })
+      .onConflictDoNothing()
       .run();
     if (Number(result.meta.changes ?? 0) !== 1) {
       throw new ApiError(409, 'bundle-conflict', 'Bundle completion raced with another request; retry it.');
     }
-    const bundle = await readBundle(environment, release.feature, release.releaseId);
+    const bundle = await readBundle(environment, app, release.feature, release.releaseId);
     if (!bundle) throw new Error('Inserted bundle could not be read.');
     return jsonResponse(201, { bundle: publicBundle(bundle), created: true });
   });
+}
+
+export async function login(
+  environment: ControlEnv,
+  request: Request,
+  credentials: LoginInput,
+): Promise<Response> {
+  try {
+    const user = await authenticatePassword(environment, credentials.username, credentials.password);
+    if (!user) return unauthorized('Invalid username or password.');
+    const secure = new URL(request.url).protocol === 'https:';
+    return jsonResponse(200, { user }, { 'Set-Cookie': await createSessionCookie(environment, user, secure) });
+  } catch (error) {
+    if (error instanceof ApiError) return jsonResponse(error.status, { error: { code: error.code, message: error.message } });
+    return jsonResponse(503, { error: { code: 'auth-not-configured', message: error instanceof Error ? error.message : 'Console authentication is unavailable.' } });
+  }
+}
+
+export async function logout(environment: ControlEnv, request: Request): Promise<Response> {
+  try {
+    const secure = new URL(request.url).protocol === 'https:';
+    return jsonResponse(204, null, { 'Set-Cookie': clearSessionCookie(secure) });
+  } catch {
+    return jsonResponse(204, null);
+  }
+}
+
+export async function getCurrentUser(environment: ControlEnv, request: Request): Promise<Response> {
+  try {
+    const user = await authenticateSession(environment, request);
+    return user ? jsonResponse(200, { user }) : unauthorized();
+  } catch (error) {
+    return jsonResponse(503, { error: { code: 'auth-not-configured', message: error instanceof Error ? error.message : 'Console authentication is unavailable.' } });
+  }
 }
 
 /** Local Miniflare-only equivalent of the short-lived R2 PUT URL. */
 export async function handleLocalUpload(
   environment: ControlEnv,
   request: Request,
-  feature: string,
-  releaseId: string,
+  appOrFeature: string,
+  featureOrReleaseId: string,
+  maybeReleaseId?: string,
 ): Promise<Response> {
   if (request.method !== 'PUT' || !localUploadsEnabled(environment, request)) return notFound();
   try {
+    const [app, feature] = maybeReleaseId ? [appOrFeature, featureOrReleaseId] : ['default', appOrFeature];
+    const releaseId = maybeReleaseId ?? featureOrReleaseId;
+    assertApp(app);
     assertFeature(feature);
     if (!bundleId.test(releaseId)) return notFound();
     const url = new URL(request.url);
@@ -255,8 +314,8 @@ export async function handleLocalUpload(
     const digest = url.searchParams.get('sha256') ?? '';
     const signature = url.searchParams.get('signature') ?? '';
     if (!Number.isSafeInteger(expires) || expires < Date.now() || !sha256.test(digest)) return notFound();
-    const key = archiveObjectKey(feature, releaseId);
-    if (!(await matchesCapability(environment.CONTROL_TOKEN, key, digest, expires, signature))) return notFound();
+    const key = archiveObjectKey(app, feature, releaseId);
+    if (!(await matchesCapability(environment.AUTH_SESSION_SECRET, key, digest, expires, signature))) return notFound();
     if (request.headers.get('Content-Type')?.toLowerCase() !== 'application/zip') {
       throw new ApiError(400, 'invalid-request', 'Local upload must use application/zip.');
     }
@@ -277,7 +336,7 @@ export async function handleLocalUpload(
   }
 }
 
-async function createUploadInstruction(
+async function createLocalUploadInstruction(
   environment: ControlEnv,
   request: Request,
   key: string,
@@ -288,31 +347,17 @@ async function createUploadInstruction(
     'if-none-match': '*',
     'x-amz-checksum-sha256': hexToBase64(expectedSha256),
   };
-  if (localUploadsEnabled(environment, request)) {
-    const expires = Date.now() + UPLOAD_EXPIRY_SECONDS * 1000;
-    const signature = await createCapability(environment.CONTROL_TOKEN, key, expectedSha256, expires);
-    const url = new URL(request.url);
-    url.pathname = `/__local-r2/${key}`;
-    url.search = '';
-    url.searchParams.set('expires', String(expires));
-    url.searchParams.set('sha256', expectedSha256);
-    url.searchParams.set('signature', signature);
-    return { method: 'PUT', url: url.toString(), headers };
-  }
-  requireR2PresignConfiguration(environment);
-  const signed = await presignR2Put(
-    {
-      accountId: environment.R2_ACCOUNT_ID!,
-      accessKeyId: environment.R2_ACCESS_KEY_ID!,
-      secretAccessKey: environment.R2_SECRET_ACCESS_KEY!,
-      bucketName: environment.R2_BUCKET_NAME!,
-    },
-    key,
-    'application/zip',
-    headers['x-amz-checksum-sha256'],
-    UPLOAD_EXPIRY_SECONDS,
-  );
-  return { method: 'PUT', ...signed };
+  const expires = Date.now() + UPLOAD_EXPIRY_SECONDS * 1000;
+  const secret = environment.AUTH_SESSION_SECRET?.trim();
+  if (!secret) throw new ApiError(503, 'auth-not-configured', 'AUTH_SESSION_SECRET is required to create a local upload capability.');
+  const signature = await createCapability(secret, key, expectedSha256, expires);
+  const url = new URL(request.url);
+  url.pathname = `/__local-r2/${key}`;
+  url.search = '';
+  url.searchParams.set('expires', String(expires));
+  url.searchParams.set('sha256', expectedSha256);
+  url.searchParams.set('signature', signature);
+  return { method: 'PUT', url: url.toString(), headers };
 }
 
 async function requireObject(
@@ -361,52 +406,54 @@ async function hashStoredObject(bucket: R2Bucket, key: string, expectedBytes: nu
   return sha256Hex(bytes);
 }
 
-async function readOverview(environment: ControlEnv, feature: string) {
-  const [deployment, bundlesResult] = await Promise.all([
-    readDeployment(environment, feature),
-    environment.DB.prepare(
-      `SELECT id, feature_id AS featureId, version, runtime_version AS runtimeVersion,
-        archive_sha256 AS archiveSha256, archive_bytes AS archiveBytes, created_at AS createdAt
-       FROM bundles WHERE feature_id = ? ORDER BY created_at DESC LIMIT 50`,
-    ).bind(feature).all<BundleRow>(),
+async function readOverview(environment: ControlEnv, app: string, feature: string) {
+  const database = createDeliveryDatabase(environment.DB);
+  const [deployment, availableBundles] = await Promise.all([
+    readDeployment(environment, app, feature),
+    database.select().from(bundles).where(and(eq(bundles.appId, app), eq(bundles.featureId, feature))).orderBy(desc(bundles.createdAt)).limit(50),
   ]);
   const selectedBundleId = deployment?.bundleId ?? null;
-  const enabled = deployment?.enabled === 1;
+  const enabled = deployment?.enabled ?? false;
   return {
     deployment: {
+      appId: app,
       feature,
       bundleId: selectedBundleId,
       enabled,
-      force: deployment?.force === 1,
+      force: deployment?.force ?? false,
       revision: deployment?.revision ?? 0,
       updatedAt: deployment?.updatedAt ?? null,
       status: enabled ? (selectedBundleId ? 'active' : 'empty') : 'disabled',
     },
-    bundles: (bundlesResult.results ?? []).map((bundle) => ({
+    bundles: availableBundles.map((bundle) => ({
       ...publicBundle(bundle),
       status: bundle.id === selectedBundleId && enabled ? 'active' : 'ready',
     })),
   };
 }
 
-async function readDeployment(environment: ControlEnv, feature: string): Promise<DeploymentRow | null> {
-  return environment.DB.prepare(
-    `SELECT feature_id AS featureId, bundle_id AS bundleId, enabled, force, revision,
-      updated_at AS updatedAt FROM deployments WHERE feature_id = ? LIMIT 1`,
-  ).bind(feature).first<DeploymentRow>();
+async function readDeployment(environment: ControlEnv, app: string, feature: string): Promise<DeploymentRow | null> {
+  const [deployment] = await createDeliveryDatabase(environment.DB)
+    .select()
+    .from(deployments)
+    .where(and(eq(deployments.appId, app), eq(deployments.featureId, feature)))
+    .limit(1);
+  return deployment ?? null;
 }
 
-async function readBundle(environment: ControlEnv, feature: string, id: string): Promise<BundleRow | null> {
-  return environment.DB.prepare(
-    `SELECT id, feature_id AS featureId, version, runtime_version AS runtimeVersion,
-      archive_sha256 AS archiveSha256, archive_bytes AS archiveBytes, created_at AS createdAt
-     FROM bundles WHERE feature_id = ? AND id = ? LIMIT 1`,
-  ).bind(feature, id).first<BundleRow>();
+async function readBundle(environment: ControlEnv, app: string, feature: string, id: string): Promise<BundleRow | null> {
+  const [bundle] = await createDeliveryDatabase(environment.DB)
+    .select()
+    .from(bundles)
+    .where(and(eq(bundles.appId, app), eq(bundles.id, id)))
+    .limit(1);
+  return bundle?.featureId === feature ? bundle : null;
 }
 
 function publicBundle(bundle: BundleRow) {
   return {
     id: bundle.id,
+    appId: bundle.appId,
     feature: bundle.featureId,
     version: bundle.version,
     runtimeVersion: bundle.runtimeVersion,
@@ -417,45 +464,24 @@ function publicBundle(bundle: BundleRow) {
 }
 
 function sameBundle(bundle: BundleRow, release: ReleaseMetadata): boolean {
-  return bundle.featureId === release.feature
+  return bundle.appId === (release.appId ?? 'default')
+    && bundle.featureId === release.feature
     && bundle.version === release.version
     && bundle.runtimeVersion === release.runtimeVersion
     && bundle.archiveSha256 === release.archiveSha256
     && bundle.archiveBytes === release.archiveBytes;
 }
 
-function archiveObjectKey(feature: string, id: string): string {
-  return `${feature}/releases/${id}/release.zip`;
+function archiveObjectKey(app: string, feature: string, id: string): string {
+  return `${app}/${feature}/releases/${id}/release.zip`;
 }
 
-function parseReleaseMetadata(input: unknown): ReleaseMetadata {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    throw new ApiError(400, 'invalid-request', 'Release metadata must be an object.');
+function normalizeUpdate(input: DeploymentUpdateInput): UpdateDeployment {
+  const keys = Object.keys(input);
+  if (keys.length === 1 && typeof input.enabled === 'boolean') return { enabled: input.enabled };
+  if (keys.length === 2 && typeof input.bundleId === 'string' && typeof input.force === 'boolean') {
+    return { bundleId: input.bundleId, force: input.force };
   }
-  const value = input as Record<string, unknown>;
-  const allowed = ['schemaVersion', 'feature', 'releaseId', 'version', 'runtimeVersion', 'archiveSha256', 'archiveBytes'];
-  if (Object.keys(value).some((key) => !allowed.includes(key))) {
-    throw new ApiError(400, 'invalid-request', 'Release metadata contains an unknown field.');
-  }
-  if (value.schemaVersion !== 1) throw new ApiError(400, 'invalid-request', 'Release metadata schemaVersion must be 1.');
-  if (typeof value.feature !== 'string') throw new ApiError(400, 'invalid-request', 'Release feature is invalid.');
-  assertFeature(value.feature);
-  if (typeof value.releaseId !== 'string' || !bundleId.test(value.releaseId)) throw new ApiError(400, 'invalid-request', 'Release ID is invalid.');
-  if (typeof value.version !== 'string' || !protocolVersion.test(value.version)) throw new ApiError(400, 'invalid-request', 'Release version is invalid.');
-  if (typeof value.runtimeVersion !== 'string' || !protocolVersion.test(value.runtimeVersion)) throw new ApiError(400, 'invalid-request', 'Runtime version is invalid.');
-  if (typeof value.archiveSha256 !== 'string' || !sha256.test(value.archiveSha256)) throw new ApiError(400, 'invalid-request', 'Archive SHA-256 must be lowercase hexadecimal.');
-  const archiveBytes = value.archiveBytes;
-  if (typeof archiveBytes !== 'number' || !Number.isSafeInteger(archiveBytes) || archiveBytes <= 0 || archiveBytes > MAX_ARCHIVE_BYTES) {
-    throw new ApiError(400, 'invalid-request', `Archive bytes must be between 1 and ${MAX_ARCHIVE_BYTES}.`);
-  }
-  return value as ReleaseMetadata;
-}
-
-function validateUpdate(update: UpdateDeployment): void {
-  if (!update || typeof update !== 'object' || Array.isArray(update)) throw new ApiError(400, 'invalid-request', 'Deployment update is invalid.');
-  const keys = Object.keys(update);
-  if ('enabled' in update && keys.length === 1 && typeof update.enabled === 'boolean') return;
-  if ('bundleId' in update && 'force' in update && keys.length === 2 && typeof update.bundleId === 'string' && bundleId.test(update.bundleId) && typeof update.force === 'boolean') return;
   throw new ApiError(400, 'invalid-request', 'Deployment update is invalid.');
 }
 
@@ -463,21 +489,18 @@ function assertFeature(feature: string): void {
   if (!featureId.test(feature)) throw new ApiError(400, 'invalid-request', 'Feature is invalid.');
 }
 
-function requireR2PresignConfiguration(environment: ControlEnv): void {
-  const missing = [
-    ['R2_ACCOUNT_ID', environment.R2_ACCOUNT_ID],
-    ['R2_BUCKET_NAME', environment.R2_BUCKET_NAME],
-    ['R2_ACCESS_KEY_ID', environment.R2_ACCESS_KEY_ID],
-    ['R2_SECRET_ACCESS_KEY', environment.R2_SECRET_ACCESS_KEY],
-  ].filter(([, value]) => !value?.trim()).map(([name]) => name);
-  if (missing.length > 0) throw new ApiError(503, 'upload-not-configured', 'R2 upload is not configured.');
+function assertApp(value: string): void {
+  if (!appId.test(value)) throw new ApiError(400, 'invalid-request', 'App ID is invalid.');
 }
 
-async function handleControlRequest(environment: ControlEnv, request: Request, operation: () => Promise<Response>): Promise<Response> {
+function deploymentScope(appOrFeature: string, requestedFeature?: string): [string, string] {
+  return requestedFeature ? [appOrFeature, requestedFeature] : ['default', appOrFeature];
+}
+
+
+async function handleConsoleRequest(environment: ControlEnv, request: Request, operation: () => Promise<Response>): Promise<Response> {
   try {
-    if (!(await isAuthorized(request, environment.CONTROL_TOKEN))) {
-      return jsonResponse(401, { error: { code: 'unauthorized', message: 'Authentication is required.' } });
-    }
+    if (!(await authenticateSession(environment, request))) return unauthorized();
     return await operation();
   } catch (error) {
     if (error instanceof ApiError) return jsonResponse(error.status, { error: { code: error.code, message: error.message } });
@@ -485,18 +508,14 @@ async function handleControlRequest(environment: ControlEnv, request: Request, o
   }
 }
 
-async function isAuthorized(request: Request, token: string): Promise<boolean> {
-  const supplied = request.headers.get('Authorization');
-  if (!token || !supplied?.startsWith('Bearer ')) return false;
-  const [expectedHash, suppliedHash] = await Promise.all([
-    crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)),
-    crypto.subtle.digest('SHA-256', new TextEncoder().encode(supplied.slice('Bearer '.length))),
-  ]);
-  const expected = new Uint8Array(expectedHash);
-  const actual = new Uint8Array(suppliedHash);
-  let difference = expected.length ^ actual.length;
-  for (let index = 0; index < expected.length; index += 1) difference |= expected[index] ^ (actual[index] ?? 0);
-  return difference === 0;
+async function handleApiKeyRequest(environment: ControlEnv, request: Request, operation: () => Promise<Response>): Promise<Response> {
+  try {
+    if (!(await authenticateApiKey(environment, request))) return unauthorized('A valid delivery API key is required.');
+    return await operation();
+  } catch (error) {
+    if (error instanceof ApiError) return jsonResponse(error.status, { error: { code: error.code, message: error.message } });
+    return jsonResponse(503, { error: { code: 'auth-not-configured', message: error instanceof Error ? error.message : 'CLI authentication is unavailable.' } });
+  }
 }
 
 function localUploadsEnabled(environment: ControlEnv, request: Request): boolean {
@@ -554,6 +573,10 @@ function notFound(): Response {
   return jsonResponse(404, { error: { code: 'not-found', message: 'Resource was not found.' } });
 }
 
-function jsonResponse(status: number, value: unknown): Response {
-  return Response.json(value, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+function unauthorized(message = 'Authentication is required.'): Response {
+  return jsonResponse(401, { error: { code: 'unauthorized', message } });
+}
+
+function jsonResponse(status: number, value: unknown, headers?: HeadersInit): Response {
+  return Response.json(value, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers } });
 }

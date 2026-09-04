@@ -9,9 +9,11 @@ uses:
 
 - one unsigned `release.json` kept only in the local CLI output;
 - one immutable `release.zip` object in R2;
-- exactly two D1 tables: `bundles` and `deployments`;
+- three D1 tables: `bundles`, `deployments`, and `users`;
 - one Worker private signing key; and
 - one plain signed deployment JSON response verified by mobile.
 
 The console remains a single `/` page for listing bundles, selecting or rolling
 back the one deployment, choosing force, and enabling or disabling delivery.
+Console users sign in with username/password; the same user's API key
+authorizes CLI upload routes only.

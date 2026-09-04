@@ -1,6 +1,7 @@
 name = "lynx-delivery"
 main = "worker/index.ts"
 compatibility_date = "2026-08-28"
+workers_dev = true
 
 [assets]
 directory = "dist"
@@ -8,12 +9,11 @@ not_found_handling = "single-page-application"
 run_worker_first = [ "/__local-r2", "/__local-r2/*", "/api", "/api/*", "/health", "/v1", "/v1/*" ]
 
 [[r2_buckets]]
-binding = "ARTIFACTS"
 bucket_name = "lynx-artifacts"
+binding = "ARTIFACTS"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "lynx-delivery"
-# Replace this placeholder after `wrangler d1 create lynx-delivery`.
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "00c8145c-34e5-43f9-b732-7326ce9c52f6"
 migrations_dir = "migrations"

@@ -29,9 +29,10 @@ function help() {
 Usage:
   pnpm lynx init [--app path] [--feature id] [--channel-url url] [--skip-bundle] [--dry-run]
   pnpm lynx console
+  pnpm lynx console setup --username <username> [--dry-run]
   pnpm lynx bundle <feature>
-  pnpm lynx release <feature> [--server url] [--token value] [--draft]
-  pnpm lynx release upload <release-directory> --server url [--token value]
+  pnpm lynx release <feature> [--server url] [--api-key value] [--draft]
+  pnpm lynx release upload <release-directory> --server url [--api-key value]
 
 Examples:
   pnpm lynx init
@@ -39,7 +40,7 @@ Examples:
   pnpm lynx init --channel-url https://delivery.example/v1/deploy/delivery
   pnpm lynx bundle delivery
   pnpm lynx release delivery
-  LYNX_DELIVERY_CONTROL_TOKEN=... pnpm lynx release upload ./dist/lynx-releases/delivery/delivery-20260830T143512-a1b2c3 --server http://127.0.0.1:8787
+  LYNX_DELIVERY_API_KEY=... pnpm lynx release upload ./dist/lynx-releases/delivery/delivery-20260830T143512-a1b2c3 --server http://127.0.0.1:8787
 
 release generates the immutable release ID and display version automatically,
 then builds, packages, and uploads it to the delivery Worker. Use
@@ -47,8 +48,8 @@ then builds, packages, and uploads it to the delivery Worker. Use
 make that explicit choice in the console.
 
 For local development, release automatically reads the ignored
-apps/console/.dev.vars file: CONTROL_TOKEN becomes the local CLI credential
-and the server defaults to http://127.0.0.1:8787. Explicit --server/--token
+apps/console/.dev.vars file: INITIAL_ADMIN_API_KEY becomes the local CLI credential
+and the server defaults to http://127.0.0.1:8787. Explicit --server/--api-key
 arguments or LYNX_DELIVERY_* environment variables always take precedence.
 
 init prepares the Expo app's managed-delivery inputs. It never creates
@@ -59,6 +60,7 @@ The Worker returns a short-lived R2 PUT URL, validates the uploaded immutable by
 records the verified bundle. It does not activate the bundle.
 
 console starts the unified delivery console and its local Cloudflare Worker runtime.
+console setup is the Oclif command that provisions remote delivery infrastructure.
 `);
 }
 
@@ -254,8 +256,8 @@ function configureLocalDeliveryUpload() {
   process.env.LYNX_DELIVERY_SERVER = 'http://127.0.0.1:8787';
   if (existsSync(localDeliveryEnvPath)) {
     loadEnvFile(localDeliveryEnvPath);
-    if (!process.env.LYNX_DELIVERY_CONTROL_TOKEN && process.env.CONTROL_TOKEN) {
-      process.env.LYNX_DELIVERY_CONTROL_TOKEN = process.env.CONTROL_TOKEN;
+    if (!process.env.LYNX_DELIVERY_API_KEY && process.env.INITIAL_ADMIN_API_KEY) {
+      process.env.LYNX_DELIVERY_API_KEY = process.env.INITIAL_ADMIN_API_KEY;
     }
   }
 }
@@ -275,12 +277,12 @@ function release(feature, options) {
   }
   const uploadArguments = [operationalCli, 'release:upload', releaseDirectory];
   const server = options.get('--server');
-  const token = options.get('--token');
-  if (!server && !token && !process.env.LYNX_DELIVERY_SERVER && !process.env.LYNX_DELIVERY_CONTROL_TOKEN) {
+  const apiKey = options.get('--api-key');
+  if (!server && !apiKey && !process.env.LYNX_DELIVERY_SERVER && !process.env.LYNX_DELIVERY_API_KEY) {
     configureLocalDeliveryUpload();
   }
   if (server) uploadArguments.push('--server', server);
-  if (token) uploadArguments.push('--token', token);
+  if (apiKey) uploadArguments.push('--api-key', apiKey);
   if (options.get('--json')) uploadArguments.push('--json');
   run(process.execPath, uploadArguments);
   process.stdout.write(`Registered bundle uploaded for ${feature}. Select it and enable delivery in the console when ready.\n`);
@@ -299,6 +301,10 @@ async function main() {
     return;
   }
   if (scope === 'console') {
+    if (argumentsList[0] === 'setup') {
+      run(process.execPath, [operationalCli, 'console:setup', ...argumentsList.slice(1)]);
+      return;
+    }
     if (argumentsList.length > 0) throw new Error('pnpm lynx console does not accept arguments.');
     startConsole();
     return;

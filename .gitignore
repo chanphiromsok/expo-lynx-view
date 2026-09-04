@@ -26,4 +26,5 @@ yarn-error.log*
 # Local env
 .env
 .env.local
+.env.lynx
 .env.lynx-delivery

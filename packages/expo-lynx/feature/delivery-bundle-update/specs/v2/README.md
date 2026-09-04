@@ -8,7 +8,7 @@ Only these three specs are normative for the MVP:
 | Area | Spec | Result |
 |---|---|---|
 | CLI | [C01 — Build and upload](./cli/c01-release-build-upload.md) | Builds one ZIP and uploads it directly to R2 without a signing key |
-| Worker | [W01 — Store and deliver](./worker/w01-delivery-worker.md) | Stores two D1 tables and signs the current deployment response with one Worker key |
+| Worker | [W01 — Store, authenticate, and deliver](./worker/w01-delivery-worker.md) | Stores minimal D1 state, authenticates Console/CLI control requests, and signs the current deployment response |
 | Mobile | [M01 — Verify and activate](./mobile/m01-shared-release-protocol.md) | Verifies the signed response and ZIP SHA-256 before installing |
 
 The older `mobile/m02-*` through `mobile/m08-*` and `server/s01-*` through
@@ -22,12 +22,14 @@ CLI
   build feature
   -> create release.zip
   -> compute ZIP SHA-256
-  -> request a short-lived upload URL with the control token
+  -> request a short-lived upload URL with its API key
   -> PUT release.zip directly to R2
   -> complete registration
 
 Console
-  list registered bundles
+  username + password
+  -> HTTP-only session cookie
+  -> list registered bundles
   -> select one bundle
   -> enable/disable delivery
   -> request force reload when explicitly chosen
@@ -36,7 +38,7 @@ Worker
   validate control requests
   -> verify the uploaded R2 object
   -> store bundle metadata in D1
-  -> atomically update the one deployment row per feature
+  -> atomically update the one deployment row per app and feature
   -> sign the exact public deployment response
 
 Mobile
@@ -50,10 +52,12 @@ Mobile
 
 ## Decisions
 
-- There is one deployment per feature. There are no channels, environments,
+- There is one deployment per `(appId, feature)`. There are no channels, environments,
   rollout cohorts, or stable/beta/active names.
-- The CLI has no private signing key. Its control token authorizes upload API
-  calls but is never sent to R2 and never shipped in mobile.
+- The CLI has no private signing key. Each enabled user has one API key that
+  authorizes only upload API calls; it is never sent to R2 or mobile.
+- The Console signs in with username and password. The Worker exchanges a
+  successful login for an HTTP-only same-site session cookie.
 - The Worker has the only delivery private key. Mobile embeds its corresponding
   public key.
 - The Worker signs the exact plain JSON response body. There is no base64
@@ -61,22 +65,23 @@ Mobile
 - R2 stores one immutable object per registered bundle: `release.zip`.
 - The signed response contains one ZIP SHA-256. There are no per-file hashes in
   the wire protocol. Mobile enforces ZIP/path/size limits while installing.
-- D1 contains exactly `bundles` and `deployments`. It has no upload-status,
-  channel, settings, audit, signing-key-fingerprint, patch, or file table.
+- D1 contains `bundles`, `deployments`, and `users`. `users` holds one
+  username, password hash, API-key hash, enabled flag, and creation timestamp
+  per Console/CLI user. It has no roles, email, profile, session, audit,
+  signing-key-fingerprint, patch, or file table.
 - `enabled: false` stops new distribution. It does not delete, deactivate, or
   roll back a verified release already present on a device.
 - `force: false` stages a new verified release for the next feature open.
   `force: true` reloads a mounted matching view only after download,
   verification, and installation succeed.
-- Production public delivery uses HTTPS. Public reads do not require the
-  control token because authenticity comes from the signed response and ZIP
-  hash.
+- Production public delivery uses HTTPS. Public reads do not require a user
+  credential because authenticity comes from the signed response and ZIP hash.
 - The current implementation target is iOS. Android must implement the same
   wire contract later and is not part of this MVP gate.
 
 ## Shared wire contract
 
-The Worker returns `GET /v1/deploy/:feature` with:
+The Worker returns `GET /v1/:appId/:feature` with:
 
 ```http
 content-type: application/json; charset=utf-8
@@ -149,5 +154,5 @@ git diff --check
 ```
 
 Tests must include one fixture whose exact Worker response bytes verify in both
-TypeScript and Swift. Private keys, control tokens, R2 credentials, and
+TypeScript and Swift. Private keys, API keys, R2 credentials, and
 production data must never be committed or printed.

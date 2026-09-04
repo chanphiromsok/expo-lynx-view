@@ -1,48 +1,36 @@
 import { env } from 'cloudflare:workers';
-import { Elysia, t } from 'elysia';
+import { Elysia } from 'elysia';
 import { CloudflareAdapter } from 'elysia/adapter/cloudflare-worker';
 
 import {
   completeUpload,
+  getCurrentUser,
   getDeploymentOverview,
+  getDeploymentScopes,
   handleLocalUpload,
+  login,
+  logout,
   registerUpload,
   updateDeployment,
   type ControlEnv,
-  type UpdateDeployment,
 } from './control-api.ts';
 import {
   handlePublicDeliveryRequest,
   type DeliveryEnv,
 } from './public-delivery.ts';
+import {
+  BundleParametersSchema,
+  AppFeatureParametersSchema,
+  AppLocalUploadParametersSchema,
+  DeploymentUpdateSchema,
+  LoginSchema,
+  ReleaseMetadataSchema,
+  type DeploymentUpdateInput,
+  type LoginInput,
+  type ReleaseMetadata,
+} from './schema.ts';
 
 export type Env = ControlEnv & DeliveryEnv;
-
-const featureParameters = t.Object({
-  feature: t.String({ pattern: '^[a-z][a-z0-9-]{0,63}$' }),
-});
-const bundleParameters = t.Object({
-  bundleId: t.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' }),
-});
-const localUploadParameters = t.Object({
-  feature: t.String({ pattern: '^[a-z][a-z0-9-]{0,63}$' }),
-  bundleId: t.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' }),
-});
-const releaseBody = t.Object(
-  {
-    schemaVersion: t.Literal(1),
-    feature: t.String({ pattern: '^[a-z][a-z0-9-]{0,63}$' }),
-    releaseId: t.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' }),
-    version: t.String({ minLength: 1, maxLength: 128 }),
-    runtimeVersion: t.String({ minLength: 1, maxLength: 128 }),
-    archiveSha256: t.String({ pattern: '^[a-f0-9]{64}$' }),
-    archiveBytes: t.Integer({ minimum: 1, maximum: 64 * 1024 * 1024 }),
-  },
-  { additionalProperties: false },
-);
-// Controller validation distinguishes the two operations. Keeping this as a
-// plain object also avoids TypeBox's Union compiler requirement in local Elysia.
-const updateBody = t.Object({}, { additionalProperties: true });
 
 const bindings = env as Env;
 
@@ -50,39 +38,37 @@ export const app = new Elysia({ adapter: CloudflareAdapter })
   .get('/health', ({ request }) =>
     handlePublicDeliveryRequest(bindings, request),
   )
-  .get('/v1/deploy/:feature', ({ request }) =>
-    handlePublicDeliveryRequest(bindings, request),
-  )
-  .get('/v1/bundles/:feature/:bundleId/release.zip', ({ request }) =>
-    handlePublicDeliveryRequest(bindings, request),
-  )
+  .post('/api/auth/login', ({ request, body }) => login(bindings, request, body as LoginInput), { body: LoginSchema })
+  .post('/api/auth/logout', ({ request }) => logout(bindings, request))
+  .get('/api/auth/me', ({ request }) => getCurrentUser(bindings, request))
+  .get('/api/deployments', ({ request }) => getDeploymentScopes(bindings, request))
   .get(
-    '/api/deploy/:feature',
+    '/api/deploy/:appId/:feature',
     ({ request, params }) =>
-      getDeploymentOverview(bindings, request, params.feature),
-    { params: featureParameters },
+      getDeploymentOverview(bindings, request, params.appId, params.feature),
+    { params: AppFeatureParametersSchema },
   )
   .patch(
-    '/api/deploy/:feature',
+    '/api/deploy/:appId/:feature',
     ({ request, params, body }) =>
-      updateDeployment(bindings, request, params.feature, body as UpdateDeployment),
-    { params: featureParameters, body: updateBody },
+      updateDeployment(bindings, request, params.appId, params.feature, body as DeploymentUpdateInput),
+    { params: AppFeatureParametersSchema, body: DeploymentUpdateSchema },
   )
   .post(
     '/api/uploads',
-    ({ request, body }) => registerUpload(bindings, request, body),
-    { body: releaseBody },
+    ({ request, body }) => registerUpload(bindings, request, body as ReleaseMetadata),
+    { body: ReleaseMetadataSchema },
   )
   .post(
     '/api/uploads/:bundleId/complete',
     ({ request, params, body }) =>
-      completeUpload(bindings, request, params.bundleId, body),
-    { params: bundleParameters, body: releaseBody },
+      completeUpload(bindings, request, params.bundleId, body as ReleaseMetadata),
+    { params: BundleParametersSchema, body: ReleaseMetadataSchema },
   )
   .put(
-    '/__local-r2/:feature/releases/:bundleId/release.zip',
-    ({ request, params }) => handleLocalUpload(bindings, request, params.feature, params.bundleId),
-    { params: localUploadParameters },
+    '/__local-r2/:appId/:feature/releases/:bundleId/release.zip',
+    ({ request, params }) => handleLocalUpload(bindings, request, params.appId, params.feature, params.bundleId),
+    { params: AppLocalUploadParametersSchema },
   )
   .all('*', ({ request }) => handlePublicDeliveryRequest(bindings, request))
   .compile();

@@ -80,8 +80,9 @@ test('produces deterministic ZIP bytes and the minimal unsigned release metadata
   assert.deepEqual(readFileSync(resolve(second.outputDirectory, 'release.zip')), firstZip);
   assert.deepEqual(readFileSync(resolve(second.outputDirectory, 'release.json')), firstRelease);
   assert.deepEqual(Object.keys(JSON.parse(firstRelease)), [
-    'schemaVersion', 'feature', 'releaseId', 'version', 'runtimeVersion', 'archiveSha256', 'archiveBytes',
+    'schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'runtimeVersion', 'archiveSha256', 'archiveBytes',
   ]);
+  assert.equal(first.release.appId, 'default');
   assert.equal(existsSync(resolve(first.outputDirectory, 'release-envelope.json')), false);
   assert.equal(existsSync(resolve(first.outputDirectory, 'release-payload.json')), false);
   assert.equal(existsSync(resolve(first.outputDirectory, 'packaging-report.json')), false);

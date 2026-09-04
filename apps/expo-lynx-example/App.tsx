@@ -1,6 +1,10 @@
 import Constants from "expo-constants";
-import { ExpoLynxView, type LynxSource } from "expo-lynx-view";
-import { useState } from "react";
+import {
+  ExpoLynxView,
+  type ExpoLynxViewRef,
+  type LynxSource,
+} from "expo-lynx-view";
+import { useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -32,6 +36,7 @@ const SOURCE_OPTIONS: readonly { kind: SourceKind; label: string }[] = [
 ];
 
 export default function App() {
+  const lynxViewRef = useRef<ExpoLynxViewRef>(null);
   const [sourceKind, setSourceKind] = useState<SourceKind>("managed");
   const [status, setStatus] = useState("Loading…");
   const [isSplashVisible, setSplashVisible] = useState(true);
@@ -47,6 +52,24 @@ export default function App() {
         : { kind: "embedded", feature: "delivery" };
 
   const selectSource = (nextSource: SourceKind) => {
+    if (nextSource === sourceKind) {
+      const view = lynxViewRef.current;
+      if (!view) {
+        setSplashVisible(false);
+        setStatus("Mini app is not ready to reload");
+        return;
+      }
+
+      setStatus(`Reloading ${nextSource} bundle…`);
+      setSplashVisible(true);
+      void view.reload().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setSplashVisible(false);
+        setStatus(`Reload failed: ${message}`);
+      });
+      return;
+    }
+
     setSourceKind(nextSource);
     setStatus(`Loading ${nextSource} bundle…`);
     setSplashVisible(true);
@@ -92,6 +115,7 @@ export default function App() {
           </Text>
           <View style={styles.lynxContainer}>
             <ExpoLynxView
+              ref={lynxViewRef}
               source={source}
               initialData={{ greeting: `Hello from Expo (${sourceKind})` }}
               onLoad={({ nativeEvent }) => {
