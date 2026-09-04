@@ -377,6 +377,8 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     lynxView.clearForDestroy()
   }
 
+  // MARK: - Layout
+
   override func layoutSubviews() {
     super.layoutSubviews()
 
@@ -421,6 +423,8 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     )
   }
 
+  // MARK: - React props
+
   func setSource(_ value: String?) {
     let nextSource = value?.trimmingCharacters(in: .whitespacesAndNewlines)
     guard nextSource != legacySource else {
@@ -451,7 +455,6 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
 
   func applyPendingUpdate() {
     if sourceNeedsReload {
-      sourceNeedsReload = false
       scheduleLoad()
       return
     }
@@ -462,8 +465,13 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   func reload() {
     scheduleLoad()
   }
+}
 
-  private func scheduleLoad() {
+private extension ExpoLynxView {
+
+  // MARK: - Initial source selection
+
+  func scheduleLoad() {
     sourceNeedsReload = false
     loadGeneration += 1
     hasLoadedTemplate = false
@@ -492,14 +500,14 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   //
   // scheduleLoad
   //      |
-  //      v
-  // loadSource
+  // loadSource -> decode and select source kind
   //      |
-  //      +--> loadEmbedded -----------------------+
-  //      +--> loadDevelopment --------------------+--> loadTarget --> loadTemplate
-  //      +--> loadManaged --> pending/active/cache+
-  //                            or embedded fallback
-  private func loadSource(generation: Int) {
+  // loadEmbedded / loadDevelopment / loadManaged
+  //      |                           (pending -> active -> embedded)
+  // loadTarget
+  //      |
+  // LynxView.loadTemplate
+  func loadSource(generation: Int) {
     guard let sourceJSON, !sourceJSON.isEmpty else {
       loadLegacySource(generation: generation)
       return
@@ -522,7 +530,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
   }
 
-  private func load(_ payload: ExpoLynxSourcePayload, generation: Int) {
+  func load(_ payload: ExpoLynxSourcePayload, generation: Int) {
     switch payload.kind {
     case "embedded":
       guard let feature = payload.feature?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -553,7 +561,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
   }
 
-  private func loadLegacySource(generation: Int) {
+  func loadLegacySource(generation: Int) {
     guard let legacySource, !legacySource.isEmpty else { return }
     #if DEBUG
       loadDevelopment(url: legacySource, generation: generation)
@@ -584,7 +592,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     #endif
   }
 
-  private func loadDevelopment(url: String?, generation: Int) {
+  func loadDevelopment(url: String?, generation: Int) {
     guard let url, !url.isEmpty else {
       emitError(
         url: "",
@@ -619,7 +627,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     #endif
   }
 
-  private func loadEmbedded(feature: String, generation: Int) {
+  func loadEmbedded(feature: String, generation: Int) {
     let v2Name = "ExpoLynxEmbedded.bundle/\(feature)/main.lynx.bundle"
     let embeddedName: String
     if resolveLocalURL(v2Name) != nil {
@@ -642,6 +650,12 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       generation: generation
     )
   }
+
+}
+
+extension ExpoLynxView {
+
+  // MARK: - Managed delivery
 
   private func loadManaged(payload: ExpoLynxSourcePayload, generation: Int) {
     guard let feature = payload.feature?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -808,13 +822,19 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     )
   }
 
-  private func loadTarget(_ target: ExpoLynxLoadTarget, generation: Int) {
+}
+
+private extension ExpoLynxView {
+
+  // MARK: - Template loading
+
+  func loadTarget(_ target: ExpoLynxLoadTarget, generation: Int) {
     guard generation == loadGeneration else { return }
     hasLoadedTemplate = false
     currentLoadGate = LynxInitialLoadGate()
     currentTarget = target
     loadStartedAt = Date()
-    if ["cache", "download"].contains(target.source), let bundleURL = URL(string: target.url), bundleURL.isFileURL {
+    if target.source == "cache", let bundleURL = URL(string: target.url), bundleURL.isFileURL {
       templateProvider.setLocalResourceRoot(bundleURL.deletingLastPathComponent())
     } else if target.source == "embedded", let bundleURL = resolveLocalURL(target.url) {
       templateProvider.setLocalResourceRoot(bundleURL.deletingLastPathComponent())
@@ -859,7 +879,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
   }
 
-  private func loadLocalURL(_ url: URL, target: ExpoLynxLoadTarget, generation: Int) {
+  func loadLocalURL(_ url: URL, target: ExpoLynxLoadTarget, generation: Int) {
     do {
       let data = try Data(contentsOf: url, options: .mappedIfSafe)
       guard generation == loadGeneration, currentTarget?.url == target.url else { return }
@@ -873,7 +893,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
   }
 
-  private func finishWithError(_ error: Error, target: ExpoLynxLoadTarget, generation: Int) {
+  func finishWithError(_ error: Error, target: ExpoLynxLoadTarget, generation: Int) {
     guard generation == loadGeneration else { return }
 
     if target.candidateManifestID != nil {
@@ -897,7 +917,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     )
   }
 
-  private static func errorPayload(for error: Error) -> (
+  static func errorPayload(for error: Error) -> (
     code: String, message: String
   ) {
     let nsError = error as NSError
@@ -922,7 +942,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     return (code: "\(nsError.code)", message: detail)
   }
 
-  private static func isMainBundleError(_ error: Error) -> Bool {
+  static func isMainBundleError(_ error: Error) -> Bool {
     guard let lynxError = error as? LynxError else {
       return false
     }
@@ -934,7 +954,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     return lynxError.errorCode / 100 == 1
   }
 
-  private func resolveLocalURL(_ value: String) -> URL? {
+  func resolveLocalURL(_ value: String) -> URL? {
     if let exactURL = templateProvider.bundledResourceURL(for: value) {
       return exactURL
     }
@@ -945,7 +965,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     return Bundle.main.url(forResource: normalizedName, withExtension: "bundle")
   }
 
-  private func makeTemplateData() -> LynxTemplateData? {
+  func makeTemplateData() -> LynxTemplateData? {
     guard let initialDataJSON, !initialDataJSON.isEmpty else {
       return nil
     }
@@ -953,12 +973,12 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     return LynxTemplateData(json: initialDataJSON, useBoolLiterals: true)
   }
 
-  private func consumeTemplateDataForLoad() -> LynxTemplateData? {
+  func consumeTemplateDataForLoad() -> LynxTemplateData? {
     initialDataNeedsUpdate = false
     return makeTemplateData()
   }
 
-  private func applyPendingInitialDataUpdate() {
+  func applyPendingInitialDataUpdate() {
     guard initialDataNeedsUpdate, hasLoadedTemplate else { return }
     initialDataNeedsUpdate = false
     if let templateData = makeTemplateData() {
@@ -972,21 +992,27 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
   }
 
-  private func eventPayload(for target: ExpoLynxLoadTarget) -> [String: Any] {
+}
+
+private extension ExpoLynxView {
+
+  // MARK: - Events and errors
+
+  func eventPayload(for target: ExpoLynxLoadTarget) -> [String: Any] {
     [
       "url": target.url,
       "feature": target.feature,
       "version": target.version,
       "source": target.source,
-      "durationMs": max(0, Int(Date().timeIntervalSince(loadStartedAt) * 1_000)),
+      "durationMs": currentLoadDurationMilliseconds(),
     ]
   }
 
-  private func currentLoadDurationMilliseconds() -> Int {
+  func currentLoadDurationMilliseconds() -> Int {
     max(0, Int(Date().timeIntervalSince(loadStartedAt) * 1_000))
   }
 
-  private func emitDeliveryError(_ error: Error, fallbackURL: String, feature: String) {
+  func emitDeliveryError(_ error: Error, fallbackURL: String, feature: String) {
     if let deliveryError = error as? LynxDeliveryError {
       emitError(
         url: fallbackURL,
@@ -1008,11 +1034,11 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     )
   }
 
-  private func emitUpdate(_ payload: [String: Any]) {
+  func emitUpdate(_ payload: [String: Any]) {
     onUpdate(payload)
   }
 
-  private func emitUpdateError(_ error: Error, feature: String) {
+  func emitUpdateError(_ error: Error, feature: String) {
     if let deliveryError = error as? LynxDeliveryError {
       emitUpdate([
         "feature": feature,
@@ -1030,7 +1056,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     ])
   }
 
-  private func emitError(
+  func emitError(
     url: String,
     feature: String,
     stage: LynxDeliveryStage,
@@ -1049,7 +1075,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   /// Native errors can contain a failed request URL. Events cross the RN
   /// boundary and may be forwarded to analytics, so remove query credentials
   /// and URL user/password components before dispatching them.
-  private static func redactedEventMessage(_ message: String) -> String {
+  static func redactedEventMessage(_ message: String) -> String {
     let words = message.split(separator: " ", omittingEmptySubsequences: false).map { word -> String in
       let suffix = word.reversed().prefix { ").,]".contains($0) }
       let core = String(word.dropLast(suffix.count))
@@ -1064,7 +1090,13 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     return words.joined(separator: " ").prefix(500).description
   }
 
-  private func startWatchdog(target: ExpoLynxLoadTarget, generation: Int) {
+}
+
+private extension ExpoLynxView {
+
+  // MARK: - Candidate health and fallback
+
+  func startWatchdog(target: ExpoLynxLoadTarget, generation: Int) {
     watchdogWorkItem?.cancel()
     let workItem = DispatchWorkItem { [weak self] in
       guard let self, generation == self.loadGeneration,
@@ -1081,7 +1113,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: workItem)
   }
 
-  private func failCandidate(
+  func failCandidate(
     _ target: ExpoLynxLoadTarget,
     error: Error,
     generation: Int
@@ -1125,13 +1157,14 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
   }
 
+}
+
+extension ExpoLynxView {
+
+  // MARK: - Lynx lifecycle
+
   func lynxView(_ view: LynxView, didLoadFinishedWithUrl url: String) {
-    guard let target = currentTarget else {
-      hasLoadedTemplate = true
-      applyPendingInitialDataUpdate()
-      onLoad(["url": url])
-      return
-    }
+    guard let target = currentTarget else { return }
     guard url.isEmpty || url == target.url else { return }
     hasLoadedTemplate = true
     currentLoadGate.recordLoadFinished()
