@@ -11,6 +11,17 @@ Only these three specs are normative for the MVP:
 | Worker | [W01 — Store, authenticate, and deliver](./worker/w01-delivery-worker.md) | Stores minimal D1 state, authenticates Console/CLI control requests, and signs the current deployment response |
 | Mobile | [M01 — Verify and activate](./mobile/m01-shared-release-protocol.md) | Verifies the signed response and ZIP SHA-256 before installing |
 
+Before a public mobile release, complete these runtime-safety tasks in order:
+
+| Task | Spec | Result |
+|---|---|---|
+| 1 | [C02 — Generate the native runtime fingerprint](./cli/c02-native-runtime-fingerprint.md) | Replaces the static `expo-57` label with one Expo project fingerprint |
+| 2 | [M09 — Runtime-safe IFR launch](./mobile/m09-runtime-bound-cache.md) | Selects a compatible local bundle and gives it an uninterrupted Lynx first-frame path |
+| 3 | [W02 — Scope deployments by runtime](./worker/w02-runtime-scoped-deployments.md) | Lets old and new native builds receive compatible releases from one Worker |
+
+These tasks refine the existing `runtimeVersion` field. They do not add a
+second fingerprint field, a channel, another Worker, or another signing flow.
+
 The older `mobile/m02-*` through `mobile/m08-*` and `server/s01-*` through
 `server/s05-*` documents describe the superseded two-document design. They are
 historical context only and must not be used as implementation requirements.

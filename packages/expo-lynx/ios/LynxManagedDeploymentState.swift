@@ -22,7 +22,8 @@ struct LynxManagedState: Codable, Sendable {
   }
 }
 
-actor LynxManagedDeploymentState {
+@MainActor
+final class LynxManagedDeploymentState {
   static let shared = LynxManagedDeploymentState()
 
   private let defaults = UserDefaults.standard

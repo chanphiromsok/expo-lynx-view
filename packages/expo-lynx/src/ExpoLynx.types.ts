@@ -1,10 +1,6 @@
 import type { NativeSyntheticEvent, ViewProps } from 'react-native';
 
-import type {
-  LynxErrorStage,
-  LynxSource,
-  LynxUpdateEvent,
-} from './LynxSource';
+import type { LynxErrorStage, LynxSource, LynxUpdateEvent } from './LynxSource';
 
 export type LynxInitialData = Record<string, unknown>;
 
@@ -53,7 +49,7 @@ type ExpoLynxViewBaseProps = Omit<ViewProps, 'children'> & {
   initialData?: LynxInitialData;
   /** Fires immediately before Lynx starts loading/rendering the selected bundle. */
   onLoadStart?: (event: NativeSyntheticEvent<LynxLoadEventPayload>) => void;
-  /** Fires only after Lynx successfully renders the selected bundle. */
+  /** Fires once Lynx completes the selected bundle's first-screen layout. */
   onLoad?: (event: NativeSyntheticEvent<LynxLoadEventPayload>) => void;
   /** Fires for delivery, verification, resource, and Lynx rendering failures. */
   onError?: (event: NativeSyntheticEvent<LynxErrorEventPayload>) => void;

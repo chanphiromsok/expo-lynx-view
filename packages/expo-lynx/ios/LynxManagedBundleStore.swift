@@ -85,6 +85,42 @@ actor LynxManagedBundleStore {
     )
   }
 
+  /// Read-only launch path for an already completed V2 release. It deliberately
+  /// skips migration, hashing, directory scans, and actor scheduling so Lynx can
+  /// receive its local template without an asynchronous gap.
+  nonisolated func launchInstalledRelease(
+    feature: String,
+    releaseID: String
+  ) -> LynxManagedRelease? {
+    guard Self.isSafeFeatureValue(feature),
+      releaseID.range(
+        of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+        options: .regularExpression
+      ) != nil
+    else { return nil }
+
+    let directory = rootURL
+      .appendingPathComponent(feature, isDirectory: true)
+      .appendingPathComponent("ready", isDirectory: true)
+      .appendingPathComponent(releaseID, isDirectory: true)
+    let completionURL = directory.appendingPathComponent("completion.json")
+    let bundleURL = directory.appendingPathComponent("main.lynx.bundle")
+    guard Self.isRegularFileValue(completionURL),
+      Self.isRegularFileValue(bundleURL),
+      let data = try? Data(contentsOf: completionURL, options: .mappedIfSafe),
+      let completion = try? JSONDecoder().decode(V2Completion.self, from: data),
+      completion.feature == feature,
+      completion.releaseID == releaseID
+    else { return nil }
+
+    return LynxManagedRelease(
+      feature: feature,
+      manifestID: releaseID,
+      version: completion.version,
+      bundleURL: bundleURL
+    )
+  }
+
   func install(manifestURL: URL, expectedFeature: String) async throws -> LynxManagedRelease {
     let (manifestData, response) = try await URLSession.shared.data(for: noCacheURLRequest(manifestURL))
     try validateHTTPResponse(response, url: manifestURL)
@@ -482,10 +518,21 @@ actor LynxManagedBundleStore {
   }
 
   private func isSafeFeature(_ feature: String) -> Bool {
+    Self.isSafeFeatureValue(feature)
+  }
+
+  private nonisolated static func isSafeFeatureValue(_ feature: String) -> Bool {
     guard !feature.isEmpty, feature.count <= 100 else { return false }
     return feature.unicodeScalars.allSatisfy {
       CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0)
     }
+  }
+
+  private nonisolated static func isRegularFileValue(_ url: URL) -> Bool {
+    guard FileManager.default.fileExists(atPath: url.path),
+      let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+    else { return false }
+    return values.isDirectory != true
   }
 
   private func isSHA256(_ value: String) -> Bool {

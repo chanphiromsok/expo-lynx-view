@@ -162,8 +162,8 @@ verified.
 ### React Native splash while a managed bundle loads
 
 `onLoadStart` fires before Lynx starts a selected embedded, cached, development,
-or downloaded bundle. `onLoad` is the successful Lynx render callback and
-includes the selected `source`; `onError` reports a failed delivery/render
+or downloaded bundle. `onLoad` fires when Lynx completes first-screen layout
+and includes the selected `source`; `onError` reports a failed delivery/render
 stage. A managed source may load its embedded fallback while a new release
 stages for the next open. The embedded fallback is usable UI, so hide the
 blocking splash on every successful `onLoad` and use `onUpdate` for non-blocking

@@ -240,7 +240,6 @@ private struct ExpoLynxSourcePayload: Decodable {
 
 private struct ExpoLynxManagedContext {
   let feature: String
-  let deploymentURL: URL
 }
 
 private struct ExpoLynxLoadTarget {
@@ -250,6 +249,30 @@ private struct ExpoLynxLoadTarget {
   let source: String
   let managedContext: ExpoLynxManagedContext?
   let candidateManifestID: String?
+}
+
+private struct LynxInitialLoadGate {
+  private(set) var hasFirstScreen = false
+  private(set) var hasFinishedLoading = false
+  private var consumed = false
+
+  var isReady: Bool { hasFirstScreen && hasFinishedLoading }
+
+  mutating func recordFirstScreen() -> Bool {
+    guard !hasFirstScreen else { return false }
+    hasFirstScreen = true
+    return true
+  }
+
+  mutating func recordLoadFinished() {
+    hasFinishedLoading = true
+  }
+
+  mutating func consumeReady() -> Bool {
+    guard isReady, !consumed else { return false }
+    consumed = true
+    return true
+  }
 }
 
 final class ExpoLynxView: ExpoView, LynxViewLifecycle {
@@ -278,6 +301,17 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   private var deliveryTask: Task<Void, Never>?
   private var watchdogWorkItem: DispatchWorkItem?
   private var forceReloadCompletion: ((Result<Void, Error>) -> Void)?
+  private var deferredForceReload: (
+    release: LynxManagedRelease,
+    completion: (Result<Void, Error>) -> Void
+  )?
+  private var deferredDeliveryError: (
+    error: Error,
+    fallbackURL: String,
+    feature: String
+  )?
+  private var currentLoadGate = LynxInitialLoadGate()
+  private var managedDeliveryStartedGeneration: Int?
   private var loadStartedAt = Date()
 
   var mountedManagedFeature: String? { managedContext?.feature }
@@ -328,6 +362,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     deliveryTask?.cancel()
     watchdogWorkItem?.cancel()
     forceReloadCompletion?(.failure(CancellationError()))
+    deferredForceReload?.completion(.failure(CancellationError()))
     // `deinit` is nonisolated even for UIKit-bound instances. The registry
     // retains views weakly and prunes released entries on its next main-actor
     // access, so it is both safe and sufficient to skip actor-isolated cleanup
@@ -430,6 +465,10 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     watchdogWorkItem?.cancel()
     forceReloadCompletion?(.failure(CancellationError()))
     forceReloadCompletion = nil
+    deferredForceReload?.completion(.failure(CancellationError()))
+    deferredForceReload = nil
+    deferredDeliveryError = nil
+    managedDeliveryStartedGeneration = nil
     currentTarget = nil
     LynxManagedViewRegistry.shared.unregister(self)
     managedContext = nil
@@ -593,73 +632,85 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       return
     }
 
-    let deploymentURL: URL
-    do {
-      deploymentURL = try LynxManagedDeliveryConfiguration.deploymentURL(feature: feature)
-    } catch {
-      loadEmbedded(feature: feature, generation: generation)
-      emitDeliveryError(error, fallbackURL: "", feature: feature)
-      return
-    }
-    let context = ExpoLynxManagedContext(feature: feature, deploymentURL: deploymentURL)
+    let context = ExpoLynxManagedContext(feature: feature)
     managedContext = context
     LynxManagedViewRegistry.shared.register(self)
 
+    let state = LynxManagedDeploymentState.shared.recover(feature: feature)
+    if let pendingID = state.pendingReleaseID,
+      let pending = LynxManagedBundleStore.shared.launchInstalledRelease(
+        feature: feature,
+        releaseID: pendingID
+      )
+    {
+      LynxManagedDeploymentState.shared.beginAttempt(
+        releaseID: pendingID,
+        feature: feature
+      )
+      loadManagedRelease(
+        pending,
+        context: context,
+        candidate: true,
+        downloaded: false,
+        generation: generation
+      )
+    } else if let activeID = state.activeReleaseID,
+      let active = LynxManagedBundleStore.shared.launchInstalledRelease(
+        feature: feature,
+        releaseID: activeID
+      )
+    {
+      loadManagedRelease(
+        active,
+        context: context,
+        candidate: false,
+        downloaded: false,
+        generation: generation
+      )
+    } else {
+      loadEmbedded(feature: feature, generation: generation)
+    }
+  }
+
+  private func startManagedDelivery(
+    context: ExpoLynxManagedContext,
+    generation: Int
+  ) {
+    guard generation == loadGeneration,
+      managedContext?.feature == context.feature,
+      managedDeliveryStartedGeneration != generation
+    else { return }
+    managedDeliveryStartedGeneration = generation
+
+    let deploymentURL: URL
+    do {
+      deploymentURL = try LynxManagedDeliveryConfiguration.deploymentURL(
+        feature: context.feature
+      )
+    } catch {
+      emitDeliveryError(error, fallbackURL: "", feature: context.feature)
+      return
+    }
+
     deliveryTask = Task { @MainActor [weak self] in
       guard let self, generation == self.loadGeneration else { return }
-      let state = await LynxManagedDeploymentState.shared.recover(feature: feature)
-      guard !Task.isCancelled, generation == self.loadGeneration else { return }
-
-      if let pendingID = state.pendingReleaseID,
-        let pending = try? await LynxManagedBundleStore.shared.installedRelease(
-          feature: feature,
-          manifestID: pendingID
-        )
-      {
-        await LynxManagedDeploymentState.shared.beginAttempt(
-          releaseID: pendingID,
-          feature: feature
-        )
-        self.loadManagedRelease(
-          pending,
-          context: context,
-          candidate: true,
-          downloaded: false,
-          generation: generation
-        )
-      } else if let activeID = state.activeReleaseID,
-        let active = try? await LynxManagedBundleStore.shared.installedRelease(
-          feature: feature,
-          manifestID: activeID
-        )
-      {
-        self.loadManagedRelease(
-          active,
-          context: context,
-          candidate: false,
-          downloaded: false,
-          generation: generation
-        )
-      } else {
-        self.loadEmbedded(feature: feature, generation: generation)
-      }
-
-      guard !Task.isCancelled, generation == self.loadGeneration else { return }
       do {
-        self.emitUpdate(["feature": feature, "phase": "checking"])
+        self.emitUpdate(["feature": context.feature, "phase": "checking"])
         let result = try await LynxManagedDeliveryCoordinator.shared.checkForUpdate(
-          feature: feature,
+          feature: context.feature,
           deploymentURL: deploymentURL
         )
+        guard !Task.isCancelled, generation == self.loadGeneration else { return }
         self.emitUpdate(result.eventPayload(phase: result.status.rawValue))
       } catch is CancellationError {
         return
       } catch {
+        guard generation == self.loadGeneration else { return }
         self.emitUpdateError(error, context: context)
         self.emitDeliveryError(
           error,
           fallbackURL: deploymentURL.absoluteString,
-          feature: feature
+          feature: context.feature
         )
       }
     }
@@ -701,6 +752,24 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       )
       return
     }
+    // A coordinator has already completed the deployment request that produced
+    // this force reload; do not start the view's automatic check as well.
+    managedDeliveryStartedGeneration = loadGeneration
+
+    guard currentLoadGate.isReady else {
+      deferredForceReload?.completion(.failure(CancellationError()))
+      deferredForceReload = (release, completion)
+      return
+    }
+
+    performForceReload(release, context: context, completion: completion)
+  }
+
+  private func performForceReload(
+    _ release: LynxManagedRelease,
+    context: ExpoLynxManagedContext,
+    completion: @escaping (Result<Void, Error>) -> Void
+  ) {
     forceReloadCompletion?(.failure(CancellationError()))
     forceReloadCompletion = completion
     emitUpdate([
@@ -721,6 +790,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   private func loadTarget(_ target: ExpoLynxLoadTarget, generation: Int) {
     guard generation == loadGeneration else { return }
     hasLoadedTemplate = false
+    currentLoadGate = LynxInitialLoadGate()
     source = target.url
     currentTarget = target
     loadStartedAt = Date()
@@ -764,62 +834,47 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     }
 
     loadLocalURL(localURL, target: target, generation: generation)
-    if target.candidateManifestID != nil {
+    if target.candidateManifestID != nil, !currentLoadGate.isReady {
       startWatchdog(target: target, generation: generation)
     }
   }
 
   private func loadLocalURL(_ url: URL, target: ExpoLynxLoadTarget, generation: Int) {
-    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      do {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
-        self?.render(data, target: target, generation: generation)
-      } catch {
-        self?.finishWithError(error, target: target, generation: generation)
-      }
-    }
-  }
-
-  private func render(_ data: Data, target: ExpoLynxLoadTarget, generation: Int) {
-    DispatchQueue.main.async { [weak self] in
-      guard let self, generation == self.loadGeneration, target.url == self.source else {
-        return
-      }
-
-      self.lynxView.loadTemplate(
+    do {
+      let data = try Data(contentsOf: url, options: .mappedIfSafe)
+      guard generation == loadGeneration, target.url == source else { return }
+      lynxView.loadTemplate(
         data,
         withURL: target.url,
-        initData: self.consumeTemplateDataForLoad()
+        initData: consumeTemplateDataForLoad()
       )
+    } catch {
+      finishWithError(error, target: target, generation: generation)
     }
   }
 
   private func finishWithError(_ error: Error, target: ExpoLynxLoadTarget, generation: Int) {
-    DispatchQueue.main.async { [weak self] in
-      guard let self, generation == self.loadGeneration else {
-        return
-      }
+    guard generation == loadGeneration else { return }
 
-      if target.candidateManifestID != nil {
-        self.failCandidate(target, error: error, generation: generation)
-        return
-      }
-
-      // ponytail: hide the previous render so a failed reload doesn't
-      // show the stale bundle. The engine keeps its internal state, but
-      // the visible pixels are gone. The next successful load un-hides
-      // via loadSource's setSource path.
-      self.lynxView.isHidden = true
-
-      let payload = ExpoLynxView.errorPayload(for: error, fallbackURL: target.url)
-      self.emitError(
-        url: target.url,
-        feature: target.feature,
-        stage: .lynx,
-        code: payload.code,
-        message: payload.message
-      )
+    if target.candidateManifestID != nil {
+      failCandidate(target, error: error, generation: generation)
+      return
     }
+
+    // ponytail: hide the previous render so a failed reload doesn't
+    // show the stale bundle. The engine keeps its internal state, but
+    // the visible pixels are gone. The next successful load un-hides
+    // via loadSource's setSource path.
+    lynxView.isHidden = true
+
+    let payload = ExpoLynxView.errorPayload(for: error, fallbackURL: target.url)
+    emitError(
+      url: target.url,
+      feature: target.feature,
+      stage: .lynx,
+      code: payload.code,
+      message: payload.message
+    )
   }
 
   private static func errorPayload(for error: Error, fallbackURL: String) -> (
@@ -1012,35 +1067,39 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     else { return }
 
     watchdogWorkItem?.cancel()
-    emitDeliveryError(error, fallbackURL: target.url, feature: target.feature)
+    if currentLoadGate.hasFirstScreen {
+      emitDeliveryError(error, fallbackURL: target.url, feature: target.feature)
+    } else {
+      deferredDeliveryError = (error, target.url, target.feature)
+    }
     forceReloadCompletion?(.failure(error))
     forceReloadCompletion = nil
+    deferredForceReload?.completion(.failure(error))
+    deferredForceReload = nil
 
     deliveryTask?.cancel()
-    deliveryTask = Task { @MainActor [weak self] in
-      guard let self, generation == self.loadGeneration else { return }
-      await LynxManagedDeploymentState.shared.fail(
-        releaseID: manifestID,
-        feature: context.feature
+    guard generation == loadGeneration else { return }
+    LynxManagedDeploymentState.shared.fail(
+      releaseID: manifestID,
+      feature: context.feature
+    )
+    let state = LynxManagedDeploymentState.shared.recover(feature: context.feature)
+    if let activeID = state.activeReleaseID,
+      activeID != manifestID,
+      let active = LynxManagedBundleStore.shared.launchInstalledRelease(
+        feature: context.feature,
+        releaseID: activeID
       )
-      let state = await LynxManagedDeploymentState.shared.recover(feature: context.feature)
-      if let activeID = state.activeReleaseID,
-        activeID != manifestID,
-        let active = try? await LynxManagedBundleStore.shared.installedRelease(
-          feature: context.feature,
-          manifestID: activeID
-        )
-      {
-        self.loadManagedRelease(
-          active,
-          context: context,
-          candidate: false,
-          downloaded: false,
-          generation: generation
-        )
-      } else {
-        self.loadEmbedded(feature: context.feature, generation: generation)
-      }
+    {
+      loadManagedRelease(
+        active,
+        context: context,
+        candidate: false,
+        downloaded: false,
+        generation: generation
+      )
+    } else {
+      loadEmbedded(feature: context.feature, generation: generation)
     }
   }
 
@@ -1052,13 +1111,42 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       return
     }
     guard url.isEmpty || url == target.url else { return }
-    watchdogWorkItem?.cancel()
     hasLoadedTemplate = true
+    currentLoadGate.recordLoadFinished()
     applyPendingInitialDataUpdate()
+    completeCurrentLoadHealthIfReady()
+  }
+
+  func lynxViewDidFirstScreen(_ view: LynxView) {
+    guard let target = currentTarget, currentLoadGate.recordFirstScreen() else { return }
 
     var payload = eventPayload(for: target)
     payload["durationMs"] = max(0, Int(Date().timeIntervalSince(loadStartedAt) * 1_000))
     onLoad(payload)
+
+    if deferredDeliveryError != nil {
+      let generation = loadGeneration
+      DispatchQueue.main.async { [weak self] in
+        guard let self,
+          generation == self.loadGeneration,
+          let deferredError = self.deferredDeliveryError
+        else { return }
+        self.deferredDeliveryError = nil
+        self.emitDeliveryError(
+          deferredError.error,
+          fallbackURL: deferredError.fallbackURL,
+          feature: deferredError.feature
+        )
+      }
+    }
+
+    completeCurrentLoadHealthIfReady()
+  }
+
+  private func completeCurrentLoadHealthIfReady() {
+    guard currentLoadGate.consumeReady(), let target = currentTarget
+    else { return }
+    watchdogWorkItem?.cancel()
 
     if let manifestID = target.candidateManifestID,
       let context = target.managedContext
@@ -1073,17 +1161,30 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
         forceReloadCompletion?(.success(()))
         forceReloadCompletion = nil
       } else {
-        // A pending release loaded during startup has no coordinator waiting
-        // for it, so the view owns confirmation. Forced reloads are confirmed
-        // once by the coordinator only after every mounted view succeeds.
-        Task {
-          await LynxManagedDeploymentState.shared.confirm(
-            releaseID: manifestID,
-            feature: context.feature
-          )
-        }
+        LynxManagedDeploymentState.shared.confirm(
+          releaseID: manifestID,
+          feature: context.feature
+        )
       }
     }
+
+    if let context = managedContext {
+      let generation = loadGeneration
+      DispatchQueue.main.async { [weak self] in
+        self?.startManagedDelivery(context: context, generation: generation)
+      }
+    }
+
+    guard let deferred = deferredForceReload,
+      let context = managedContext,
+      context.feature == deferred.release.feature
+    else { return }
+    deferredForceReload = nil
+    performForceReload(
+      deferred.release,
+      context: context,
+      completion: deferred.completion
+    )
   }
 
   func lynxView(_ view: LynxView, didRecieveError error: Error) {
