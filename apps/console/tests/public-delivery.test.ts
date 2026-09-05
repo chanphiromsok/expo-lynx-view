@@ -15,7 +15,7 @@ const keys = generateKeyPairSync('rsa', { modulusLength: 2048, publicExponent: 6
 const privateKey = keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 const publicKey = keys.publicKey.export({ type: 'spki', format: 'pem' }).toString();
 
-function environment(options: { deployment?: boolean; bundle?: boolean; legacyOnly?: boolean; signingKey?: string } = {}): DeliveryEnv {
+function environment(options: { deployment?: boolean; bundle?: boolean; legacyAmbiguous?: boolean; legacyOnly?: boolean; signingKey?: string } = {}): DeliveryEnv {
   const includeDeployment = options.deployment ?? true;
   const includeBundle = options.bundle ?? true;
   return {
@@ -28,7 +28,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
             return {
               async first() {
                 if (sql.includes('FROM deployments')) {
-                  return includeDeployment && values[2] === 'expo-57' ? {
+                  return includeDeployment && (values[2] === 2 || values[2] === 'expo-57') ? {
                     bundleId: releaseId,
                     enabled: 1,
                     force: 0,
@@ -44,7 +44,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
               },
               async raw() {
                 if (query.includes('from "deployments"')) {
-                  return includeDeployment && values[2] === 'expo-57' ? [[
+                  const row = [
                     'default',
                     feature,
                     'expo-57',
@@ -53,7 +53,9 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
                     0,
                     7,
                     '2026-09-01T01:20:00.000Z',
-                  ]] : [];
+                  ];
+                  if (!includeDeployment || (values[2] !== 2 && values[2] !== 'expo-57')) return [];
+                  return values[2] === 2 && options.legacyAmbiguous ? [row, [...row.slice(0, 2), 'expo-58', ...row.slice(3)]] : [row];
                 }
                 return includeBundle ? [[
                   'default',
@@ -78,6 +80,23 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
       },
     } as R2Bucket,
   };
+}
+
+{
+  const response = await handlePublicDeliveryRequest(
+    environment(),
+    new Request(`https://delivery.example/v1/deploy/${feature}`),
+  );
+  assert.equal(response.status, 200);
+  assert.equal((await response.json() as { runtimeVersion: string }).runtimeVersion, 'expo-57');
+}
+
+{
+  const response = await handlePublicDeliveryRequest(
+    environment({ legacyAmbiguous: true }),
+    new Request(`https://delivery.example/v1/deploy/${feature}`),
+  );
+  assert.equal(response.status, 409);
 }
 
 {

@@ -51,7 +51,7 @@ export function LynxScreen() {
 `source` has three iOS modes: `embedded`, `development`, and `managed`.
 `development` accepts a raw URL only in Debug builds. A `managed` source loads a
 feature's embedded baseline or confirmed cache immediately, then revalidates its
-signed channel in the background. A new signed ZIP is fully verified during
+signed deployment in the background. A new signed ZIP is fully verified during
 installation and staged for the next mini-app open; it never replaces a mounted
 view. The legacy `url` prop remains available for compatibility, but Release
 iOS builds reject raw remote URLs.
@@ -70,7 +70,6 @@ and TypeScript rejects an unknown `source.feature` value:
 const source: LynxSource = {
   kind: 'managed',
   feature: 'shopping', // autocomplete comes from the embedded registry
-  channel: 'active',
 };
 ```
 
@@ -87,28 +86,28 @@ failure matrix, and R2 transition, see
 [`feature/delivery-bundle-update/DEVELOPMENT.md`](./feature/delivery-bundle-update/DEVELOPMENT.md).
 
 The example's ReactLynx source now lives at
-`apps/expo-lynx-example/features/delivery`. Use the root workflow to build it,
-publish a signed local release, and inspect its channel:
+`apps/expo-lynx-example/features/delivery`. Start the local Console/Worker,
+open the Expo app, then release the feature:
 
 ```sh
-pnpm lynx local start
+pnpm lynx console
+pnpm start
 pnpm lynx release delivery
-pnpm lynx status delivery
 ```
 
-`lynx release` builds the feature directly, generates its internal release ID,
-signs it, uploads it to the local test service, and promotes the selected
-channel. The generated embedded baseline remains separate, so the first remote
-release visibly exercises the managed `embedded → download` transition. The
-physical iPhone uses a LAN channel URL compiled into the plugin configuration;
-do not use `localhost` from a phone.
+`lynx release` builds the feature, creates an immutable ZIP, uploads it to R2,
+and registers it with the Worker. Open the Console and select/enabled the new
+bundle. The generated embedded baseline remains separate, so the first remote
+release visibly exercises the managed `embedded → download` transition. A
+physical iPhone must use a LAN Worker URL for local testing; do not use
+`localhost` from a phone.
 
-For signed V2 delivery, configure every production channel in the Expo plugin.
+For signed V2 delivery, configure every production endpoint in the Expo plugin.
 Prebuild writes this map into `Info.plist`, and native code resolves the
-endpoint from feature/channel. The native view first renders the current cache
+endpoint from the feature. The native view first renders the current cache
 or embedded baseline, then sends a small ETag revalidation request. A `304` or
 an unchanged release ID does not download a ZIP, extract files, or rehash
-cached content. Only a signed channel pointer to a new release downloads and
+cached content. Only a signed deployment selecting a new release downloads and
 installs the ZIP; that release activates on the next mini-app open.
 
 ```json
@@ -120,10 +119,8 @@ installs the ZIP; that release activates on the next mini-app open.
         {
           "embeddedBundlesPath": "./generated/expo-lynx/embedded",
           "publicKeyPath": "./keys/lynx/updates.public.pem",
-          "deliveryChannels": {
-            "delivery": {
-              "active": "https://delivery.example.com/v1/channels/delivery/active"
-            }
+          "deliveryEndpoints": {
+            "delivery": "https://delivery.example.com/v1/default/delivery"
           }
         }
       ]
@@ -136,13 +133,14 @@ installs the ZIP; that release activates on the next mini-app open.
 const source: LynxSource = {
   kind: 'managed',
   feature: 'delivery',
-  channel: 'active',
 };
 ```
 
 `channelUrl` and `manifestUrl` remain Debug/local compatibility escape hatches.
-Production delivery should use the build-time signed-channel map and embedded
-public-key verifier before using Cloudflare R2.
+Production delivery uses the build-time endpoint map and embedded public-key
+verifier before using Cloudflare R2. The app also sends its build-time Expo
+runtime fingerprint, so it never opens a cached remote bundle from another
+native app version.
 
 For a one-off internal Release build against the LAN server, set
 `LYNX_ALLOW_LOCAL_MANAGED_RELEASE=1` while installing the example app's Pods:
@@ -158,6 +156,21 @@ Release configuration. The native guard is
 variable for production pod installs: the flag permits cleartext HTTP managed
 endpoints for local testing. Deployment signatures and bundle hashes are still
 verified.
+
+### Measure an internal Release build
+
+IFR timing logs are absent from normal Release builds. For a one-off internal
+Release build, opt in while installing Pods:
+
+```sh
+cd apps/expo-lynx-example/ios
+LYNX_IFR_METRICS=1 pod install
+```
+
+This adds `LYNX_IFR_METRICS` only to the `ExpoLynx` pod's Release compilation
+conditions. Build and install the internal Release app, then stream its `IFR`
+logs with the same `xcrun simctl` command below. Run a normal `pod install`
+without the environment variable before creating a production archive.
 
 ### React Native splash while a managed bundle loads
 
@@ -189,9 +202,9 @@ pointer events until the first usable local mini-app render. On a managed cache
 hit, `onLoad` reports `source: "cache"`; a first remote install stages for the
 next mini-app open and reports its progress through `onUpdate`.
 
-The module exposes a non-blocking signed-channel check by feature/channel. Its
+The module exposes a non-blocking signed deployment check by feature. Its
 endpoint comes from the build-time native map, so the imperative API cannot
-override the endpoint, public key, or channel state. Its result is `no-update`
+override the endpoint, public key, or deployment state. Its result is `no-update`
 or `pending`; `pending` means the verified release is ready for the next open,
 not that the visible mini-app changed. The view ref retains only `reload()`.
 
@@ -200,9 +213,8 @@ import ExpoLynx, { ExpoLynxView } from 'expo-lynx-view';
 
 const result = await ExpoLynx.checkForUpdate({
   feature: 'delivery',
-  channel: 'active',
 });
-// { feature: 'delivery', channel: 'active', status: 'no-update' | 'pending', ... }
+// { feature: 'delivery', status: 'no-update' | 'pending', ... }
 ```
 
 Use `onUpdate` to drive a small “checking/downloading/ready next time” status

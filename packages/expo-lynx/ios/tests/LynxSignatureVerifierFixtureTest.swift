@@ -27,10 +27,21 @@ enum LynxSignatureVerifierFixtureTest {
       Data(
         #"{"schemaVersion":1,"type":"lynx-deployment","feature":"shopping","revision":7,"enabled":true,"force":false,"releaseId":"shopping-2026.09.01.1","version":"2026.09.01","runtimeVersion":"expo-57","archiveUrl":"/v1/bundles/shopping/shopping-2026.09.01.1/release.zip","archiveSha256":"1111111111111111111111111111111111111111111111111111111111111111","archiveBytes":32,"issuedAt":"2026-09-01T01:20:00.000Z"}"#.utf8
       ),
-      expectedFeature: "shopping"
+      expectedFeature: "shopping",
+      expectedRuntimeVersion: "expo-57"
     )
     guard deployment.releaseId == "shopping-2026.09.01.1", deployment.archiveBytes == 32 else {
       fatalError("Expected a valid direct-archive deployment")
+    }
+    do {
+      _ = try LynxDeploymentPayload.decodeVerified(
+        Data(#"{"schemaVersion":1,"type":"lynx-deployment","feature":"shopping","revision":7,"enabled":false,"runtimeVersion":"expo-58","issuedAt":"2026-09-01T01:20:00.000Z"}"#.utf8),
+        expectedFeature: "shopping",
+        expectedRuntimeVersion: "expo-57"
+      )
+      fatalError("Expected runtime mismatch")
+    } catch let error as LynxDeliveryError {
+      guard error.code == "ERR_LYNX_RUNTIME_INCOMPATIBLE" else { throw error }
     }
 
     expect(.wrongDocumentType) {

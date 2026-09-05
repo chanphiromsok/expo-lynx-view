@@ -69,30 +69,42 @@ async function getDeployment(
   if (!environment.DELIVERY_SIGNING_PRIVATE_KEY?.trim()) {
     return jsonResponse(503, { error: { code: 'signing-not-configured', message: 'Delivery signing is unavailable.' } });
   }
-  const runtime = request.headers.get('lynx-runtime-version') ?? '';
-  if (!runtimeVersion.test(runtime)) {
+  const requestedRuntime = request.headers.get('lynx-runtime-version');
+  if (requestedRuntime !== null && !runtimeVersion.test(requestedRuntime)) {
     return jsonResponse(400, { error: { code: 'runtime-version-required', message: 'lynx-runtime-version is required.' } });
   }
   const database = createDeliveryDatabase(environment.DB);
-  const [deployment] = await database.select().from(deployments)
-    .where(and(
-      eq(deployments.appId, app),
-      eq(deployments.featureId, feature),
-      eq(deployments.runtimeVersion, runtime),
-    ))
-    .limit(1);
+  const matchingDeployments = requestedRuntime === null
+    ? await database.select().from(deployments)
+      .where(and(eq(deployments.appId, app), eq(deployments.featureId, feature)))
+      .limit(2)
+    : await database.select().from(deployments)
+      .where(and(
+        eq(deployments.appId, app),
+        eq(deployments.featureId, feature),
+        eq(deployments.runtimeVersion, requestedRuntime),
+      ))
+      .limit(1);
+  // ponytail: support pre-runtime-header apps only while their deployment is
+  // unambiguous; remove this branch after the supported mobile-version floor moves.
+  if (requestedRuntime === null && matchingDeployments.length > 1) {
+    return jsonResponse(409, { error: { code: 'legacy-runtime-ambiguous', message: 'This app version must upgrade before delivery can select a runtime.' } });
+  }
+  const [deployment] = matchingDeployments;
   const [bundle] = deployment?.bundleId
-    ? await database.select().from(bundles).where(and(
-      eq(bundles.appId, app),
-      eq(bundles.featureId, feature),
-      eq(bundles.runtimeVersion, runtime),
-      eq(bundles.id, deployment.bundleId),
-    )).limit(1)
+    ? await database.select().from(bundles).where(requestedRuntime === null
+      ? and(eq(bundles.appId, app), eq(bundles.featureId, feature), eq(bundles.id, deployment.bundleId))
+      : and(
+        eq(bundles.appId, app),
+        eq(bundles.featureId, feature),
+        eq(bundles.runtimeVersion, requestedRuntime),
+        eq(bundles.id, deployment.bundleId),
+      )).limit(1)
     : [];
   const row: DeploymentRow | null = deployment
     ? (bundle ? { ...deployment, ...bundle } : deployment)
     : null;
-  const document = deploymentDocument(feature, runtime, row, app, scopedRoute);
+  const document = deploymentDocument(feature, requestedRuntime ?? undefined, row, app, scopedRoute);
   if (!document) return unavailable();
   try {
     const signed = await signDocument(document, environment.DELIVERY_SIGNING_PRIVATE_KEY);
@@ -116,7 +128,7 @@ async function getDeployment(
   }
 }
 
-function deploymentDocument(feature: string, runtimeVersion: string, row: DeploymentRow | null, app: string, scopedRoute: boolean): Record<string, unknown> | null {
+function deploymentDocument(feature: string, runtimeVersion: string | undefined, row: DeploymentRow | null, app: string, scopedRoute: boolean): Record<string, unknown> | null {
   if (!row || !row.enabled) {
     return {
       schemaVersion: 1,
@@ -124,7 +136,7 @@ function deploymentDocument(feature: string, runtimeVersion: string, row: Deploy
       feature,
       revision: Math.max(1, row?.revision ?? 0),
       enabled: false,
-      runtimeVersion,
+      ...(runtimeVersion ? { runtimeVersion } : {}),
       issuedAt: row?.updatedAt ?? new Date(0).toISOString(),
     };
   }

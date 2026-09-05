@@ -105,14 +105,14 @@ struct LynxManagedState: Codable, Sendable {
   var pendingReleaseID: String?
   var attemptingReleaseID: String?
   var failedReleaseIDs: [String]
-  var lastCheckedAt: String?
   var lastETag: String?
   var lastRevision: Int?
 }
 ```
 
 `enabled` is not local source state and is not persisted as a source-selection
-flag. The feature-only storage key is:
+flag. The state is one encoded value per scope in the dedicated native MMKV
+store. The feature-only storage key is:
 
 ```text
 expo.lynx.managed.v2.<feature>

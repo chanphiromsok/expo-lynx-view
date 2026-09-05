@@ -11,13 +11,15 @@ const { _internal } = require('./app.plugin');
 
 const fixtureRoot = path.join(__dirname, 'feature/delivery-bundle-update/fixtures/v2');
 
-test('adds the local managed Release flag to the ExpoLynx pod post-install hook', () => {
+test('adds opt-in internal Release flags to the ExpoLynx pod post-install hook', () => {
   const podfile = `target 'Example' do\n  post_install do |installer|\n    react_native_post_install(\n      installer,\n      '../node_modules/react-native',\n    )\n  end\nend\n`;
   const updated = _internal.addExpoLynxPostInstall(podfile);
 
   assert.match(updated, /target\.name == 'ExpoLynx'/);
   assert.match(updated, /config\.name == 'Release'/);
   assert.match(updated, /LYNX_ALLOW_LOCAL_MANAGED_RELEASE/);
+  assert.match(updated, /LYNX_IFR_METRICS/);
+  assert.match(updated, /conditions\.reject/);
   assert.equal((updated.match(/expo_lynx_post_install\(installer\)/g) ?? []).length, 2);
 });
 

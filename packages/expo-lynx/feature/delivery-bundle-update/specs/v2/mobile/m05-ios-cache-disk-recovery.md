@@ -16,16 +16,23 @@ Android cache parity remains in the roadmap.
   active, pending, attempting, and previous-LKG state.
 - Serialize state transitions so only a complete installed directory can become
   active, pending, or attempting.
-- Reconcile state after process death and remove abandoned staging or incomplete
-  ready directories without scanning every healthy release.
+- Before the next installation, remove abandoned staging or incomplete ready
+  directories without scanning every healthy release on every app open.
 - Enforce archive/expanded-size reservations, free-space checks, quotas, and a
   protected-release eviction order.
-- Isolate cache namespaces by canonical feature, channel, runtime version, and
-  release ID.
+- Isolate cache namespaces by canonical feature, runtime version, and release
+  ID. The selected channel is a server concern; this client has one deployment
+  per feature/runtime.
 - Keep cached opens on the bounded fast path: metadata and expected-entry checks
   only; no full signature/archive/file rehash after installation.
 
 ## Required state invariants
+
+```text
+<Application Support>/ExpoLynx/<feature>/
+  staging/<uuid>/
+  ready/<sha256(runtimeVersion)>/<releaseID>/
+```
 
 1. Embedded content is immutable and never evicted.
 2. Active, attempting, pending, and previous-LKG releases are protected from
@@ -50,7 +57,7 @@ Android cache parity remains in the roadmap.
 - [ ] Eviction never removes embedded, active, attempting, pending, or previous
       LKG content.
 - [ ] Two configured mini-app features cannot read or evict each other’s cache.
-- [ ] Startup reconciliation is idempotent and covered by deterministic tests.
+- [ ] Pre-install reconciliation is idempotent and covered by deterministic tests.
 
 ## Tests and evidence
 

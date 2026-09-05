@@ -53,21 +53,28 @@ def expo_lynx_post_install(installer)
     end
   end
 
-  if ENV['LYNX_ALLOW_LOCAL_MANAGED_RELEASE'] == '1'
-    expo_lynx_target = installer.pods_project.targets.find do |target|
-      target.name == 'ExpoLynx'
-    end
+  internal_release_conditions = [
+    'LYNX_ALLOW_LOCAL_MANAGED_RELEASE',
+    'LYNX_IFR_METRICS',
+  ]
+  release_conditions = []
+  release_conditions << 'LYNX_ALLOW_LOCAL_MANAGED_RELEASE' if ENV['LYNX_ALLOW_LOCAL_MANAGED_RELEASE'] == '1'
+  release_conditions << 'LYNX_IFR_METRICS' if ENV['LYNX_IFR_METRICS'] == '1'
 
-    if expo_lynx_target
-      expo_lynx_target.build_configurations.each do |config|
-        next unless config.name == 'Release'
+  expo_lynx_target = installer.pods_project.targets.find do |target|
+    target.name == 'ExpoLynx'
+  end
 
-        conditions = config.build_settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] || ['$(inherited)']
-        conditions = [conditions] unless conditions.is_a?(Array)
-        config.build_settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = (
-          conditions + ['LYNX_ALLOW_LOCAL_MANAGED_RELEASE']
-        ).uniq
-      end
+  if expo_lynx_target
+    expo_lynx_target.build_configurations.each do |config|
+      next unless config.name == 'Release'
+
+      conditions = config.build_settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] || ['$(inherited)']
+      conditions = [conditions] unless conditions.is_a?(Array)
+      conditions = conditions.reject { |condition| internal_release_conditions.include?(condition) }
+      config.build_settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = (
+        conditions + release_conditions
+      ).uniq
     end
   end
 end

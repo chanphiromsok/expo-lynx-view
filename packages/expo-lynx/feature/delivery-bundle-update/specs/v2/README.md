@@ -16,8 +16,9 @@ Before a public mobile release, complete these runtime-safety tasks in order:
 | Task | Spec | Result |
 |---|---|---|
 | 1 | [C02 — Generate the native runtime fingerprint](./cli/c02-native-runtime-fingerprint.md) | Replaces the static `expo-57` label with one Expo project fingerprint |
-| 2 | [M09 — Runtime-safe IFR launch](./mobile/m09-runtime-bound-cache.md) | Selects a compatible local bundle and gives it an uninterrupted Lynx first-frame path |
-| 3 | [W02 — Scope deployments by runtime](./worker/w02-runtime-scoped-deployments.md) | Lets old and new native builds receive compatible releases from one Worker |
+| 2 | [M10 — UserDefaults to MMKV](./mobile/m10-userdefaults-to-mmkv.md) | Migrates the bounded native launch snapshot without changing delivery behavior |
+| 3 | [M09 — Runtime-safe IFR launch](./mobile/m09-runtime-bound-cache.md) | Selects a compatible local bundle and gives it an uninterrupted Lynx first-frame path |
+| 4 | [W02 — Scope deployments by runtime](./worker/w02-runtime-scoped-deployments.md) | Lets old and new native builds receive compatible releases from one Worker |
 
 These tasks refine the existing `runtimeVersion` field. They do not add a
 second fingerprint field, a channel, another Worker, or another signing flow.

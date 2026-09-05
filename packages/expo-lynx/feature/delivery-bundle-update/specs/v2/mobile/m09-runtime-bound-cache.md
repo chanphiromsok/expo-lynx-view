@@ -20,6 +20,7 @@ first screen.
 
 - [M01 — Mobile signed deployment and ZIP installation](m01-shared-release-protocol.md).
 - [C02 — Native runtime fingerprint](../cli/c02-native-runtime-fingerprint.md).
+- [M10 — UserDefaults to MMKV](m10-userdefaults-to-mmkv.md).
 
 ## Owned files
 
@@ -102,9 +103,10 @@ contract.
 For one managed-view generation, the first-render critical path is:
 
 ```text
-validate the declarative feature
+initialize and open MMKV during ExpoLynx UIKit-view initialization
+  -> validate the declarative feature
   -> read runtime from native build configuration
-  -> synchronously read one bounded UserDefaults launch snapshot
+  -> synchronously read one bounded MMKV launch snapshot
   -> validate only the selected release's small completion marker and entry path
   -> memory-map the selected local main.lynx.bundle
   -> call Lynx loadTemplate with initial data
@@ -123,7 +125,8 @@ open performs only bounded metadata/path checks and an exact runtime comparison.
 The local main bundle mapping is the input required by Lynx; it is not delivery
 maintenance.
 
-`LynxManagedDeploymentState` may keep serialized mutation methods. It must also
+`LynxManagedDeploymentState` keeps its one encoded state blob in a dedicated
+MMKV store and may keep serialized mutation methods. It must also
 provide one immutable synchronous launch snapshot so initial source selection
 does not wait for an actor task. Interrupted-attempt recovery may be persisted
 after the local render starts; the snapshot must never choose the attempting

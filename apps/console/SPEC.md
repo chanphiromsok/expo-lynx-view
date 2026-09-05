@@ -14,6 +14,8 @@ uses:
 - one plain signed deployment JSON response verified by mobile.
 
 The console remains a single `/` page for listing bundles, selecting or rolling
-back the one deployment, choosing force, and enabling or disabling delivery.
+back one deployment per `(appId, feature, runtimeVersion)`, choosing force, and
+enabling or disabling delivery. The mobile app supplies its runtime fingerprint
+as `lynx-runtime-version` when requesting `GET /v1/:appId/:feature`.
 Console users sign in with username/password; the same user's API key
 authorizes CLI upload routes only.

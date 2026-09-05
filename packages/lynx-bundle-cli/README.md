@@ -1,8 +1,8 @@
 # `@expo-lynx/bundle-cli`
 
-The bundle CLI builds an isolated Lynx feature, creates one deterministic ZIP,
-signs its R2 request locally, and asks the delivery Worker to verify it. It
-does not sign releases or read a release PEM.
+The CLI builds an isolated Lynx feature, creates one deterministic ZIP, signs
+its R2 request locally, and asks the delivery Worker to verify it. It does not
+sign mobile deployments or read the Worker's RSA private key.
 
 ## Release workflow
 
@@ -34,7 +34,7 @@ mobile and is never stored in R2:
   "feature": "delivery",
   "releaseId": "delivery-20260901T011848990Z-ac8c0e",
   "version": "2026.09.01",
-  "runtimeVersion": "expo-57",
+  "runtimeVersion": "<Expo native fingerprint>",
   "archiveSha256": "9da2223840940f013b8ffa763b4a1dde4959c8647cee8a9c1b465d16b7dd692f",
   "archiveBytes": 344959
 }
@@ -47,6 +47,11 @@ immutable bundle. Production upload requires `R2_ACCESS_KEY_ID`,
 `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID` (or `CLOUDFLARE_ACCOUNT_ID`), and
 `R2_BUCKET_NAME` (or `LYNX_DELIVERY_R2_BUCKET`). Local Worker mode needs none
 of these because it uses its local R2 binding.
+
+`pnpm lynx bundle <feature>` calculates the fingerprint and saves it in the
+embedded registry. `pnpm lynx release <feature>` reads that saved value so a
+remote ZIP can only target the native baseline it was built with. Run `bundle`
+again before creating a new native binary when native inputs change.
 
 To retry an already-built draft:
 
@@ -79,3 +84,6 @@ The accepted runtime output is exactly `main.lynx.bundle` plus `static/**`
 sidecars. The packer rejects unsafe paths, links, unexpected files, and ZIPs
 over the mobile archive limits before any upload is attempted. Current release
 packaging targets iOS; Android is deferred.
+
+See the [delivery console guide](../../apps/console/README.md) for Cloudflare
+setup, credentials, local D1/R2 testing, and console promotion.

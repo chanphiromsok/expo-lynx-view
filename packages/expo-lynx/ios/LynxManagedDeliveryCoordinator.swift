@@ -110,22 +110,14 @@ actor LynxManagedDeliveryCoordinator {
       return try await update.task.value
     }
 
-    // The shared task owns the complete transaction, including state changes
-    // and view reloads. Cancelling one caller must not interrupt other views
-    // waiting for the same feature and endpoint.
+    // Cancelling one caller must not interrupt other views waiting for the
+    // same feature and endpoint.
     let id = UUID()
-    let task = Task {
-      do {
-        let result = try await self.performCheckForUpdate(
-          feature: feature,
-          deploymentURL: deploymentURL
-        )
-        await self.reconcileCache(feature: feature)
-        return result
-      } catch {
-        await self.reconcileCache(feature: feature)
-        throw error
-      }
+    let task = Task { [self] in
+      try await performCheckForUpdate(
+        feature: feature,
+        deploymentURL: deploymentURL
+      )
     }
     inFlightUpdates[key] = InFlightUpdate(id: id, task: task)
 
@@ -144,10 +136,6 @@ actor LynxManagedDeliveryCoordinator {
     inFlightUpdates.removeValue(forKey: key)
   }
 
-  private func reconcileCache(feature: String) async {
-    try? await LynxManagedBundleStore.shared.reconcile(feature: feature)
-  }
-
   private func performCheckForUpdate(
     feature: String,
     deploymentURL: URL
@@ -163,17 +151,12 @@ actor LynxManagedDeliveryCoordinator {
       expectedRuntimeVersion: runtimeVersion,
       eTag: state.lastETag,
       lastRevision: state.lastRevision,
-      blockedReleaseIDs: Set(state.failedReleaseIDs)
+      blockedReleaseIDs: Set(state.failedReleaseIDs),
+      protectedReleaseIDs: state.protectedReleaseIDs
     )
 
     switch result {
-    case let .notModified(eTag):
-      await LynxManagedDeploymentState.shared.recordDeploymentCheck(
-        eTag: eTag,
-        revision: nil,
-        feature: feature,
-        runtimeVersion: runtimeVersion
-      )
+    case .notModified:
       return LynxManagedUpdateCheckResult(
         feature: feature,
         status: .noUpdate,

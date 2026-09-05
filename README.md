@@ -10,7 +10,8 @@ arbitrary URL in a WebView:
    is always available as an offline fallback.
 2. The release CLI builds and packages an immutable `release.zip`, then signs
    and uploads it directly to R2 with its local R2 credential.
-3. The Worker verifies the ZIP, updates the one active deployment in D1, and
+3. The Worker verifies the ZIP, records it as immutable in D1, and the Console
+   selects one deployment for each app, feature, and native runtime. The Worker
    signs the exact deployment response. The native app verifies that response
    with its embedded public key before installation.
 
@@ -86,6 +87,7 @@ repeated in configuration.
 import { defineConfig } from '@expo-lynx/bundle-cli';
 
 export default defineConfig({
+  appId: 'shop',
   featuresDir: './features',
   features: {
     shopping: {},
@@ -95,11 +97,6 @@ export default defineConfig({
   // duplicated in the React Native JavaScript bundle.
   embeddedOutputDir: './generated/expo-lynx/embedded',
   releaseOutputDir: './dist/lynx-releases',
-  signing: {
-    privateKeyPath:
-      process.env.LYNX_SIGNING_PRIVATE_KEY_PATH ??
-      './.local-lynx-keys/updates.private.pem',
-  },
 });
 ```
 
@@ -185,6 +182,13 @@ pnpm start
 pnpm lynx release delivery
 ```
 
+`pnpm lynx bundle <feature>` calculates an Expo native fingerprint and writes
+it to the embedded registry. `pnpm lynx release <feature>` reads that recorded
+fingerprint; it never recalculates from a potentially changed working tree.
+After a native dependency, plugin, Pod, Swift, Kotlin, or embedded-baseline
+change, run `pnpm lynx bundle <feature>`, then deliberately prebuild and ship a
+new host binary before uploading releases for that runtime.
+
 For Cloudflare setup, release promotion, remote endpoint configuration, and
 recovery, follow the [Delivery Console guide](./apps/console/README.md).
 
@@ -208,6 +212,10 @@ inputs change, for example:
 - rotating the embedded public key; or
 - updating the native module/plugin.
 
+The embedded baseline also has a native runtime fingerprint. Rebuild after a
+native or embedded-baseline change so the app and its remote releases keep the
+same runtime identity.
+
 Creating, signing, uploading, or switching to a new remote release does **not**
 need prebuild or a new iOS binary. The app verifies the new signed release at
 installation time and opens it on the next mini-app launch.
@@ -221,10 +229,23 @@ installation time and opens it on the next mini-app launch.
 2. Build and upload a release, then select it and set `enabled: true` in the
    Console. Use `force: false` to apply it on the next feature open, or
    `force: true` to reload a mounted matching feature after verification.
-3. If that device previously used a different Worker (for example a LAN Worker)
-   with a higher revision, delete and reinstall the app once before testing the
-   new Worker. This clears its installed remote bundle and recorded revision;
-   do not use it as a normal release workflow.
+3. A device that previously used a different Worker can retain a higher signed
+   revision. Delete and reinstall it once only when moving between unrelated
+   test Workers; normal production releases do not need reinstalling.
+
+## Runtime-safe native updates
+
+Each deployment is scoped by `(appId, feature, runtimeVersion)`. The app sends
+its build-time fingerprint in `lynx-runtime-version`; the Worker returns only
+that runtime's signed selection. An App Store update with a different
+fingerprint therefore starts its new embedded baseline, never an incompatible
+cached remote bundle. The console lets you select each compatible runtime
+separately during an App Store rollout.
+
+Older app binaries that do not send the header remain supported only while an
+app/feature has one unambiguous deployment. Once multiple native runtimes are
+active, those binaries fail closed and need an app update; they are never sent
+another runtime's bundle.
 
 For detailed iOS local testing and the delivery architecture, see
 [`docs/ios-local-signed-lynx-testing.md`](./docs/ios-local-signed-lynx-testing.md)

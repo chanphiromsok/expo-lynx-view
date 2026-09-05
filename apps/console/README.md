@@ -32,8 +32,9 @@ archives directly to R2 using its local credential.
 
 The flow is: **CLI uploads a verified bundle → Console selects it → Worker
 signs the selected deployment → mobile verifies and installs it**. One Worker
-serves every app: each deployment is identified by `(appId, feature)`. There
-are no channels, environments, or rollout groups in this MVP.
+serves every app: each deployment is identified by
+`(appId, feature, runtimeVersion)`. There are no channels, environments, or
+rollout groups in this MVP.
 
 ## Development
 
@@ -147,6 +148,22 @@ If the device previously tested a different Worker, such as a LAN Worker, and
 reports `ERR_LYNX_DEPLOYMENT_REPLAY`, delete and reinstall the app once. That
 clears the old Worker’s recorded revision and installed remote bundle. Later
 production releases only need upload and a Console state change.
+
+### Native runtime rollout
+
+The CLI stores an Expo fingerprint in the embedded registry when it builds the
+baseline. The app sends that value as `lynx-runtime-version` on every public
+deployment check. The Console shows one app / mini-app / runtime scope and
+cannot select a bundle built for another native runtime.
+
+When native inputs change, run `pnpm lynx bundle <feature>`, deliberately
+prebuild and ship the new host app, then upload a release for its new
+fingerprint. Keep the prior runtime's deployment selected while that App Store
+version remains installed.
+
+Pre-runtime-header app versions are accepted only while their app/feature has
+one unambiguous deployment. Once two runtime rows exist, the Worker returns
+`legacy-runtime-ambiguous` rather than risk an incompatible remote bundle.
 
 Review local prerequisites without changing Cloudflare or local files:
 

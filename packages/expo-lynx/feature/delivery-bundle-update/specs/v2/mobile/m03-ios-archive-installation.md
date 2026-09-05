@@ -28,8 +28,7 @@ directory ready.
 
 - `packages/expo-lynx/ios/LynxArchiveExtractor.swift`
 - iOS archive limits/entry helpers as needed
-- `LynxManagedManifest.swift`, `LynxManagedBundleStore.swift`, and completion
-  metadata/state integration
+- `LynxManagedBundleStore.swift` and completion metadata/state integration
 - malicious ZIP, installer, interruption, and cached-fast-path tests
 - third-party notices if substantial MIT source is ported
 

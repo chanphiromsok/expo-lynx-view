@@ -167,6 +167,18 @@ function FailureScreen({ error, onRetry, onSignOut }: {
   );
 }
 
+function EmptyDeliveryScreen({ onRefresh, onSignOut }: { onRefresh: () => void; onSignOut: () => void }) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-background p-6 text-center">
+      <div>
+        <p className="font-medium">No uploaded bundles yet.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Upload a release with the CLI, then refresh this page.</p>
+        <div className="mt-4 flex justify-center gap-2"><Button onClick={onRefresh}>Refresh</Button><Button onClick={onSignOut} variant="outline">Sign out</Button></div>
+      </div>
+    </main>
+  );
+}
+
 function ConsoleHeader({ onSignOut, onRefresh }: {
   onSignOut: () => void;
   onRefresh: () => void;
@@ -378,9 +390,17 @@ export function DeliveryConsoleDashboard() {
     updateDeployment.mutate(update, { onSuccess: () => { setNotice(successMessage); setSelectedBundle(null); }, onError: (error) => setNotice(error instanceof Error ? error.message : 'Request failed.') });
   }
 
+  function refresh() {
+    void scopesQuery.refetch();
+    if (selectedScope.runtimeVersion) void overviewQuery.refetch();
+  }
+
   if (sessionQuery.isPending) return <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" />Checking session…</main>;
   if (!sessionQuery.data) return <LoginScreen error={loginMutation.error} onLogin={signIn} password={password} pending={loginMutation.isPending} setPassword={setPassword} setUsername={setUsername} username={username} />;
-  if (scopesQuery.isPending || !selectedScope.runtimeVersion || overviewQuery.isPending) return <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" />Loading deployment…</main>;
+  if (scopesQuery.isPending) return <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" />Loading deployment…</main>;
+  if (scopesQuery.isError) return <FailureScreen error={scopesQuery.error} onSignOut={() => logoutMutation.mutate()} onRetry={() => void scopesQuery.refetch()} />;
+  if (scopes.length === 0) return <EmptyDeliveryScreen onRefresh={() => void scopesQuery.refetch()} onSignOut={() => logoutMutation.mutate()} />;
+  if (overviewQuery.isPending) return <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" />Loading deployment…</main>;
   if (overviewQuery.isError || !overviewQuery.data) return <FailureScreen error={overviewQuery.error} onSignOut={() => logoutMutation.mutate()} onRetry={() => void overviewQuery.refetch()} />;
 
   const overview = overviewQuery.data;
@@ -390,7 +410,7 @@ export function DeliveryConsoleDashboard() {
     : [currentScope, ...scopes];
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_82%_-20%,rgb(59_130_246_/_20%),transparent_28rem)] bg-background text-foreground">
-      <ConsoleHeader onRefresh={() => void overviewQuery.refetch()} onSignOut={() => logoutMutation.mutate()} />
+      <ConsoleHeader onRefresh={refresh} onSignOut={() => logoutMutation.mutate()} />
       {notice && <output className="mx-auto mt-6 flex max-w-6xl items-start justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50/70 px-4 py-3 text-sm text-blue-950 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-100"><span>{notice}</span><button aria-label="Dismiss notice" onClick={() => setNotice(null)} type="button"><X className="size-4" aria-hidden="true" /></button></output>}
       <section className="mx-auto max-w-7xl px-4 pt-5 sm:px-7"><label className="grid max-w-xl gap-1 text-xs font-medium text-muted-foreground">App / mini app / runtime<select aria-label="Choose deployment" className="h-9 rounded-lg border bg-background px-3 text-sm text-foreground" disabled={scopesQuery.isPending} onChange={(event) => { const [appId, feature, runtimeVersion] = event.target.value.split('\u0000'); if (appId && feature && runtimeVersion) changeScope(appId, feature, runtimeVersion); }} value={`${selectedScope.appId}\u0000${selectedScope.feature}\u0000${selectedScope.runtimeVersion}`}>{scopeOptions.map((item) => <option key={`${item.appId}/${item.feature}/${item.runtimeVersion}`} value={`${item.appId}\u0000${item.feature}\u0000${item.runtimeVersion}`}>{item.appId} / {item.feature} / {item.runtimeVersion}</option>)}</select></label></section>
       <ConsoleContent appId={selectedScope.appId} feature={selectedScope.feature} onSelect={(bundle) => setSelectedBundle(bundle)} onToggle={() => apply({ enabled: !overview.deployment.enabled }, overview.deployment.enabled ? 'Remote delivery disabled. Existing installed bundles stay on devices.' : 'Remote delivery enabled for the selected bundle.')} overview={overview} pending={updateDeployment.isPending} />

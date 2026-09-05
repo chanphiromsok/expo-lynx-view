@@ -39,7 +39,7 @@ export default function App() {
   const lynxViewRef = useRef<ExpoLynxViewRef>(null);
   const [sourceKind, setSourceKind] = useState<SourceKind>("managed");
   const [status, setStatus] = useState("Loading…");
-  const [isSplashVisible, setSplashVisible] = useState(true);
+  const [isSplashVisible, setSplashVisible] = useState(false);
 
   const source: LynxSource =
     sourceKind === "managed"
@@ -128,7 +128,6 @@ export default function App() {
                 setSplashVisible(false);
               }}
               onLoadStart={({ nativeEvent }) => {
-                setSplashVisible(true);
                 setStatus(`Loading ${nativeEvent.source} bundle…`);
               }}
               onError={({ nativeEvent }) => {

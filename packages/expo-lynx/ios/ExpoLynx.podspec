@@ -11,11 +11,12 @@ Pod::Spec.new do |s|
 
 
   s.dependency 'ExpoModulesCore'
+  s.dependency 'MMKV', '2.4.2'
   s.dependency 'Lynx/Framework', '4.0.0'
   s.dependency 'PrimJS/quickjs', '4.0.0'
   s.dependency 'PrimJS/napi', '4.0.0'
   s.dependency 'LynxService/Image', '4.0.0'
-  s.dependency 'LynxService/Log', '4.0.0'
+  s.dependency 'LynxService/Log', '4.0.0', :configurations => ['Debug']
   s.dependency 'LynxService/Http', '4.0.0'
   # DevTool and DebugRouter are development-only; excluding them from Release
   # avoids shipping their startup work, code, and native dependencies.

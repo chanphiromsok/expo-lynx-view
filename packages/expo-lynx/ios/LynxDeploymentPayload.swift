@@ -17,7 +17,8 @@ struct LynxDeploymentPayload: Decodable, Sendable {
 
   static func decodeVerified(
     _ data: Data,
-    expectedFeature: String
+    expectedFeature: String,
+    expectedRuntimeVersion: String
   ) throws -> LynxDeploymentPayload {
     let object: [String: Any]
     let payload: LynxDeploymentPayload
@@ -50,6 +51,14 @@ struct LynxDeploymentPayload: Decodable, Sendable {
       isSafeRuntimeVersion(payload.runtimeVersion)
     else {
       throw invalid("The signed deployment payload violates the V2 protocol.")
+    }
+
+    guard payload.runtimeVersion == expectedRuntimeVersion else {
+      throw LynxDeliveryError(
+        stage: .compatibility,
+        code: "ERR_LYNX_RUNTIME_INCOMPATIBLE",
+        message: "The signed deployment targets another runtime version."
+      )
     }
 
     if payload.enabled {
