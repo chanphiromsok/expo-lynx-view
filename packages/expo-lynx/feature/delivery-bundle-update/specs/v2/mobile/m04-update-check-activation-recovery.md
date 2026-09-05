@@ -27,11 +27,11 @@ downloaded by that device.
 - `packages/expo-lynx/src/LynxSource.ts`
 - `packages/expo-lynx/src/index.ts`
 - `packages/expo-lynx/app.plugin.js`
-- `packages/expo-lynx/ios/ExpoLynxModule.swift`
-- `packages/expo-lynx/ios/ExpoLynxView.swift`
-- `packages/expo-lynx/ios/LynxManagedDeliveryCoordinator.swift`
+- `packages/expo-lynx/ios/Module/ExpoLynxModule.swift`
+- `packages/expo-lynx/ios/View/ExpoLynxView.swift`
+- `packages/expo-lynx/ios/Delivery/LynxManagedDeliveryCoordinator.swift`
 - `packages/expo-lynx/ios/LynxManagedChannelState.swift` — rename to deployment state
-- `packages/expo-lynx/ios/LynxManagedBundleStore.swift`
+- `packages/expo-lynx/ios/Delivery/LynxManagedBundleStore.swift`
 - focused TypeScript, Swift, plugin, and local delivery tests
 
 ## Contract

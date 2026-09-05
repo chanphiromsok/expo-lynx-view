@@ -31,7 +31,7 @@ as the exact verification input; do not parse and reserialize the JSON first.
 
 - `packages/expo-lynx/app.plugin.js`
 - iOS plugin tests for path resolution, Xcode resources, and secret rejection
-- `packages/expo-lynx/ios/LynxSignatureVerifier.swift` — new
+- `packages/expo-lynx/ios/Delivery/LynxSignatureVerifier.swift` — new
 - iOS native unit tests using the M01 fixtures
 - `apps/expo-lynx-example/app.json`
 - example/root ignore rules for local private keys and generated output, based

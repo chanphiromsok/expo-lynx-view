@@ -2,7 +2,7 @@
 //
 // Spec: feature/delivery-bundle-update/specs/v2/mobile/m05-prefetch-progress-api.md
 //
-// The native enforcement lives in ios/ExpoLynxView.swift. This file
+// The native enforcement lives in ios/View/ExpoLynxView.swift. This file
 // holds the JS-side contract so the prop type can be narrowed before
 // the native layer sees it.
 

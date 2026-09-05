@@ -21,7 +21,7 @@ bridge, store bundle bytes, or replace the installed-release filesystem cache.
 ## Owned files
 
 - `packages/expo-lynx/ios/ExpoLynx.podspec`
-- `packages/expo-lynx/ios/LynxManagedDeploymentState.swift`
+- `packages/expo-lynx/ios/Delivery/LynxManagedDeploymentState.swift`
 - `packages/expo-lynx/ios/tests/LynxManagedDeploymentStateFixtureTest.swift`
 
 ## Storage contract

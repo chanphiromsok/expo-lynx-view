@@ -24,11 +24,11 @@ first screen.
 
 ## Owned files
 
-- `packages/expo-lynx/ios/LynxV2Completion.swift`
-- `packages/expo-lynx/ios/LynxManagedBundleStore.swift`
-- `packages/expo-lynx/ios/LynxManagedDeploymentState.swift`
-- `packages/expo-lynx/ios/LynxManagedDeliveryCoordinator.swift`
-- `packages/expo-lynx/ios/ExpoLynxView.swift`
+- `packages/expo-lynx/ios/Delivery/LynxV2Completion.swift`
+- `packages/expo-lynx/ios/Delivery/LynxManagedBundleStore.swift`
+- `packages/expo-lynx/ios/Delivery/LynxManagedDeploymentState.swift`
+- `packages/expo-lynx/ios/Delivery/LynxManagedDeliveryCoordinator.swift`
+- `packages/expo-lynx/ios/View/ExpoLynxView.swift`
 - focused Swift parsing/fixture tests
 
 ## Installed release contract

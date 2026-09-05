@@ -26,7 +26,7 @@ directory ready.
 
 ## Owned files
 
-- `packages/expo-lynx/ios/LynxArchiveExtractor.swift`
+- `packages/expo-lynx/ios/Delivery/LynxArchiveExtractor.swift`
 - iOS archive limits/entry helpers as needed
 - `LynxManagedBundleStore.swift` and completion metadata/state integration
 - malicious ZIP, installer, interruption, and cached-fast-path tests

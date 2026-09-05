@@ -36,7 +36,9 @@
     "build",
     "expo-module.config.json",
     "ios/*.podspec",
-    "ios/*.swift"
+    "ios/Module/*.swift",
+    "ios/View/*.swift",
+    "ios/Delivery/*.swift"
   ],
   "dependencies": {},
   "devDependencies": {
