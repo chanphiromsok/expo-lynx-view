@@ -36,5 +36,11 @@ export type EmbeddedBaselineV1 = {
 };
 
 export function defineConfig(config: LynxBundleConfig): LynxBundleConfig;
+export type LynxMiniAppConfig = {
+  appId: string;
+  feature: string;
+  releaseOutputDir?: string;
+};
+export function defineMiniApp(config: LynxMiniAppConfig): LynxMiniAppConfig;
 export function createNativeRuntimeVersion(projectRoot: string): Promise<string>;
 export function readEmbeddedRuntimeVersion(config: LynxBundleConfig): string;

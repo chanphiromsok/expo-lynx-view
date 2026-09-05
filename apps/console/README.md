@@ -213,18 +213,10 @@ An app outside this monorepo needs the delivery Worker URL, its CLI API key,
 and the R2 S3 credential for the delivery bucket. It does not need the Console
 source, Cloudflare login, Console password, or delivery private key.
 
-`@expo-lynx/bundle-cli` is currently private, so link the local package while
-developing it:
+After the first npm publish, install the CLI in the mini-app workspace:
 
 ```sh
-cd ~/Desktop/my-lynx-app
-pnpm add -D /Users/phirom/Desktop/expo-lynx-monorepo/packages/lynx-bundle-cli
-```
-
-After it is published, replace that command with:
-
-```sh
-pnpm add -D @expo-lynx/bundle-cli
+pnpm add -D expo-lynx-bundle-cli
 ```
 
 The app needs a `lynx-bundle.config.mjs` file. This is the smallest shape:

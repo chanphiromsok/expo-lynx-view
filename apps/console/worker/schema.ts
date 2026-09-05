@@ -14,6 +14,10 @@ export const AppFeatureParametersSchema = Type.Object({
   feature: Type.String({ pattern: featurePattern }),
 });
 
+export const AppParametersSchema = Type.Object({
+  appId: Type.String({ pattern: appPattern }),
+});
+
 export const BundleParametersSchema = Type.Object({
   bundleId: Type.String({ pattern: bundlePattern }),
 });
@@ -45,6 +49,46 @@ export const ReleaseMetadataSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const MiniAppReleaseV2Schema = Type.Object(
+  {
+    schemaVersion: Type.Literal(2),
+    appId: Type.String({ pattern: appPattern }),
+    feature: Type.String({ pattern: featurePattern }),
+    releaseId: Type.String({ pattern: bundlePattern }),
+    version: Type.String({ minLength: 1, maxLength: 128 }),
+    archiveSha256: Type.String({ pattern: sha256Pattern }),
+    archiveBytes: Type.Integer({ minimum: 1, maximum: 64 * 1024 * 1024 }),
+  },
+  { additionalProperties: false },
+);
+
+export const AppCreateSchema = Type.Object(
+  {
+    id: Type.String({ pattern: appPattern }),
+    name: Type.String({ minLength: 1, maxLength: 128 }),
+  },
+  { additionalProperties: false },
+);
+
+export const MiniAppCreateSchema = Type.Object(
+  {
+    id: Type.String({ pattern: featurePattern }),
+    name: Type.String({ minLength: 1, maxLength: 128 }),
+  },
+  { additionalProperties: false },
+);
+
+export const HostRuntimeRegistrationSchema = Type.Object(
+  {
+    schemaVersion: Type.Literal(1),
+    runtimeVersion: Type.String({ minLength: 1, maxLength: 128, pattern: '^[\\u0020-\\u007e]+$' }),
+    appVersion: Type.String({ minLength: 1, maxLength: 128, pattern: '^[\\u0020-\\u007e]+$' }),
+    buildNumber: Type.String({ minLength: 1, maxLength: 128, pattern: '^[\\u0020-\\u007e]+$' }),
+    features: Type.Array(Type.String({ pattern: featurePattern }), { minItems: 1, maxItems: 64, uniqueItems: true }),
+  },
+  { additionalProperties: false },
+);
+
 // Keep this a single object rather than a Type.Union: the local Elysia setup
 // intentionally does not install TypeBox's compiler dependency. The controller
 // selects either operation after TypeBox has validated each supplied field.
@@ -67,9 +111,14 @@ export const LoginSchema = Type.Object(
 
 export type FeatureParameters = Static<typeof FeatureParametersSchema>;
 export type AppFeatureParameters = Static<typeof AppFeatureParametersSchema>;
+export type AppParameters = Static<typeof AppParametersSchema>;
 export type BundleParameters = Static<typeof BundleParametersSchema>;
 export type LocalUploadParameters = Static<typeof LocalUploadParametersSchema>;
 export type AppLocalUploadParameters = Static<typeof AppLocalUploadParametersSchema>;
 export type ReleaseMetadata = Static<typeof ReleaseMetadataSchema>;
+export type MiniAppReleaseV2 = Static<typeof MiniAppReleaseV2Schema>;
+export type AppCreateInput = Static<typeof AppCreateSchema>;
+export type MiniAppCreateInput = Static<typeof MiniAppCreateSchema>;
+export type HostRuntimeRegistrationInput = Static<typeof HostRuntimeRegistrationSchema>;
 export type DeploymentUpdateInput = Static<typeof DeploymentUpdateSchema>;
 export type LoginInput = Static<typeof LoginSchema>;

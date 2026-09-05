@@ -24,6 +24,7 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
+      "buildNumber": "1",
       "supportsTablet": true,
       "bundleIdentifier": "expo.modules.lynx.example",
       "appleTeamId": "4QDQZA9V92",

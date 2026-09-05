@@ -1,0 +1,47 @@
+---
+title: Host app integration
+description: Prepare and register the native compatibility boundary owned by an Expo host app.
+---
+
+The Expo host owns embedded fallbacks, native compatibility, and public Worker
+URLs. It does not contain mini-app source paths or release build commands.
+
+```json title="app.json"
+[
+  "expo-lynx-view",
+  {
+    "embeddedBundlesPath": "./generated/expo-lynx/embedded",
+    "publicKeyPath": "./keys/lynx/updates.public.pem",
+    "deliveryEndpoints": {
+      "merchant-home": "https://delivery.example.com/v1/bs-one/merchant-home"
+    }
+  }
+]
+```
+
+The app and feature IDs in every URL must already be registered by the Console
+operator. The host never creates them from its configuration.
+
+## Prepare, build, then register
+
+```sh
+# local only: updates the prepared embedded runtime record
+pnpm lynx host prepare
+
+# build and verify the native archive outside this command
+
+# authenticated: records exactly that prepared runtime in the Worker
+pnpm lynx host register
+```
+
+`host register` recalculates the native compatibility identity and fails if the
+project changed since `host prepare`. This prevents a remote bundle for one
+native build being selected for another. CI can use `pnpm lynx host prepare
+--register` when registering before the native archive is intentional.
+
+If a released binary was not registered, devices receive a signed disabled
+response and keep their embedded baseline. They never receive a bundle for a
+different host build.
+
+The host CI needs only `LYNX_DELIVERY_API_KEY` and `LYNX_DELIVERY_SERVER` for
+registration. It does not need the Worker signing private key or R2 credentials.

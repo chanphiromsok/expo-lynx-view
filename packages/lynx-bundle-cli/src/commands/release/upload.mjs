@@ -35,6 +35,7 @@ export default class ReleaseUpload extends Command {
     'r2-bucket-name': Flags.string({ description: 'R2 bucket name (prefer R2_BUCKET_NAME or LYNX_DELIVERY_R2_BUCKET)', env: 'R2_BUCKET_NAME' }),
     'r2-access-key-id': Flags.string({ description: 'R2 S3 access key ID (prefer R2_ACCESS_KEY_ID)', env: 'R2_ACCESS_KEY_ID' }),
     'r2-secret-access-key': Flags.string({ description: 'R2 S3 secret access key (prefer R2_SECRET_ACCESS_KEY)', env: 'R2_SECRET_ACCESS_KEY' }),
+    'host-build': Flags.string({ description: 'expected current host build for non-interactive CI', env: 'LYNX_EXPECTED_HOST_BUILD' }),
   };
 
   async run() {
@@ -43,6 +44,7 @@ export default class ReleaseUpload extends Command {
       releaseDirectory: args.releaseDirectory,
       server: flags.server,
       apiKey: flags['api-key'],
+      expectedHostBuild: flags['host-build'],
       r2: {
         accountId: flags['r2-account-id'] ?? process.env.CLOUDFLARE_ACCOUNT_ID,
         bucketName: flags['r2-bucket-name'] ?? process.env.LYNX_DELIVERY_R2_BUCKET,

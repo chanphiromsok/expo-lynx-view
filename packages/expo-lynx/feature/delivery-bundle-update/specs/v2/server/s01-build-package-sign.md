@@ -41,7 +41,7 @@ The feature-map key is canonical; do not repeat `featureId` or configure a
 per-feature `projectRoot`.
 
 ```ts
-import { defineConfig } from '@expo-lynx/bundle-cli';
+import { defineConfig } from 'expo-lynx-bundle-cli';
 
 export default defineConfig({
   // Optional; defaults to the config directory.

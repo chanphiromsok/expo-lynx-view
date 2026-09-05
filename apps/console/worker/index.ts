@@ -4,6 +4,9 @@ import { CloudflareAdapter } from 'elysia/adapter/cloudflare-worker';
 
 import {
   completeUpload,
+  createApp,
+  createMiniApp,
+  getApps,
   getCurrentUser,
   getDeploymentOverview,
   getDeploymentScopes,
@@ -11,6 +14,7 @@ import {
   login,
   logout,
   registerUpload,
+  registerHostRuntime,
   updateDeployment,
   type ControlEnv,
 } from './control-api.ts';
@@ -19,15 +23,17 @@ import {
   type DeliveryEnv,
 } from './public-delivery.ts';
 import {
-  BundleParametersSchema,
+  AppCreateSchema,
   AppFeatureParametersSchema,
+  AppParametersSchema,
+  BundleParametersSchema,
   AppLocalUploadParametersSchema,
   DeploymentUpdateSchema,
   LoginSchema,
-  ReleaseMetadataSchema,
+  HostRuntimeRegistrationSchema,
+  MiniAppCreateSchema,
   type DeploymentUpdateInput,
   type LoginInput,
-  type ReleaseMetadata,
 } from './schema.ts';
 
 export type Env = ControlEnv & DeliveryEnv;
@@ -41,6 +47,18 @@ export const app = new Elysia({ adapter: CloudflareAdapter })
   .post('/api/auth/login', ({ request, body }) => login(bindings, request, body as LoginInput), { body: LoginSchema })
   .post('/api/auth/logout', ({ request }) => logout(bindings, request))
   .get('/api/auth/me', ({ request }) => getCurrentUser(bindings, request))
+  .get('/api/apps', ({ request }) => getApps(bindings, request))
+  .post('/api/apps', ({ request, body }) => createApp(bindings, request, body), { body: AppCreateSchema })
+  .post(
+    '/api/apps/:appId/mini-apps',
+    ({ request, params, body }) => createMiniApp(bindings, request, params.appId, body),
+    { params: AppParametersSchema, body: MiniAppCreateSchema },
+  )
+  .put(
+    '/api/apps/:appId/runtime',
+    ({ request, params, body }) => registerHostRuntime(bindings, request, params.appId, body),
+    { params: AppParametersSchema, body: HostRuntimeRegistrationSchema },
+  )
   .get('/api/deployments', ({ request }) => getDeploymentScopes(bindings, request))
   .get(
     '/api/deploy/:appId/:feature',
@@ -56,14 +74,13 @@ export const app = new Elysia({ adapter: CloudflareAdapter })
   )
   .post(
     '/api/uploads',
-    ({ request, body }) => registerUpload(bindings, request, body as ReleaseMetadata),
-    { body: ReleaseMetadataSchema },
+    ({ request, body }) => registerUpload(bindings, request, body),
   )
   .post(
     '/api/uploads/:bundleId/complete',
     ({ request, params, body }) =>
-      completeUpload(bindings, request, params.bundleId, body as ReleaseMetadata),
-    { params: BundleParametersSchema, body: ReleaseMetadataSchema },
+      completeUpload(bindings, request, params.bundleId, body),
+    { params: BundleParametersSchema },
   )
   .put(
     '/__local-r2/:appId/:feature/releases/:bundleId/release.zip',

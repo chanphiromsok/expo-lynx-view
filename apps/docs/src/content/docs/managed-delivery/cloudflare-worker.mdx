@@ -3,8 +3,8 @@ title: Cloudflare Worker and data plane
 description: One Worker, D1 database, and R2 bucket for all host apps and mini-app features.
 ---
 
-`apps/console` ships one TanStack console and one Elysia Cloudflare Worker. It
-serves many host apps and mini-apps:
+The Console ships one TanStack console and one Elysia Cloudflare Worker. It
+serves many host apps and mini apps:
 
 ```text
 appId + feature + runtimeVersion → selected immutable bundle
@@ -12,13 +12,27 @@ appId + feature + runtimeVersion → selected immutable bundle
 
 ## First-time Cloudflare setup
 
-This command provisions the shared delivery Console. Run it once from this
-repository, not from every Expo host app.
+One operator provisions this shared infrastructure. Host and mini-app teams do
+not create their own Worker, D1 database, or bucket. In the Console, create the
+identity hierarchy before either team releases:
+
+```text
+Apps → BS One → Merchant Home → Current host build → Bundles
+```
+
+App and mini-app IDs are immutable. Upload typos are rejected instead of
+silently becoming apps.
 
 ### 1. Prepare the Worker signing key
 
-The Worker must sign public deployment responses with the private half of the
-public key compiled into the mobile app. Put the PEM in the ignored local file:
+The Worker signs public deployment responses with the private half of the
+public key compiled into the mobile app. Fresh setup generates the pair: it
+writes the public half to the mobile key path and sends the private half
+directly to Worker secrets. It never prints the private key or writes it to
+`.env.lynx`.
+
+For an existing mobile trust key, put its matching private PEM in the ignored
+local file before setup:
 
 ```dotenv title="apps/console/.dev.vars"
 DELIVERY_SIGNING_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
@@ -84,13 +98,15 @@ binary because the endpoint is a native configuration value:
 }
 ```
 
-After that one-time setup, publishing a normal bundle is only:
+After one-time setup, each team uses its own workflow:
 
 ```sh
-set -a
-source .env.lynx
-set +a
-pnpm lynx release delivery
+# Expo host: prepare locally, build native app, then register
+pnpm lynx host prepare
+pnpm lynx host register
+
+# independent mini app: build and upload
+pnpm lynx release
 ```
 
 Open the deployed Worker URL, sign in with the generated console credentials,
@@ -99,7 +115,8 @@ The CLI upload itself does not enable a release.
 
 | D1 table | Purpose |
 | --- | --- |
-| `bundles` | Immutable verified ZIP metadata, including app, feature, and runtime fingerprint. |
+| `apps` / `mini_apps` | Allow-listed host and mini-app identities. |
+| `bundles` | Immutable verified ZIP metadata, pinned to the Current host build at reservation. |
 | `deployments` | Selected bundle, enabled state, force flag, and revision for one runtime scope. |
 | `users` | Console username/password and hashed CLI API key. |
 
@@ -120,11 +137,11 @@ is unambiguous. This temporary bridge fails closed once multiple runtimes exist.
 
 ## Later Worker changes
 
-Deploy Console/Worker code changes without recreating D1, R2, users, or API
-keys:
+Deploy Console/Worker code changes without recreating D1, R2, users, API keys,
+or signing secrets:
 
 ```sh
-pnpm --filter @expo-lynx/delivery-console run deploy
+pnpm lynx console deploy
 ```
 
 Use `console setup --dry-run --username your-console-name` to check local key

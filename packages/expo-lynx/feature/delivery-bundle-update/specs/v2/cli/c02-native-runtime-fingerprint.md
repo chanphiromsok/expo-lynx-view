@@ -4,6 +4,10 @@
 
 **Spec:** `feature/delivery-bundle-update/specs/v2/cli/c02-native-runtime-fingerprint.md`
 
+> **Planned successor:** I01 moves runtime binding to Worker upload
+> registration so independent mini-app repositories do not handle this value.
+> This document describes the pre-I01 host-owned workspace flow.
+
 ## Goal
 
 Replace the static `expo-57` runtime label with one deterministic native
@@ -96,8 +100,8 @@ the current date, or a random value.
 ## Required verification
 
 ```bash
-pnpm --filter @expo-lynx/bundle-cli lint
-pnpm --filter @expo-lynx/bundle-cli test
+pnpm --filter expo-lynx-bundle-cli lint
+pnpm --filter expo-lynx-bundle-cli test
 git diff --check
 ```
 

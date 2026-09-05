@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Install Expo Lynx, embed a safe baseline, and create the first native runtime.
+description: Install Expo Lynx and configure a host application's safe baseline.
 ---
 
 Expo Lynx runs in an Expo development or release build, not Expo Go. Each
@@ -11,30 +11,13 @@ delivery only replaces it after verification.
 
 ```sh
 pnpm add expo-lynx-view
-pnpm add -D @expo-lynx/bundle-cli
+pnpm add -D expo-lynx-bundle-cli
 ```
 
-## 2. Describe the host app's features
+## 2. Configure the host plugin
 
-Create `lynx-bundle.config.mjs` in the Expo app:
-
-```js
-export default {
-  appId: 'shop',
-  featuresDir: './features',
-  features: { delivery: {}, orders: {} },
-  embeddedOutputDir: './generated/expo-lynx/embedded',
-  releaseOutputDir: './dist/lynx-releases',
-};
-```
-
-`appId` is the host-app namespace in the shared Worker. Feature IDs may repeat
-between different host apps.
-
-Before replacing the example URL below, provision the shared Worker once with
-[Cloudflare Worker setup](/managed-delivery/cloudflare-worker/#first-time-cloudflare-setup).
-
-## 3. Configure the plugin and build the baseline
+Before replacing the example URL below, provision the shared Worker and
+register the app/mini-app IDs with the [Cloudflare Console](/managed-delivery/cloudflare-worker/#first-time-cloudflare-setup).
 
 ```json
 {
@@ -43,29 +26,29 @@ Before replacing the example URL below, provision the shared Worker once with
       "embeddedBundlesPath": "./generated/expo-lynx/embedded",
       "publicKeyPath": "./keys/lynx/updates.public.pem",
       "deliveryEndpoints": {
-        "delivery": "https://your-worker.workers.dev/v1/shop/delivery"
+        "merchant-home": "https://your-worker.workers.dev/v1/bs-one/merchant-home"
       }
     }]]
   }
 }
 ```
 
+The generated embedded directory contains only the approved local fallback
+bundles. The host project does not contain mini-app source or a feature map.
+Prepare the native compatibility record before the native archive:
+
 ```sh
-pnpm lynx bundle delivery
-cd your-expo-app
-pnpm exec expo prebuild --platform ios
+pnpm lynx host prepare
 ```
 
-`lynx bundle` calculates an Expo native fingerprint and writes it into the
-embedded registry. Prebuild copies that identity, endpoint map, bundles, and
-public key into the iOS app.
+After the native archive succeeds, run `pnpm lynx host register`. See [Host app
+integration](/managed-delivery/host-app-integration/) for the complete flow.
 
 :::note[When a new native build is needed]
 
-Run `pnpm lynx bundle <feature>`, prebuild, and install a new app binary after
-changing native inputs: an embedded baseline, native dependency, Expo plugin,
-public key, or endpoint. Publishing an ordinary remote release does not need a
-native rebuild.
+Prepare and distribute a new app binary after changing native inputs: an
+embedded baseline, native dependency, Expo plugin, public key, or endpoint.
+Publishing an ordinary remote release does not need a native rebuild.
 
 :::
 

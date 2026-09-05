@@ -9,12 +9,12 @@ Start the local environment and retry:
 
 ```sh
 pnpm lynx console
-pnpm lynx release delivery
+pnpm lynx release
 ```
 
 For a remote Worker, confirm `LYNX_DELIVERY_SERVER` is the canonical public
 deployment URL, such as `https://worker.workers.dev/v1/default/delivery`, and
-that `LYNX_DELIVERY_API_KEY` is present in your ignored `.env.lynx`.
+and that `LYNX_DELIVERY_API_KEY` is present in your ignored `.env.lynx`.
 
 ## R2 upload returns 403
 
@@ -33,6 +33,6 @@ with `LYNX_ALLOW_LOCAL_MANAGED_RELEASE=1`.
 
 The Console must select and enable the uploaded bundle for the exact
 `(appId, feature, runtimeVersion)` scope. With force disabled, close and reopen
-the feature after it stages. If the Worker reports a runtime mismatch or the
-app keeps its embedded baseline, build a matching native binary with
-`pnpm lynx bundle <feature>` and Expo prebuild.
+the feature after it stages. If the app keeps its embedded baseline after a new
+native build, the host team should run `lynx host prepare`, build the archive,
+then run `lynx host register` before the mini-app team uploads.

@@ -24,16 +24,19 @@ for the required signing PEM, the exact R2 Dashboard token, and the generated
 environment values.
 
 ```sh
-set -a
-source .env.lynx
-set +a
-pnpm lynx release delivery
+# Host team: prepare, build native app, then register
+pnpm lynx host prepare
+pnpm lynx host register
+
+# Mini-app team: build and upload independently
+pnpm lynx release
 ```
 
 `.env.lynx` contains the Worker URL, CLI API key, R2 S3 credentials, and
 console login. A feature team that only publishes bundles needs those upload
 credentials; it does not need Cloudflare dashboard access or the signing key.
 
-After a bundle is registered, open the Worker URL, sign in, choose its
-app / feature / runtime scope, select the bundle, then enable it. Use force
-only when a currently mounted feature should reload after local verification.
+In the Console, first create the host app and mini-app IDs. After the host has
+registered a build, open its mini app, select a compatible bundle, then enable
+it. Use force only when a currently mounted feature should reload after local
+verification.

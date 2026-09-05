@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 
 import { sha256Hex, signDocument } from './protocol.ts';
 import { createDeliveryDatabase } from './db/client.ts';
@@ -91,15 +91,22 @@ async function getDeployment(
     return jsonResponse(409, { error: { code: 'legacy-runtime-ambiguous', message: 'This app version must upgrade before delivery can select a runtime.' } });
   }
   const [deployment] = matchingDeployments;
+  const bundleFilter = requestedRuntime === null
+    ? and(
+      eq(bundles.appId, app),
+      eq(bundles.featureId, feature),
+      eq(bundles.id, deployment?.bundleId ?? ''),
+      isNotNull(bundles.verifiedAt),
+    )
+    : and(
+      eq(bundles.appId, app),
+      eq(bundles.featureId, feature),
+      eq(bundles.runtimeVersion, requestedRuntime),
+      eq(bundles.id, deployment?.bundleId ?? ''),
+      isNotNull(bundles.verifiedAt),
+    );
   const [bundle] = deployment?.bundleId
-    ? await database.select().from(bundles).where(requestedRuntime === null
-      ? and(eq(bundles.appId, app), eq(bundles.featureId, feature), eq(bundles.id, deployment.bundleId))
-      : and(
-        eq(bundles.appId, app),
-        eq(bundles.featureId, feature),
-        eq(bundles.runtimeVersion, requestedRuntime),
-        eq(bundles.id, deployment.bundleId),
-      )).limit(1)
+    ? await database.select().from(bundles).where(bundleFilter).limit(1)
     : [];
   const row: DeploymentRow | null = deployment
     ? (bundle ? { ...deployment, ...bundle } : deployment)
@@ -174,7 +181,12 @@ async function getArchive(
   const [row] = await createDeliveryDatabase(environment.DB)
     .select()
     .from(bundles)
-    .where(and(eq(bundles.appId, app), eq(bundles.featureId, feature), eq(bundles.id, releaseId)))
+    .where(and(
+      eq(bundles.appId, app),
+      eq(bundles.featureId, feature),
+      eq(bundles.id, releaseId),
+      isNotNull(bundles.verifiedAt),
+    ))
     .limit(1);
   if (!row) return notFound();
   if (!sha256.test(row.archiveSha256) || !Number.isSafeInteger(row.archiveBytes) || row.archiveBytes <= 0) {

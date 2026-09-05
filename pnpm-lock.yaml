@@ -147,6 +147,9 @@ importers:
       babel-preset-expo:
         specifier: ~57.0.8
         version: 57.0.9(@babel/core@7.29.7(supports-color@10.2.2))(@babel/runtime@7.29.7)(expo@57.0.17)(react-refresh@0.14.2)(supports-color@10.2.2)
+      expo-lynx-bundle-cli:
+        specifier: workspace:*
+        version: link:../../packages/lynx-bundle-cli
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
@@ -190,6 +193,9 @@ importers:
       '@types/react':
         specifier: ^19.2.18
         version: 19.2.18
+      expo-lynx-bundle-cli:
+        specifier: workspace:*
+        version: link:../../../../packages/lynx-bundle-cli
       eslint:
         specifier: ^10.7.0
         version: 10.9.1(jiti@2.7.0)(supports-color@10.2.2)

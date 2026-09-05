@@ -1,43 +1,36 @@
 ---
 title: Lynx CLI
-description: Reference for building and publishing managed Lynx releases.
+description: Reference for preparing host builds and publishing independent mini apps.
 ---
 
-Run these commands from the Expo host project root.
+The CLI loads the nearest `.env.lynx` automatically. Shell and CI environment
+variables win over file values.
 
-| Command | Purpose |
-| --- | --- |
-| `pnpm lynx console` | Start the local Console and Cloudflare Worker runtime at `http://127.0.0.1:8787`. |
-| `pnpm lynx console setup --username <username>` | Sign in to Cloudflare, provision or reuse D1/R2, deploy the Worker, and write the local `.env.lynx` connection values. |
-| `pnpm lynx bundle <feature>` | Build the embedded fallback and calculate its Expo native runtime fingerprint. Use before building a new native app binary. |
-| `pnpm lynx release <feature>` | Build, package, upload the immutable release to R2, and register it with the configured Worker. It does not enable the bundle. |
-| `pnpm lynx release upload <release-directory>` | Upload a release made earlier with `--draft`. |
+| Command | Repository | Network effect |
+| --- | --- | --- |
+| `lynx console setup` | Console operator | Provisions the shared Worker, D1, and R2 once |
+| `lynx console deploy` | Console operator | Deploys a Console/Worker update and pending migrations |
+| `lynx host prepare` | Expo host | None |
+| `lynx host register` | Expo host | Registers the prepared Current host build |
+| `lynx host prepare --register` | Expo host / CI | Prepares, then registers |
+| `lynx release` | Mini app | Builds, reserves, uploads, and verifies a candidate |
+| `lynx release --draft` | Mini app | None |
+| `lynx release upload <directory>` | Mini app | Resumes an existing release |
+| `lynx doctor` | Any workspace | Local read-only checks |
+| `lynx doctor --remote` | Any workspace | Local checks plus Worker reachability |
 
-## Normal remote update
+`host prepare` reads `app.json`, validates canonical delivery URLs against the
+embedded registry, and writes the prepared native runtime there. `host
+register` requires `LYNX_DELIVERY_SERVER` and `LYNX_DELIVERY_API_KEY`; it fails
+if the project changed after preparation.
 
-```sh
-pnpm lynx release delivery
-```
-
-Open the Console, choose the correct app, feature, and runtime scope, then
-select the new bundle and enable it. `force: false` stages it for the next
-feature open; `force: true` reloads a mounted matching feature after a verified
-install.
-
-## New native app binary
-
-```sh
-pnpm lynx bundle delivery
-npx expo prebuild --platform ios
-```
-
-`bundle` calculates the Expo native fingerprint and writes it into the embedded
-registry. The released remote bundle must carry that same runtime fingerprint.
-Later `pnpm lynx release delivery` reuses the registry value; it does not
-silently calculate a different runtime from a changed working tree.
+`release` reads `lynx-miniapp.config.ts`, `src/index.tsx`, and `lynx.config.ts`.
+It requires the Worker URL/API key and direct R2 S3 credentials. It never
+enables a bundle.
 
 ## CLI credentials
 
-The ignored `.env.lynx` holds the Worker URL, your API key, and R2 S3 upload
-credentials. The CLI needs those to upload. It never needs the Worker's
-`DELIVERY_SIGNING_PRIVATE_KEY`; only the Worker signs deployment responses.
+The ignored `.env.lynx` holds the Worker URL, API key, and R2 S3 upload
+credentials. The mini-app CLI needs them to upload. It never needs the Worker's
+`DELIVERY_SIGNING_PRIVATE_KEY`; only the Worker signs public deployment
+responses.

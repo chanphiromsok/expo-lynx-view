@@ -1,8 +1,28 @@
-# `@expo-lynx/bundle-cli`
+# `expo-lynx-bundle-cli`
 
-The CLI builds an isolated Lynx feature, creates one deterministic ZIP, signs
-its R2 request locally, and asks the delivery Worker to verify it. It does not
-sign mobile deployments or read the Worker's RSA private key.
+The CLI prepares a host runtime and publishes an isolated mini app. It creates
+one deterministic ZIP, signs its R2 request locally, and asks the delivery
+Worker to verify it. It does not sign mobile deployments or read the Worker's
+RSA private key.
+
+## Copyable configuration examples
+
+- [Expo host `app.json`](./examples/host-app/app.json)
+- [Independent mini-app `lynx-miniapp.config.ts`](./examples/mini-app/lynx-miniapp.config.ts)
+
+The host owns `embeddedBundlesPath`, the public trust key, and the public
+delivery endpoint. A mini app owns only its `appId` and `feature`. Neither the
+mini-app configuration nor its release metadata contains a runtime value.
+
+```sh
+# host repository
+lynx host prepare
+# build the native archive
+lynx host register
+
+# independent mini-app repository
+lynx release
+```
 
 ## Release workflow
 
@@ -70,7 +90,7 @@ enables delivery, or requests force reload; make those choices in the console.
 signing-key configuration.
 
 ```ts
-import { defineConfig } from '@expo-lynx/bundle-cli';
+import { defineConfig } from 'expo-lynx-bundle-cli';
 
 export default defineConfig({
   featuresDir: './features',

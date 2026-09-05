@@ -39,8 +39,16 @@ export default defineConfig({
               slug: "managed-delivery/local-server",
             },
             {
-              label: "Cloudflare deployment status",
+              label: "Cloudflare Console setup",
               slug: "managed-delivery/cloudflare-worker",
+            },
+            {
+              label: "Host app integration",
+              slug: "managed-delivery/host-app-integration",
+            },
+            {
+              label: "Mini-app integration",
+              slug: "managed-delivery/mini-app-integration",
             },
             {
               label: "Local operator console",

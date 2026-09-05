@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "BS One",
+    "slug": "bs-one",
+    "version": "1.2.0",
+    "ios": {
+      "buildNumber": "42"
+    },
+    "plugins": [
+      [
+        "expo-lynx-view",
+        {
+          "embeddedBundlesPath": "./generated/expo-lynx/embedded",
+          "publicKeyPath": "./keys/lynx/updates.public.pem",
+          "deliveryEndpoints": {
+            "merchant-home": "https://delivery.example.com/v1/bs-one/merchant-home"
+          }
+        }
+      ]
+    ]
+  }
+}

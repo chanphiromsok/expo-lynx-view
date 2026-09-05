@@ -3,10 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
   Check,
-  Cloud,
   FileArchive,
   LoaderCircle,
   RefreshCw,
+  Terminal,
   X,
 } from 'lucide-react';
 
@@ -44,6 +44,7 @@ import {
   type DeliveryScope,
   type Deployment,
   type DeliveryOverview,
+  type RegisteredApp,
   type UpdateDeployment,
 } from './delivery-api';
 
@@ -54,7 +55,11 @@ function initialScope() {
   const appId = params.get('app') ?? 'default';
   const feature = params.get('feature') ?? 'delivery';
   const runtimeVersion = params.get('runtime') ?? '';
-  return { appId: identifier.test(appId) ? appId : 'default', feature: identifier.test(feature) ? feature : 'delivery', runtimeVersion };
+  return {
+    appId: identifier.test(appId) ? appId : 'default',
+    feature: identifier.test(feature) ? feature : 'delivery',
+    runtimeVersion,
+  };
 }
 
 function formatBytes(bytes: number) {
@@ -77,7 +82,9 @@ function statusBadge(status: Bundle['status']) {
     <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300">
       Active
     </Badge>
-  ) : <Badge variant="secondary">Ready</Badge>;
+  ) : (
+    <Badge variant="secondary">Ready</Badge>
+  );
 }
 
 function LoginScreen({
@@ -111,7 +118,8 @@ function LoginScreen({
           </div>
           <CardTitle className="mt-3">Sign in to delivery console</CardTitle>
           <CardDescription>
-            Use your console username and password to manage the real deployment.
+            Use your console username and password to manage the real
+            deployment.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -137,8 +145,19 @@ function LoginScreen({
                 value={password}
               />
             </label>
-            {Boolean(error) && <p className="text-sm text-destructive">{error instanceof Error ? error.message : 'Sign in failed.'}</p>}
-            <Button className="w-full" disabled={pending || !username.trim() || !password} type="submit">{pending ? <LoaderCircle className="animate-spin" /> : null}Sign in</Button>
+            {Boolean(error) && (
+              <p className="text-sm text-destructive">
+                {error instanceof Error ? error.message : 'Sign in failed.'}
+              </p>
+            )}
+            <Button
+              className="w-full"
+              disabled={pending || !username.trim() || !password}
+              type="submit"
+            >
+              {pending ? <LoaderCircle className="animate-spin" /> : null}Sign
+              in
+            </Button>
           </form>
         </CardContent>
       </Card>
@@ -146,7 +165,11 @@ function LoginScreen({
   );
 }
 
-function FailureScreen({ error, onRetry, onSignOut }: {
+function FailureScreen({
+  error,
+  onRetry,
+  onSignOut,
+}: {
   error: unknown;
   onRetry: () => void;
   onSignOut: () => void;
@@ -156,32 +179,92 @@ function FailureScreen({ error, onRetry, onSignOut }: {
       <div>
         <p className="font-medium">Could not load the deployment.</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          {error instanceof Error ? error.message : 'The Worker did not return deployment data.'}
+          {error instanceof Error
+            ? error.message
+            : 'The Worker did not return deployment data.'}
         </p>
         <div className="mt-4 flex justify-center gap-2">
           <Button onClick={onRetry}>Try again</Button>
-          <Button onClick={onSignOut} variant="outline">Sign out</Button>
+          <Button onClick={onSignOut} variant="outline">
+            Sign out
+          </Button>
         </div>
       </div>
     </main>
   );
 }
 
-function EmptyDeliveryScreen({ onRefresh, onSignOut }: { onRefresh: () => void; onSignOut: () => void }) {
+function AppRegistrationScreen({
+  apps,
+  onCreateApp,
+  onCreateMiniApp,
+  onSignOut,
+  username,
+}: {
+  apps: RegisteredApp[];
+  onCreateApp: (input: { id: string; name: string }) => void;
+  onCreateMiniApp: (appId: string, input: { id: string; name: string }) => void;
+  onSignOut: () => void;
+  username: string;
+}) {
+  const [appId, setAppId] = useState('');
+  const [appName, setAppName] = useState('');
+  const [miniAppId, setMiniAppId] = useState('');
+  const [miniAppName, setMiniAppName] = useState('');
+  const [parentAppId, setParentAppId] = useState('');
+  const selectedParentAppId = parentAppId || apps[0]?.id || '';
+  const hasApps = apps.length > 0;
   return (
-    <main className="grid min-h-screen place-items-center bg-background p-6 text-center">
-      <div>
-        <p className="font-medium">No uploaded bundles yet.</p>
-        <p className="mt-1 text-sm text-muted-foreground">Upload a release with the CLI, then refresh this page.</p>
-        <div className="mt-4 flex justify-center gap-2"><Button onClick={onRefresh}>Refresh</Button><Button onClick={onSignOut} variant="outline">Sign out</Button></div>
-      </div>
+    <main className="min-h-screen bg-[radial-gradient(circle_at_82%_-20%,rgb(59_130_246_/_20%),transparent_28rem)] bg-background text-foreground">
+      <ConsoleHeader onRefresh={() => window.location.reload()} onSignOut={onSignOut} username={username} />
+      <section className="mx-auto max-w-5xl px-4 py-12 sm:px-7 sm:py-16">
+        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+          <div className="rounded-2xl border bg-card p-6 shadow-xl shadow-slate-950/[0.04] sm:p-8">
+          <div className="grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-blue-500/20">
+            <Terminal className="size-5" aria-hidden="true" />
+          </div>
+          <p className="mt-6 text-sm font-medium text-primary">Apps</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
+            Register identities before releases.
+          </h1>
+          <p className="mt-2 max-w-xl text-base leading-6 text-muted-foreground">
+            This is the allow-list for host apps and independent mini apps. A typo
+            from the CLI is rejected instead of creating a production identity.
+          </p>
+          <div className="mt-6 space-y-3">
+            {apps.map((app) => <div className="rounded-xl border p-4" key={app.id}>
+              <p className="font-medium">{app.name} <span className="font-mono text-xs text-muted-foreground">{app.id}</span></p>
+              <p className="mt-1 text-sm text-muted-foreground">{app.miniApps.length ? app.miniApps.map((item) => item.name).join(', ') : 'No mini apps registered'}</p>
+            </div>)}
+          </div>
+          </div>
+          {!hasApps ? <form className="rounded-2xl border bg-card p-6 shadow-sm space-y-3" onSubmit={(event) => { event.preventDefault(); onCreateApp({ id: appId, name: appName }); }}>
+            <p className="font-semibold">Create app</p>
+            <label className="grid gap-1.5 text-sm font-medium">App ID<input className="h-9 rounded-lg border bg-background px-3" onChange={(event) => setAppId(event.target.value)} placeholder="bs-one" value={appId} /></label>
+            <label className="grid gap-1.5 text-sm font-medium">Display name<input className="h-9 rounded-lg border bg-background px-3" onChange={(event) => setAppName(event.target.value)} placeholder="BS One" value={appName} /></label>
+            <Button className="w-full" disabled={!identifier.test(appId) || !appName.trim()} type="submit">Create app</Button>
+          </form> : <form className="rounded-2xl border bg-card p-6 shadow-sm space-y-3" onSubmit={(event) => { event.preventDefault(); onCreateMiniApp(selectedParentAppId, { id: miniAppId, name: miniAppName }); }}>
+            <p className="font-semibold">Add mini app</p>
+            <label className="grid gap-1.5 text-sm font-medium">Host app<select className="h-9 rounded-lg border bg-background px-3" onChange={(event) => setParentAppId(event.target.value)} value={selectedParentAppId}>{apps.map((app) => <option key={app.id} value={app.id}>{app.name}</option>)}</select></label>
+            <label className="grid gap-1.5 text-sm font-medium">Mini-app ID<input className="h-9 rounded-lg border bg-background px-3" onChange={(event) => setMiniAppId(event.target.value)} placeholder="merchant-home" value={miniAppId} /></label>
+            <label className="grid gap-1.5 text-sm font-medium">Display name<input className="h-9 rounded-lg border bg-background px-3" onChange={(event) => setMiniAppName(event.target.value)} placeholder="Merchant Home" value={miniAppName} /></label>
+            <Button className="w-full" disabled={!identifier.test(miniAppId) || !miniAppName.trim() || !selectedParentAppId} type="submit">Add mini app</Button>
+            <p className="text-xs leading-5 text-muted-foreground">Next, the host team prepares and registers the native build before the mini-app team uploads.</p>
+          </form>}
+        </div>
+      </section>
     </main>
   );
 }
 
-function ConsoleHeader({ onSignOut, onRefresh }: {
+function ConsoleHeader({
+  onSignOut,
+  onRefresh,
+  username,
+}: {
   onSignOut: () => void;
   onRefresh: () => void;
+  username: string;
 }) {
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-xl sm:px-6">
@@ -195,13 +278,112 @@ function ConsoleHeader({ onSignOut, onRefresh }: {
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <Badge className="hidden gap-1.5 sm:inline-flex" variant="outline">
-          <Cloud className="size-3" aria-hidden="true" /> Worker connected
-        </Badge>
-        <Button onClick={onRefresh} size="sm" variant="outline"><RefreshCw aria-hidden="true" /> Refresh</Button>
-        <Button onClick={onSignOut} size="sm" variant="outline">Sign out</Button>
+        <span className="hidden text-sm text-muted-foreground sm:inline">
+          {username}
+        </span>
+        <Button onClick={onRefresh} size="sm" variant="outline">
+          <RefreshCw aria-hidden="true" /> Refresh
+        </Button>
+        <Button onClick={onSignOut} size="sm" variant="outline">
+          Sign out
+        </Button>
       </div>
     </header>
+  );
+}
+
+function ScopePicker({
+  scopes,
+  selectedScope,
+  onChange,
+}: {
+  scopes: DeliveryScope[];
+  selectedScope: DeliveryScope;
+  onChange: (scope: DeliveryScope) => void;
+}) {
+  const appIds = [...new Set(scopes.map((scope) => scope.appId))];
+  const appScopes = scopes.filter(
+    (scope) => scope.appId === selectedScope.appId,
+  );
+  const featureIds = [...new Set(appScopes.map((scope) => scope.feature))];
+  const featureScopes = appScopes.filter(
+    (scope) => scope.feature === selectedScope.feature,
+  );
+
+  return (
+    <section className="mx-auto max-w-7xl px-4 pt-5 sm:px-7">
+      <div className="grid gap-4 rounded-xl border bg-card p-4 shadow-sm lg:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(14rem,1fr)]">
+        <div>
+          <p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
+            App
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {appIds.map((appId) => {
+              const appScope = scopes.find((scope) => scope.appId === appId);
+              if (!appScope) return null;
+              return (
+                <Button
+                  key={appId}
+                  onClick={() => onChange(appScope)}
+                  size="sm"
+                  variant={
+                    appId === selectedScope.appId ? 'default' : 'outline'
+                  }
+                >
+                  {appId}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+        <div>
+          <p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
+            Mini app
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {featureIds.map((feature) => {
+              const featureScope = appScopes.find(
+                (scope) => scope.feature === feature,
+              );
+              if (!featureScope) return null;
+              return (
+                <Button
+                  key={feature}
+                  onClick={() => onChange(featureScope)}
+                  size="sm"
+                  variant={
+                    feature === selectedScope.feature ? 'default' : 'outline'
+                  }
+                >
+                  {feature}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+        <label className="grid content-start gap-2 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
+          Runtime
+          <select
+            aria-label="Choose runtime"
+            className="h-9 rounded-lg border bg-background px-3 text-sm font-normal normal-case tracking-normal text-foreground"
+            onChange={(event) =>
+              onChange(
+                featureScopes.find(
+                  (scope) => scope.runtimeVersion === event.target.value,
+                ) ?? selectedScope,
+              )
+            }
+            value={selectedScope.runtimeVersion}
+          >
+            {featureScopes.map((scope) => (
+              <option key={scope.runtimeVersion} value={scope.runtimeVersion}>
+                {scope.runtimeVersion}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+    </section>
   );
 }
 
@@ -217,9 +399,12 @@ function DeploymentCard({
   onToggle: () => void;
 }) {
   const disabledWithoutBundle = !deployment.enabled && !deployment.bundleId;
-  const state = deployment.status === 'active'
-    ? 'Enabled'
-    : deployment.status === 'disabled' ? 'Disabled' : 'No selected bundle';
+  const state =
+    deployment.status === 'active'
+      ? 'Enabled'
+      : deployment.status === 'disabled'
+        ? 'Disabled'
+        : 'No selected bundle';
 
   return (
     <Card className="shadow-sm" size="sm">
@@ -233,12 +418,24 @@ function DeploymentCard({
             </Badge>
           </CardTitle>
         </div>
-        <CardAction><Button disabled={pending || disabledWithoutBundle} onClick={onToggle} size="sm" variant={deployment.enabled ? 'outline' : 'default'}>{pending ? <LoaderCircle className="animate-spin" /> : null}{deployment.enabled ? 'Disable' : 'Enable'}</Button></CardAction>
+        <CardAction>
+          <Button
+            disabled={pending || disabledWithoutBundle}
+            onClick={onToggle}
+            size="sm"
+            variant={deployment.enabled ? 'outline' : 'default'}
+          >
+            {pending ? <LoaderCircle className="animate-spin" /> : null}
+            {deployment.enabled ? 'Disable' : 'Enable'}
+          </Button>
+        </CardAction>
       </CardHeader>
       <CardContent className="space-y-4 pt-1">
         {activeBundle ? (
           <div>
-            <p className="font-mono text-xs text-muted-foreground">{activeBundle.id}</p>
+            <p className="font-mono text-xs text-muted-foreground">
+              {activeBundle.id}
+            </p>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <span className="font-semibold">{activeBundle.version}</span>
               <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300">
@@ -246,39 +443,118 @@ function DeploymentCard({
               </Badge>
             </div>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              {formatBytes(activeBundle.archiveBytes)} · SHA-256 {shortHash(activeBundle.archiveSha256)}
+              {formatBytes(activeBundle.archiveBytes)} · SHA-256{' '}
+              {shortHash(activeBundle.archiveSha256)}
             </p>
           </div>
         ) : deployment.bundleId ? (
-          <div><p className="font-mono text-xs text-muted-foreground">{deployment.bundleId}</p><p className="mt-1.5 text-xs text-muted-foreground">This verified bundle remains selected while delivery is disabled.</p></div>
-        ) : <p className="text-xs text-muted-foreground">Select a verified bundle from the table to prepare the deployment.</p>}
-        <p className="border-t pt-3 text-xs leading-5 text-muted-foreground">Standard promotions activate on the next feature open. Force reload is available only while selecting a bundle.</p>
+          <div>
+            <p className="font-mono text-xs text-muted-foreground">
+              {deployment.bundleId}
+            </p>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              This verified bundle remains selected while delivery is disabled.
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Select a verified bundle from the table to prepare the deployment.
+          </p>
+        )}
+        <p className="border-t pt-3 text-xs leading-5 text-muted-foreground">
+          Standard promotions activate on the next feature open. Force reload is
+          available only while selecting a bundle.
+        </p>
       </CardContent>
     </Card>
   );
 }
 
-function BundleTable({ bundles, selectedId, onSelect }: {
+function BundleTable({
+  bundles,
+  selectedId,
+  onSelect,
+}: {
   bundles: Bundle[];
   selectedId: string | null;
   onSelect: (bundle: Bundle) => void;
 }) {
   return (
     <Card className="min-h-[28rem] shadow-sm">
-      <CardHeader className="border-b"><div><CardTitle>Verified bundles</CardTitle><CardDescription>Choose the next deployment from CLI-uploaded releases.</CardDescription></div><CardAction><Badge variant="outline">{bundles.length} releases</Badge></CardAction></CardHeader>
+      <CardHeader className="border-b">
+        <div>
+          <CardTitle>Verified bundles</CardTitle>
+          <CardDescription>
+            Choose the next deployment from CLI-uploaded releases.
+          </CardDescription>
+        </div>
+        <CardAction>
+          <Badge variant="outline">{bundles.length} releases</Badge>
+        </CardAction>
+      </CardHeader>
       <CardContent className="px-0 pb-0">
-        {bundles.length === 0 ? <p className="p-5 text-sm text-muted-foreground">No verified bundles have been uploaded for this feature.</p> : (
+        {bundles.length === 0 ? (
+          <p className="p-5 text-sm text-muted-foreground">
+            No verified bundles have been uploaded for this feature.
+          </p>
+        ) : (
           <Table>
-            <TableHeader><TableRow><TableHead className="pl-5">Bundle</TableHead><TableHead>Status</TableHead><TableHead className="hidden md:table-cell">Archive</TableHead><TableHead className="hidden lg:table-cell">Created</TableHead><TableHead className="w-36 text-right">Action</TableHead></TableRow></TableHeader>
-            <TableBody>{bundles.map((bundle) => (
-              <TableRow className={bundle.id === selectedId ? 'bg-primary/[0.045] hover:bg-primary/[0.07]' : undefined} key={bundle.id}>
-                <TableCell className="pl-5"><div className="flex items-center gap-3"><div className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground"><FileArchive className="size-4" aria-hidden="true" /></div><div><p className="font-medium">{bundle.version}</p><p className="mt-0.5 max-w-44 truncate font-mono text-xs text-muted-foreground sm:max-w-72">{bundle.id}</p></div></div></TableCell>
-                <TableCell>{statusBadge(bundle.status)}</TableCell>
-                <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">{formatBytes(bundle.archiveBytes)} · {shortHash(bundle.archiveSha256)}</TableCell>
-                <TableCell className="hidden text-muted-foreground lg:table-cell">{formatDate(bundle.createdAt)}</TableCell>
-                <TableCell className="pr-4 text-right">{bundle.id === selectedId ? <Badge variant="outline">Selected</Badge> : <Button onClick={() => onSelect(bundle)} size="sm" variant="outline">Select</Button>}</TableCell>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="pl-5">Bundle</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="hidden md:table-cell">Archive</TableHead>
+                <TableHead className="hidden lg:table-cell">Created</TableHead>
+                <TableHead className="w-36 text-right">Action</TableHead>
               </TableRow>
-            ))}</TableBody>
+            </TableHeader>
+            <TableBody>
+              {bundles.map((bundle) => (
+                <TableRow
+                  className={
+                    bundle.id === selectedId
+                      ? 'bg-primary/[0.045] hover:bg-primary/[0.07]'
+                      : undefined
+                  }
+                  key={bundle.id}
+                >
+                  <TableCell className="pl-5">
+                    <div className="flex items-center gap-3">
+                      <div className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground">
+                        <FileArchive className="size-4" aria-hidden="true" />
+                      </div>
+                      <div>
+                        <p className="font-medium">{bundle.version}</p>
+                        <p className="mt-0.5 max-w-44 truncate font-mono text-xs text-muted-foreground sm:max-w-72">
+                          {bundle.id}
+                        </p>
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell>{statusBadge(bundle.status)}</TableCell>
+                  <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">
+                    {formatBytes(bundle.archiveBytes)} ·{' '}
+                    {shortHash(bundle.archiveSha256)}
+                  </TableCell>
+                  <TableCell className="hidden text-muted-foreground lg:table-cell">
+                    {formatDate(bundle.createdAt)}
+                  </TableCell>
+                  <TableCell className="pr-4 text-right">
+                    {bundle.id === selectedId ? (
+                      <Badge variant="outline">Selected</Badge>
+                    ) : (
+                      <Button
+                        onClick={() => onSelect(bundle)}
+                        size="sm"
+                        variant="outline"
+                      >
+                        Select
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
           </Table>
         )}
       </CardContent>
@@ -286,7 +562,12 @@ function BundleTable({ bundles, selectedId, onSelect }: {
   );
 }
 
-function SelectionDialog({ bundle, pending, onClose, onSelect }: {
+function SelectionDialog({
+  bundle,
+  pending,
+  onClose,
+  onSelect,
+}: {
   bundle: Bundle | null;
   pending: boolean;
   onClose: () => void;
@@ -296,15 +577,63 @@ function SelectionDialog({ bundle, pending, onClose, onSelect }: {
   return (
     <Dialog open={bundle !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-lg">
-        <DialogHeader><DialogTitle>Select verified bundle</DialogTitle><DialogDescription>This changes the deployment selection. It does not enable delivery by itself.</DialogDescription></DialogHeader>
-        {bundle && <div className="space-y-4"><div className="rounded-xl bg-muted p-4 font-mono text-xs leading-6"><p>{bundle.id}</p><p>version: {bundle.version}</p><p>archive: {formatBytes(bundle.archiveBytes)} · {shortHash(bundle.archiveSha256)}</p></div><label className="flex cursor-pointer items-start gap-3 rounded-xl border p-3 text-sm"><input aria-label="Force mounted-view reload" checked={force} className="mt-0.5 size-4" onChange={(event) => setForce(event.target.checked)} type="checkbox" /><span><span className="font-medium">Force mounted-view reload</span><span className="mt-0.5 block text-xs text-muted-foreground">Use only when an installed, verified update should ask an already open feature to reload now.</span></span></label></div>}
-        <DialogFooter><Button onClick={onClose} variant="outline"><X aria-hidden="true" /> Cancel</Button><Button disabled={!bundle || pending} onClick={() => onSelect(force)}>{pending ? <LoaderCircle className="animate-spin" /> : null}Select bundle</Button></DialogFooter>
+        <DialogHeader>
+          <DialogTitle>Select verified bundle</DialogTitle>
+          <DialogDescription>
+            This changes the deployment selection. It does not enable delivery
+            by itself.
+          </DialogDescription>
+        </DialogHeader>
+        {bundle && (
+          <div className="space-y-4">
+            <div className="rounded-xl bg-muted p-4 font-mono text-xs leading-6">
+              <p>{bundle.id}</p>
+              <p>version: {bundle.version}</p>
+              <p>
+                archive: {formatBytes(bundle.archiveBytes)} ·{' '}
+                {shortHash(bundle.archiveSha256)}
+              </p>
+            </div>
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border p-3 text-sm">
+              <input
+                aria-label="Force mounted-view reload"
+                checked={force}
+                className="mt-0.5 size-4"
+                onChange={(event) => setForce(event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                <span className="font-medium">Force mounted-view reload</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Use only when an installed, verified update should ask an
+                  already open feature to reload now.
+                </span>
+              </span>
+            </label>
+          </div>
+        )}
+        <DialogFooter>
+          <Button onClick={onClose} variant="outline">
+            <X aria-hidden="true" /> Cancel
+          </Button>
+          <Button disabled={!bundle || pending} onClick={() => onSelect(force)}>
+            {pending ? <LoaderCircle className="animate-spin" /> : null}Select
+            bundle
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function ConsoleContent({ appId, feature, overview, pending, onToggle, onSelect }: {
+function ConsoleContent({
+  appId,
+  feature,
+  overview,
+  pending,
+  onToggle,
+  onSelect,
+}: {
   appId: string;
   feature: string;
   overview: DeliveryOverview;
@@ -312,12 +641,52 @@ function ConsoleContent({ appId, feature, overview, pending, onToggle, onSelect 
   onToggle: () => void;
   onSelect: (bundle: Bundle) => void;
 }) {
-  const activeBundle = overview.bundles.find((bundle) => bundle.status === 'active');
-  const deploymentState = overview.deployment.enabled ? 'Remote delivery is enabled' : 'Remote delivery is disabled';
+  const activeBundle = overview.bundles.find(
+    (bundle) => bundle.status === 'active',
+  );
+  const deploymentState = overview.deployment.enabled
+    ? 'Remote delivery is enabled'
+    : 'Remote delivery is disabled';
   return (
     <section className="mx-auto max-w-7xl px-4 py-5 sm:px-7 lg:py-7">
-      <div className="mb-5 flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">{appId} / {feature}</p><h1 className="mt-1 text-2xl font-semibold tracking-tight">Release delivery</h1><p className="mt-1 break-all font-mono text-xs text-muted-foreground">runtime {overview.deployment.runtimeVersion}</p></div><div className="flex flex-wrap items-center gap-2 text-sm"><Badge variant={overview.deployment.enabled ? 'default' : 'secondary'}>{deploymentState}</Badge><Badge variant="outline">Revision {overview.deployment.revision}</Badge></div></div>
-      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]"><BundleTable bundles={overview.bundles} onSelect={onSelect} selectedId={overview.deployment.bundleId} /><aside className="lg:sticky lg:top-20"><DeploymentCard activeBundle={activeBundle} deployment={overview.deployment} onToggle={onToggle} pending={pending} /></aside></div>
+      <div className="mb-5 flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
+            {appId} / {feature}
+          </p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+            Release delivery
+          </h1>
+          <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+            runtime {overview.deployment.runtimeVersion}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Badge
+            variant={overview.deployment.enabled ? 'default' : 'secondary'}
+          >
+            {deploymentState}
+          </Badge>
+          <Badge variant="outline">
+            Revision {overview.deployment.revision}
+          </Badge>
+        </div>
+      </div>
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <BundleTable
+          bundles={overview.bundles}
+          onSelect={onSelect}
+          selectedId={overview.deployment.bundleId}
+        />
+        <aside className="lg:sticky lg:top-20">
+          <DeploymentCard
+            activeBundle={activeBundle}
+            deployment={overview.deployment}
+            onToggle={onToggle}
+            pending={pending}
+          />
+        </aside>
+      </div>
     </section>
   );
 }
@@ -337,20 +706,44 @@ export function DeliveryConsoleDashboard() {
     staleTime: Infinity,
   });
   const scopesQuery = useQuery({
-    queryKey: deliveryQueryKeys.scopes,
+    queryKey: deliveryQueryKeys.scopes(sessionRevision),
     queryFn: deliveryApi.getScopes,
     enabled: Boolean(sessionQuery.data),
     retry: false,
   });
+  const appsQuery = useQuery({
+    queryKey: ['delivery', 'apps', sessionRevision],
+    queryFn: deliveryApi.getApps,
+    enabled: Boolean(sessionQuery.data),
+    retry: false,
+  });
   const scopes = scopesQuery.data ?? [];
-  const selectedScope = scopes.find((item) => item.appId === scope.appId && item.feature === scope.feature && item.runtimeVersion === scope.runtimeVersion)
-    ?? scopes.find((item) => item.appId === scope.appId && item.feature === scope.feature)
-    ?? scopes[0]
-    ?? scope;
-  const queryKey = deliveryQueryKeys.overview(selectedScope.appId, selectedScope.feature, selectedScope.runtimeVersion, sessionRevision);
+  const selectedScope =
+    scopes.find(
+      (item) =>
+        item.appId === scope.appId &&
+        item.feature === scope.feature &&
+        item.runtimeVersion === scope.runtimeVersion,
+    ) ??
+    scopes.find(
+      (item) => item.appId === scope.appId && item.feature === scope.feature,
+    ) ??
+    scopes[0] ??
+    scope;
+  const queryKey = deliveryQueryKeys.overview(
+    selectedScope.appId,
+    selectedScope.feature,
+    selectedScope.runtimeVersion,
+    sessionRevision,
+  );
   const overviewQuery = useQuery({
     queryKey,
-    queryFn: () => deliveryApi.getOverview(selectedScope.appId, selectedScope.feature, selectedScope.runtimeVersion),
+    queryFn: () =>
+      deliveryApi.getOverview(
+        selectedScope.appId,
+        selectedScope.feature,
+        selectedScope.runtimeVersion,
+      ),
     enabled: Boolean(sessionQuery.data && selectedScope.runtimeVersion),
     retry: false,
   });
@@ -366,16 +759,45 @@ export function DeliveryConsoleDashboard() {
     mutationFn: deliveryApi.logout,
     onSettled: () => {
       queryClient.removeQueries({ queryKey: deliveryQueryKeys.session });
-      queryClient.removeQueries({ queryKey: ['delivery', 'overview'] });
+      queryClient.removeQueries({ queryKey: ['delivery'] });
       setSelectedBundle(null);
       setNotice(null);
       setSessionRevision((revision) => revision + 1);
     },
   });
-  const updateDeployment = useMutation({ mutationFn: (update: UpdateDeployment) => deliveryApi.updateDeployment(selectedScope.appId, selectedScope.feature, selectedScope.runtimeVersion, update), onSuccess: (overview) => queryClient.setQueryData(queryKey, overview) });
+  const updateDeployment = useMutation({
+    mutationFn: (update: UpdateDeployment) =>
+      deliveryApi.updateDeployment(
+        selectedScope.appId,
+        selectedScope.feature,
+        selectedScope.runtimeVersion,
+        update,
+      ),
+    onSuccess: (overview) => queryClient.setQueryData(queryKey, overview),
+  });
+  const createAppMutation = useMutation({
+    mutationFn: deliveryApi.createApp,
+    onSuccess: () => {
+      setNotice('App registered. Add its mini apps before the host build is registered.');
+      void queryClient.invalidateQueries({ queryKey: ['delivery', 'apps'] });
+    },
+    onError: (error) => setNotice(error instanceof Error ? error.message : 'Could not create the app.'),
+  });
+  const createMiniAppMutation = useMutation({
+    mutationFn: ({ appId, input }: { appId: string; input: { id: string; name: string } }) => deliveryApi.createMiniApp(appId, input),
+    onSuccess: () => {
+      setNotice('Mini app registered. The host team can now register a matching build.');
+      void queryClient.invalidateQueries({ queryKey: ['delivery', 'apps'] });
+    },
+    onError: (error) => setNotice(error instanceof Error ? error.message : 'Could not create the mini app.'),
+  });
 
   function changeScope(appId: string, feature: string, runtimeVersion: string) {
-    window.history.replaceState(null, '', `?app=${encodeURIComponent(appId)}&feature=${encodeURIComponent(feature)}&runtime=${encodeURIComponent(runtimeVersion)}`);
+    window.history.replaceState(
+      null,
+      '',
+      `?app=${encodeURIComponent(appId)}&feature=${encodeURIComponent(feature)}&runtime=${encodeURIComponent(runtimeVersion)}`,
+    );
     setScope({ appId, feature, runtimeVersion });
     setNotice(null);
     setSelectedBundle(null);
@@ -387,7 +809,14 @@ export function DeliveryConsoleDashboard() {
   }
 
   function apply(update: UpdateDeployment, successMessage: string) {
-    updateDeployment.mutate(update, { onSuccess: () => { setNotice(successMessage); setSelectedBundle(null); }, onError: (error) => setNotice(error instanceof Error ? error.message : 'Request failed.') });
+    updateDeployment.mutate(update, {
+      onSuccess: () => {
+        setNotice(successMessage);
+        setSelectedBundle(null);
+      },
+      onError: (error) =>
+        setNotice(error instanceof Error ? error.message : 'Request failed.'),
+    });
   }
 
   function refresh() {
@@ -395,26 +824,136 @@ export function DeliveryConsoleDashboard() {
     if (selectedScope.runtimeVersion) void overviewQuery.refetch();
   }
 
-  if (sessionQuery.isPending) return <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" />Checking session…</main>;
-  if (!sessionQuery.data) return <LoginScreen error={loginMutation.error} onLogin={signIn} password={password} pending={loginMutation.isPending} setPassword={setPassword} setUsername={setUsername} username={username} />;
-  if (scopesQuery.isPending) return <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" />Loading deployment…</main>;
-  if (scopesQuery.isError) return <FailureScreen error={scopesQuery.error} onSignOut={() => logoutMutation.mutate()} onRetry={() => void scopesQuery.refetch()} />;
-  if (scopes.length === 0) return <EmptyDeliveryScreen onRefresh={() => void scopesQuery.refetch()} onSignOut={() => logoutMutation.mutate()} />;
-  if (overviewQuery.isPending) return <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" />Loading deployment…</main>;
-  if (overviewQuery.isError || !overviewQuery.data) return <FailureScreen error={overviewQuery.error} onSignOut={() => logoutMutation.mutate()} onRetry={() => void overviewQuery.refetch()} />;
+  if (sessionQuery.isPending)
+    return (
+      <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground">
+        <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />
+        Checking session…
+      </main>
+    );
+  if (!sessionQuery.data)
+    return (
+      <LoginScreen
+        error={loginMutation.error}
+        onLogin={signIn}
+        password={password}
+        pending={loginMutation.isPending}
+        setPassword={setPassword}
+        setUsername={setUsername}
+        username={username}
+      />
+    );
+  if (scopesQuery.isPending)
+    return (
+      <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground">
+        <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />
+        Loading deployment…
+      </main>
+    );
+  if (scopesQuery.isError)
+    return (
+      <FailureScreen
+        error={scopesQuery.error}
+        onSignOut={() => logoutMutation.mutate()}
+        onRetry={() => void scopesQuery.refetch()}
+      />
+    );
+  if (appsQuery.isError)
+    return (
+      <FailureScreen
+        error={appsQuery.error}
+        onSignOut={() => logoutMutation.mutate()}
+        onRetry={() => void appsQuery.refetch()}
+      />
+    );
+  if (scopes.length === 0)
+    return (
+      <AppRegistrationScreen
+        apps={appsQuery.data ?? []}
+        onCreateApp={(input) => createAppMutation.mutate(input)}
+        onCreateMiniApp={(appId, input) => createMiniAppMutation.mutate({ appId, input })}
+        onSignOut={() => logoutMutation.mutate()}
+        username={sessionQuery.data.user.username}
+      />
+    );
+  if (overviewQuery.isPending)
+    return (
+      <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground">
+        <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />
+        Loading deployment…
+      </main>
+    );
+  if (overviewQuery.isError || !overviewQuery.data)
+    return (
+      <FailureScreen
+        error={overviewQuery.error}
+        onSignOut={() => logoutMutation.mutate()}
+        onRetry={() => void overviewQuery.refetch()}
+      />
+    );
 
   const overview = overviewQuery.data;
   const currentScope: DeliveryScope = selectedScope;
-  const scopeOptions = scopes.some((item) => item.appId === selectedScope.appId && item.feature === selectedScope.feature && item.runtimeVersion === selectedScope.runtimeVersion)
-    ? scopes
-    : [currentScope, ...scopes];
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_82%_-20%,rgb(59_130_246_/_20%),transparent_28rem)] bg-background text-foreground">
-      <ConsoleHeader onRefresh={refresh} onSignOut={() => logoutMutation.mutate()} />
-      {notice && <output className="mx-auto mt-6 flex max-w-6xl items-start justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50/70 px-4 py-3 text-sm text-blue-950 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-100"><span>{notice}</span><button aria-label="Dismiss notice" onClick={() => setNotice(null)} type="button"><X className="size-4" aria-hidden="true" /></button></output>}
-      <section className="mx-auto max-w-7xl px-4 pt-5 sm:px-7"><label className="grid max-w-xl gap-1 text-xs font-medium text-muted-foreground">App / mini app / runtime<select aria-label="Choose deployment" className="h-9 rounded-lg border bg-background px-3 text-sm text-foreground" disabled={scopesQuery.isPending} onChange={(event) => { const [appId, feature, runtimeVersion] = event.target.value.split('\u0000'); if (appId && feature && runtimeVersion) changeScope(appId, feature, runtimeVersion); }} value={`${selectedScope.appId}\u0000${selectedScope.feature}\u0000${selectedScope.runtimeVersion}`}>{scopeOptions.map((item) => <option key={`${item.appId}/${item.feature}/${item.runtimeVersion}`} value={`${item.appId}\u0000${item.feature}\u0000${item.runtimeVersion}`}>{item.appId} / {item.feature} / {item.runtimeVersion}</option>)}</select></label></section>
-      <ConsoleContent appId={selectedScope.appId} feature={selectedScope.feature} onSelect={(bundle) => setSelectedBundle(bundle)} onToggle={() => apply({ enabled: !overview.deployment.enabled }, overview.deployment.enabled ? 'Remote delivery disabled. Existing installed bundles stay on devices.' : 'Remote delivery enabled for the selected bundle.')} overview={overview} pending={updateDeployment.isPending} />
-      <SelectionDialog bundle={selectedBundle} key={selectedBundle?.id ?? 'empty'} onClose={() => setSelectedBundle(null)} onSelect={(force) => selectedBundle && apply({ bundleId: selectedBundle.id, force }, force ? `${selectedBundle.version} selected with a forced reload request.` : `${selectedBundle.version} selected for the next feature open.`)} pending={updateDeployment.isPending} />
+      <ConsoleHeader
+        onRefresh={refresh}
+        onSignOut={() => logoutMutation.mutate()}
+        username={sessionQuery.data.user.username}
+      />
+      {notice && (
+        <output className="mx-auto mt-6 flex max-w-6xl items-start justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50/70 px-4 py-3 text-sm text-blue-950 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-100">
+          <span>{notice}</span>
+          <button
+            aria-label="Dismiss notice"
+            onClick={() => setNotice(null)}
+            type="button"
+          >
+            <X className="size-4" aria-hidden="true" />
+          </button>
+        </output>
+      )}
+      <ScopePicker
+        onChange={(nextScope) =>
+          changeScope(
+            nextScope.appId,
+            nextScope.feature,
+            nextScope.runtimeVersion,
+          )
+        }
+        scopes={scopes}
+        selectedScope={currentScope}
+      />
+      <ConsoleContent
+        appId={selectedScope.appId}
+        feature={selectedScope.feature}
+        onSelect={(bundle) => setSelectedBundle(bundle)}
+        onToggle={() =>
+          apply(
+            { enabled: !overview.deployment.enabled },
+            overview.deployment.enabled
+              ? 'Remote delivery disabled. Existing installed bundles stay on devices.'
+              : 'Remote delivery enabled for the selected bundle.',
+          )
+        }
+        overview={overview}
+        pending={updateDeployment.isPending}
+      />
+      <SelectionDialog
+        bundle={selectedBundle}
+        key={selectedBundle?.id ?? 'empty'}
+        onClose={() => setSelectedBundle(null)}
+        onSelect={(force) =>
+          selectedBundle &&
+          apply(
+            { bundleId: selectedBundle.id, force },
+            force
+              ? `${selectedBundle.version} selected with a forced reload request.`
+              : `${selectedBundle.version} selected for the next feature open.`,
+          )
+        }
+        pending={updateDeployment.isPending}
+      />
     </main>
   );
 }

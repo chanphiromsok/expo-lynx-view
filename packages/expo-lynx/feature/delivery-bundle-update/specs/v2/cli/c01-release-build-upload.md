@@ -169,8 +169,8 @@ failure.
 ## Required verification
 
 ```bash
-pnpm --filter @expo-lynx/bundle-cli lint
-pnpm --filter @expo-lynx/bundle-cli test
+pnpm --filter expo-lynx-bundle-cli lint
+pnpm --filter expo-lynx-bundle-cli test
 pnpm lynx release delivery --draft
 git diff --check
 ```

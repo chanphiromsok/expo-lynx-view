@@ -23,6 +23,18 @@ Before a public mobile release, complete these runtime-safety tasks in order:
 These tasks refine the existing `runtimeVersion` field. They do not add a
 second fingerprint field, a channel, another Worker, or another signing flow.
 
+## Planned workspace architecture
+
+This task is intentionally not part of the frozen MVP. It replaces the
+host-owned bundle CLI feature map with explicit Console app/mini-app identity
+and independent mini-app workspaces:
+
+| Task | Spec | Result |
+|---|---|---|
+| I01 | [Host-owned runtime and independent mini-app releases](./roadmap/i01-independent-miniapp-workspaces.md) | The Worker pins cross-repository releases to the exact current native host build without exposing fingerprints to mini-app teams |
+| I02 | [Console setup, upload contract, and doctor](./roadmap/i02-console-setup-upload-doctor.md) | The published CLI provisions the bundled Console, defines runtime-safe uploads, and diagnoses every workspace |
+| D01 | [Cross-team integration documentation](./roadmap/d01-cross-team-integration-docs.md) | `apps/docs` clearly separates Console, host-app, and mini-app setup and release workflows |
+
 The older `mobile/m02-*` through `mobile/m08-*` and `server/s01-*` through
 `server/s05-*` documents describe the superseded two-document design. They are
 historical context only and must not be used as implementation requirements.
@@ -157,8 +169,8 @@ unless the user explicitly asks for it.
 ## Required shared verification
 
 ```bash
-pnpm --filter @expo-lynx/bundle-cli lint
-pnpm --filter @expo-lynx/bundle-cli test
+pnpm --filter expo-lynx-bundle-cli lint
+pnpm --filter expo-lynx-bundle-cli test
 pnpm --filter @expo-lynx/delivery-console typecheck
 pnpm --filter @expo-lynx/delivery-console test
 pnpm --filter expo-lynx exec jest --runInBand --no-watchman

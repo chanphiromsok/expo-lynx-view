@@ -1,23 +1,31 @@
 # Delivery mini-app
 
-Edit this feature, then run these commands from the repository root:
+This directory is a mini-app workspace. Its only delivery identity is in
+[`lynx-miniapp.config.ts`](./lynx-miniapp.config.ts): `default / delivery`.
+It has no native runtime, signing key, Worker URL, or host build number.
 
 ```sh
-# Local Worker and Console
-pnpm lynx console
-
-# Expo example app
-pnpm start
-
-# Build, package, and upload this feature
-pnpm lynx release delivery
+# From this directory: build, package, upload, and verify a candidate.
+pnpm release
 ```
 
-Open the Console, sign in, select the verified bundle, and enable it. The full
-local and Cloudflare deployment guide is
-[apps/console/README.md](../../../console/README.md).
+The Console must already contain the `default / delivery` mini app and the
+host team must have registered its current native build. Open the Console to
+select the verified bundle and enable it.
 
-For a real device, configure this feature's Expo plugin endpoint as
-`https://<worker>.workers.dev/v1/default/delivery`, prebuild and install one
-new binary, then follow the **First real-device release** section in that guide.
-Changing a remote release later does not need another native build.
+The host app owns the embedded fallback and endpoint. From the repository root:
+
+```sh
+# Rebuild the embedded fallback after changing this source.
+pnpm lynx bundle delivery
+
+# Before making a native archive, record the matching host runtime.
+cd apps/expo-lynx-example
+pnpm exec lynx host prepare
+
+# After the native archive has been built and approved.
+pnpm exec lynx host register
+```
+
+Changing a later remote release only needs `pnpm release`; it does not need a
+new native build.

@@ -52,6 +52,18 @@ async function selectAccount() {
   return accounts[index].id;
 }
 
+export async function runConsoleSetup(flags) {
+  if (flags['dry-run']) {
+    setupConsole({ username: flags.username, dryRun: true });
+    return;
+  }
+  const accountId = flags['account-id'] ?? await selectAccount();
+  process.stdout.write(`R2 S3 API Tokens: https://dash.cloudflare.com/${accountId}/r2/api-tokens\nRequired permission: Object Read & Write; target bucket: lynx-artifacts\n`);
+  const r2AccessKeyId = flags['r2-access-key-id'] ?? await prompt('R2 S3 Access Key ID: ');
+  const r2SecretAccessKey = flags['r2-secret-access-key'] ?? await promptSecret('R2 S3 Secret Access Key: ');
+  setupConsole({ username: flags.username, accountId, r2AccessKeyId, r2SecretAccessKey });
+}
+
 export default class ConsoleSetup extends Command {
   static description = 'Provision D1, R2, Worker secrets, and a deployed delivery Console.';
 
@@ -65,14 +77,6 @@ export default class ConsoleSetup extends Command {
 
   async run() {
     const { flags } = await this.parse(ConsoleSetup);
-    if (flags['dry-run']) {
-      setupConsole({ username: flags.username, dryRun: true });
-      return;
-    }
-    const accountId = flags['account-id'] ?? await selectAccount();
-    process.stdout.write(`R2 S3 API Tokens: https://dash.cloudflare.com/${accountId}/r2/api-tokens\nRequired permission: Object Read & Write; target bucket: lynx-artifacts\n`);
-    const r2AccessKeyId = flags['r2-access-key-id'] ?? await prompt('R2 S3 Access Key ID: ');
-    const r2SecretAccessKey = flags['r2-secret-access-key'] ?? await promptSecret('R2 S3 Secret Access Key: ');
-    setupConsole({ username: flags.username, accountId, r2AccessKeyId, r2SecretAccessKey });
+    await runConsoleSetup(flags);
   }
 }

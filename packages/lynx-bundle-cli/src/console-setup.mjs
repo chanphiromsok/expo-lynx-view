@@ -1,5 +1,5 @@
-import { createPrivateKey, createPublicKey, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { loadEnvFile } from 'node:process';
@@ -35,12 +35,20 @@ function readWorkerConfig(consoleRoot) {
   return { workerName, bucketName, databaseId };
 }
 
-function readSigningKey(repositoryRoot, consoleRoot) {
+function createSigningKey(repositoryRoot, consoleRoot) {
   const localEnvironment = resolve(consoleRoot, '.dev.vars');
   if (existsSync(localEnvironment)) loadEnvFile(localEnvironment);
   const privateKey = process.env.DELIVERY_SIGNING_PRIVATE_KEY;
   const publicKeyPath = resolve(repositoryRoot, 'apps/expo-lynx-example/keys/lynx/updates.public.pem');
-  if (!privateKey) throw new Error(`Missing DELIVERY_SIGNING_PRIVATE_KEY in ${localEnvironment}.`);
+  if (!privateKey) {
+    if (existsSync(publicKeyPath)) {
+      throw new Error(`A public key already exists at ${publicKeyPath}, but no matching DELIVERY_SIGNING_PRIVATE_KEY was found in ${localEnvironment}. Refusing to replace the mobile trust key.`);
+    }
+    const generated = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    mkdirSync(dirname(publicKeyPath), { recursive: true, mode: 0o700 });
+    writeFileSync(publicKeyPath, generated.publicKey.export({ type: 'spki', format: 'pem' }), { mode: 0o644 });
+    return generated.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  }
   if (!existsSync(publicKeyPath)) throw new Error(`Missing mobile public key: ${publicKeyPath}.`);
   const derived = createPublicKey(createPrivateKey(privateKey)).export({ type: 'spki', format: 'der' });
   const embedded = createPublicKey(readFileSync(publicKeyPath, 'utf8')).export({ type: 'spki', format: 'der' });
@@ -114,7 +122,7 @@ export function setupConsole({
   const consoleRoot = resolve(repositoryRoot, 'apps/console');
   const environmentPath = resolve(repositoryRoot, '.env.lynx');
   if (existsSync(environmentPath)) throw new Error('.env.lynx already exists. This setup command does not replace an existing remote environment.');
-  const signingKey = readSigningKey(repositoryRoot, consoleRoot);
+  const signingKey = createSigningKey(repositoryRoot, consoleRoot);
   const credentials = createCredentials(username);
   const before = readWorkerConfig(consoleRoot);
   if (dryRun) {
@@ -156,4 +164,13 @@ export function setupConsole({
     url, ...configured, credentials, accountId, r2AccessKeyId, r2SecretAccessKey,
   });
   process.stdout.write(`Cloudflare delivery is ready: ${url}\nSource .env.lynx before lynx release upload.\n`);
+}
+
+export function deployConsole({ cwd = process.cwd() } = {}) {
+  const repositoryRoot = findRepositoryRoot(cwd);
+  const consoleRoot = resolve(repositoryRoot, 'apps/console');
+  const wrangler = resolve(consoleRoot, 'node_modules/.bin/wrangler');
+  run('pnpm', ['--filter', '@expo-lynx/delivery-console', 'build'], repositoryRoot);
+  run(wrangler, ['deploy'], consoleRoot);
+  run(wrangler, ['d1', 'migrations', 'apply', 'DB', '--remote'], consoleRoot);
 }

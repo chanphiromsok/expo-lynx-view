@@ -10,6 +10,7 @@ import {
   buildEmbedded,
   checkEmbedded,
   loadConfigAsync,
+  loadMiniAppConfigAsync,
   packRelease,
   readEmbeddedRuntimeVersion,
 } from '../src/index.mjs';
@@ -50,6 +51,28 @@ test('loads a TypeScript config through the public defineConfig helper shape', a
   );
   const config = await loadConfigAsync({ configPath: resolve(root, 'lynx-bundle.config.ts') });
   assert.equal(config.features.shopping.root, resolve(root, 'features/shopping'));
+});
+
+test('loads flat host feature IDs without mini-app release settings', async () => {
+  const { root } = await temporaryApp();
+  const configPath = resolve(root, 'flat-lynx-bundle.config.mjs');
+  writeFileSync(
+    configPath,
+    "export default { featuresDir: './features', features: ['shopping'], embeddedOutputDir: './generated/expo-lynx/embedded' };\n"
+  );
+  const config = await loadConfigAsync({ configPath });
+  assert.deepEqual(Object.keys(config.features), ['shopping']);
+  assert.equal(config.features.shopping.entry, resolve(root, 'features/shopping/src/index.tsx'));
+});
+
+test('loads the intentionally small independent mini-app config', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'lynx-mini-app-cli-test-'));
+  const sourcePath = resolve(dirname(fileURLToPath(import.meta.url)), '../src/index.mjs').replaceAll('\\', '\\\\');
+  writeFileSync(resolve(root, 'lynx-miniapp.config.ts'), `import { defineMiniApp } from '${sourcePath}';\nexport default defineMiniApp({ appId: 'bs-one', feature: 'merchant-home' });\n`);
+  const config = await loadMiniAppConfigAsync({ cwd: root });
+  assert.equal(config.appId, 'bs-one');
+  assert.equal(config.feature, 'merchant-home');
+  assert.equal(config.features['merchant-home'].entry, resolve(root, 'src/index.tsx'));
 });
 
 test('rejects a feature-directory symlink that resolves outside the consuming repository', async () => {

@@ -1,5 +1,25 @@
 import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
+export const apps = sqliteTable('apps', {
+  id: text('id').primaryKey().notNull(),
+  name: text('name').notNull(),
+  currentRuntimeVersion: text('current_runtime_version'),
+  currentAppVersion: text('current_app_version'),
+  currentBuildNumber: text('current_build_number'),
+  createdAt: text('created_at').notNull(),
+});
+
+export const miniApps = sqliteTable(
+  'mini_apps',
+  {
+    appId: text('app_id').notNull(),
+    id: text('id').notNull(),
+    name: text('name').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.appId, table.id] })],
+);
+
 export const bundles = sqliteTable(
   'bundles',
   {
@@ -10,6 +30,9 @@ export const bundles = sqliteTable(
     runtimeVersion: text('runtime_version').notNull(),
     archiveSha256: text('archive_sha256').notNull(),
     archiveBytes: integer('archive_bytes').notNull(),
+    verifiedAt: text('verified_at'),
+    targetAppVersion: text('target_app_version'),
+    targetBuildNumber: text('target_build_number'),
     createdAt: text('created_at').notNull(),
   },
   (table) => [

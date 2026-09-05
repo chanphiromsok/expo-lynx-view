@@ -47,7 +47,7 @@ the normal setup or bundle-release workflow.
 | Path | Purpose |
 | --- | --- |
 | `packages/expo-lynx` | Source for the published `expo-lynx-view` Expo native module, config plugin, and iOS managed-bundle implementation. |
-| `packages/lynx-bundle-cli` | Builds, packages, hashes, and uploads each Lynx feature. |
+| `packages/lynx-bundle-cli` | Will publish as `expo-lynx-bundle-cli`; builds, packages, hashes, and uploads each Lynx feature. |
 | `apps/expo-lynx-example` | Reference Expo app and its `delivery` mini-app feature. |
 | `apps/expo-lynx-example/features/delivery` | The ReactLynx mini-app source, now part of this monorepo. |
 | `apps/docs` | MDX documentation website for setup, managed delivery, CLI, and troubleshooting. |
@@ -76,6 +76,27 @@ version automatically. It reads the local delivery API key from the ignored
 Use `--draft` to package without publishing. A changed embedded public key or
 app endpoint requires a new native binary; a later `lynx release` does not.
 
+## Publish the module and CLI
+
+`expo-lynx-view` and `expo-lynx-bundle-cli` ship with the same version. The
+commands below build and test both packages before npm sees either one.
+
+```sh
+# Change both package versions together, then review and commit the result.
+pnpm release:prepare 0.3.1
+
+# Runs lint, tests, builds, and npm pack previews. No npm publish happens here.
+pnpm release:check
+
+# Requires a clean, committed working tree, then publishes both public packages.
+pnpm release:publish
+```
+
+Npm cannot atomically publish two packages. The script first confirms both
+exact versions are free, fully checks both packages, then publishes
+`expo-lynx-view` followed by `expo-lynx-bundle-cli`. If npm asks for two-factor
+authentication, complete its prompt for each package.
+
 ## Set up a mini-app feature
 
 The consuming Expo app owns `lynx-bundle.config.ts` (or `.mjs`). Feature keys
@@ -84,7 +105,7 @@ are canonical IDs: a `shopping` entry resolves to
 repeated in configuration.
 
 ```ts
-import { defineConfig } from '@expo-lynx/bundle-cli';
+import { defineConfig } from 'expo-lynx-bundle-cli';
 
 export default defineConfig({
   appId: 'shop',

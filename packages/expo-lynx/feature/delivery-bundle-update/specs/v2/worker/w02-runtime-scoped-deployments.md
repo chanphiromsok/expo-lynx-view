@@ -4,6 +4,10 @@
 
 **Spec:** `feature/delivery-bundle-update/specs/v2/worker/w02-runtime-scoped-deployments.md`
 
+> **Planned successor:** I01 keeps exact runtime-scoped delivery but moves
+> runtime assignment out of independent mini-app configuration and into Worker
+> upload registration. This document describes the pre-I01 upload contract.
+
 ## Goal
 
 Let one Cloudflare Worker serve compatible bundles to old and new App Store

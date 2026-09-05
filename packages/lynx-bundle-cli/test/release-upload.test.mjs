@@ -19,12 +19,71 @@ const release = {
   archiveBytes: archive.byteLength,
 };
 
+const miniAppRelease = {
+  schemaVersion: 2,
+  appId: 'bs-one',
+  feature: 'merchant-home',
+  releaseId: 'merchant-home-20260905T120000Z-a1b2c3',
+  version: '2026.09.05',
+  archiveSha256,
+  archiveBytes: archive.byteLength,
+};
+
 function temporaryRelease() {
   const directory = mkdtempSync(resolve(tmpdir(), 'lynx-release-upload-'));
   writeFileSync(resolve(directory, 'release.json'), `${JSON.stringify(release)}\n`);
   writeFileSync(resolve(directory, 'release.zip'), archive);
   return directory;
 }
+
+function temporaryMiniAppRelease() {
+  const directory = mkdtempSync(resolve(tmpdir(), 'lynx-mini-app-release-upload-'));
+  writeFileSync(resolve(directory, 'release.json'), `${JSON.stringify(miniAppRelease)}\n`);
+  writeFileSync(resolve(directory, 'release.zip'), archive);
+  return directory;
+}
+
+test('v2 upload leaves runtime ownership with the Worker and checks the target build', async () => {
+  const directory = temporaryMiniAppRelease();
+  let confirmation;
+  const result = await uploadRelease({
+    releaseDirectory: directory,
+    server: 'https://delivery.example',
+    apiKey: 'lynx_live_test_key',
+    expectedHostBuild: '42',
+    confirmTarget: async (target) => { confirmation = target; },
+    fetchImpl: async (input, init = {}) => {
+      const url = String(input);
+      if (url.endsWith('/api/uploads')) {
+        assert.equal(init.headers['lynx-expected-host-build'], '42');
+        assert.equal('runtimeVersion' in JSON.parse(init.body), false);
+        return response({ bundleId: miniAppRelease.releaseId, complete: false, uploaded: false, target: { appId: 'bs-one', feature: 'merchant-home', appVersion: '1.2.0', buildNumber: '42' } });
+      }
+      return response({ bundle: { id: miniAppRelease.releaseId, version: miniAppRelease.version, archiveSha256, archiveBytes: archive.byteLength }, created: true }, 201);
+    },
+    r2: { accountId: 'account', bucketName: 'bundles', accessKeyId: 'key', secretAccessKey: 'secret' },
+    r2FetchImpl: async (input) => {
+      assert.equal(String(input), `https://account.r2.cloudflarestorage.com/bundles/bs-one/merchant-home/releases/${miniAppRelease.releaseId}/release.zip`);
+      return new Response(null, { status: 200 });
+    },
+  });
+  assert.deepEqual(confirmation, { appId: 'bs-one', feature: 'merchant-home', appVersion: '1.2.0', buildNumber: '42' });
+  assert.deepEqual(result.target, confirmation);
+});
+
+test('v2 draft upload requires an expected host build when it cannot ask', async () => {
+  let called = false;
+  await assert.rejects(
+    uploadRelease({
+      releaseDirectory: temporaryMiniAppRelease(),
+      server: 'https://delivery.example',
+      apiKey: 'lynx_live_test_key',
+      fetchImpl: async () => { called = true; return response({}); },
+    }),
+    /Non-interactive v2 upload requires --host-build/,
+  );
+  assert.equal(called, false);
+});
 
 function response(value, status = 200) {
   return Response.json(value, { status });

@@ -42,6 +42,11 @@ export function defineConfig(config) {
   return config;
 }
 
+/** The entire public configuration surface for one independent mini app. */
+export function defineMiniApp(config) {
+  return config;
+}
+
 export function loadConfig({ configPath, cwd = process.cwd() } = {}) {
   const path = findConfigPath(configPath, cwd);
   const raw = loadConfigModule(path);
@@ -138,29 +143,41 @@ export function packRelease(config, options) {
   assertReleaseId(releaseId);
   assertDisplayVersion(version);
   if (platform !== 'ios') throw new Error('Release packaging currently supports iOS only.');
-  assertVersion(runtimeVersion, 'runtimeVersion');
+  if (runtimeVersion !== undefined) assertVersion(runtimeVersion, 'runtimeVersion');
 
   const build = buildFeature(config, feature.id);
-  const temporary = createSiblingTemporaryDirectory(resolve(config.releaseOutputDir, feature.id, releaseId));
+  const releaseDirectory = options.outputWithFeature === false
+    ? resolve(config.releaseOutputDir, releaseId)
+    : resolve(config.releaseOutputDir, feature.id, releaseId);
+  const temporary = createSiblingTemporaryDirectory(releaseDirectory);
   try {
     const files = inspectRuntimeFiles(build.outputDirectory);
     const archive = createDeterministicZip(build.outputDirectory, files);
     const archiveHash = sha256(archive);
-    const release = {
-      schemaVersion: 1,
-      appId: config.appId,
-      feature: feature.id,
-      releaseId,
-      version,
-      runtimeVersion,
-      archiveSha256: archiveHash,
-      archiveBytes: archive.byteLength,
-    };
+    const release = runtimeVersion === undefined
+      ? {
+          schemaVersion: 2,
+          appId: config.appId,
+          feature: feature.id,
+          releaseId,
+          version,
+          archiveSha256: archiveHash,
+          archiveBytes: archive.byteLength,
+        }
+      : {
+          schemaVersion: 1,
+          appId: config.appId,
+          feature: feature.id,
+          releaseId,
+          version,
+          runtimeVersion,
+          archiveSha256: archiveHash,
+          archiveBytes: archive.byteLength,
+        };
     writeFileSync(resolve(temporary, 'release.zip'), archive, { mode: 0o600 });
     writeJson(resolve(temporary, 'release.json'), release);
-    const destination = resolve(config.releaseOutputDir, feature.id, releaseId);
-    atomicReplaceDirectory(temporary, destination);
-    return { outputDirectory: destination, release };
+    atomicReplaceDirectory(temporary, releaseDirectory);
+    return { outputDirectory: releaseDirectory, release };
   } catch (error) {
     rmSync(temporary, { recursive: true, force: true });
     throw error;
@@ -203,6 +220,24 @@ export async function loadConfigAsync({ configPath, cwd = process.cwd() } = {}) 
   return normalizeConfig(module.default, path);
 }
 
+export async function loadMiniAppConfigAsync({ configPath, cwd = process.cwd() } = {}) {
+  const path = findMiniAppConfigPath(configPath, cwd);
+  const raw = path.endsWith('.ts')
+    ? loadConfigModule(path)
+    : (await import(pathToFileURL(path).href)).default;
+  return normalizeMiniAppConfig(raw, path);
+}
+
+export function packMiniAppRelease(config, { releaseId, version }) {
+  return packRelease(config, {
+    featureId: config.feature,
+    releaseId,
+    version,
+    platform: 'ios',
+    outputWithFeature: false,
+  });
+}
+
 function normalizeConfig(raw, configPath) {
   if (!isObject(raw)) throw new Error('lynx-bundle config must export an object.');
   const configDirectory = dirname(configPath);
@@ -210,14 +245,19 @@ function normalizeConfig(raw, configPath) {
   assertKnownKeys(raw, allowed, 'config');
   const appId = raw.appId ?? 'default';
   if (typeof appId !== 'string' || !APP_ID.test(appId)) throw new Error('config.appId must be a lowercase identifier.');
-  if (!isObject(raw.features) || Object.keys(raw.features).length === 0) throw new Error('config.features must be a non-empty object.');
+  const featureIds = Array.isArray(raw.features)
+    ? raw.features
+    : (isObject(raw.features) ? Object.keys(raw.features) : null);
+  if (!featureIds || featureIds.length === 0 || !featureIds.every((featureId) => typeof featureId === 'string')) {
+    throw new Error('config.features must be a non-empty array of feature IDs or a legacy feature object.');
+  }
   if (typeof raw.embeddedOutputDir !== 'string' || !raw.embeddedOutputDir) throw new Error('config.embeddedOutputDir is required.');
   const featuresDirectory = resolveContained(configDirectory, raw.featuresDir ?? '.');
   const seenPaths = new Set();
   const features = {};
-  for (const featureId of Object.keys(raw.features).sort()) {
+  for (const featureId of [...featureIds].sort()) {
     assertFeatureId(featureId);
-    const rawFeature = raw.features[featureId];
+    const rawFeature = Array.isArray(raw.features) ? {} : raw.features[featureId];
     if (!isObject(rawFeature)) throw new Error(`Feature ${featureId} must be an object.`);
     assertKnownKeys(rawFeature, new Set(['entry', 'lynxConfig', 'build']), `feature ${featureId}`);
     const root = resolveContained(featuresDirectory, featureId);
@@ -242,6 +282,45 @@ function normalizeConfig(raw, configPath) {
     featuresDirectory,
     features,
     embeddedOutputDir: resolveContained(configDirectory, raw.embeddedOutputDir),
+    releaseOutputDir: resolveContained(configDirectory, raw.releaseOutputDir ?? './dist/lynx-releases'),
+  };
+}
+
+function findMiniAppConfigPath(configPath, cwd) {
+  if (configPath) {
+    const path = resolve(cwd, configPath);
+    if (!existsSync(path)) throw new Error(`Mini-app config file was not found: ${path}`);
+    return path;
+  }
+  for (const name of ['lynx-miniapp.config.ts', 'lynx-miniapp.config.mjs', 'lynx-miniapp.config.js']) {
+    const path = resolve(cwd, name);
+    if (existsSync(path)) return path;
+  }
+  throw new Error(`No lynx-miniapp.config.ts, .mjs, or .js found below ${cwd}.`);
+}
+
+function normalizeMiniAppConfig(raw, configPath) {
+  if (!isObject(raw)) throw new Error('lynx-miniapp config must export an object.');
+  assertKnownKeys(raw, new Set(['appId', 'feature', 'releaseOutputDir']), 'mini-app config');
+  if (typeof raw.appId !== 'string' || !APP_ID.test(raw.appId)) throw new Error('mini-app appId must be a lowercase identifier.');
+  if (typeof raw.feature !== 'string' || !FEATURE_ID.test(raw.feature)) throw new Error('mini-app feature must be a lowercase identifier.');
+  if (raw.releaseOutputDir !== undefined && (typeof raw.releaseOutputDir !== 'string' || !raw.releaseOutputDir)) {
+    throw new Error('mini-app releaseOutputDir must be a non-empty relative path.');
+  }
+  const configDirectory = dirname(configPath);
+  const feature = {
+    id: raw.feature,
+    root: configDirectory,
+    entry: resolveContained(configDirectory, './src/index.tsx'),
+    lynxConfig: resolveContained(configDirectory, './lynx.config.ts'),
+    build: null,
+  };
+  return {
+    configPath,
+    configDirectory,
+    appId: raw.appId,
+    feature: raw.feature,
+    features: { [raw.feature]: feature },
     releaseOutputDir: resolveContained(configDirectory, raw.releaseOutputDir ?? './dist/lynx-releases'),
   };
 }

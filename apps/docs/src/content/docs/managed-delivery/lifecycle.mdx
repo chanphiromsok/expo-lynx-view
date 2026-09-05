@@ -34,3 +34,15 @@ ZIP.
 `enabled: false` stops new distribution; it never remotely deletes a verified
 release. During an App Store rollout, keep one deployment for each installed
 runtime. The Console scopes them by `(appId, feature, runtimeVersion)`.
+`runtimeVersion` is an internal opaque native-compatibility identity; Console
+users work with the human-readable **Current host build** instead.
+
+```text
+Host v1 asks for runtime A → only A deployment can be returned
+Host v2 asks for runtime B → only B deployment can be returned
+No B registration or selection → signed disabled B → embedded B bundle
+```
+
+Registering a host build and uploading a bundle never selects or enables it.
+`force: false` stages a download for the next feature open; `force: true`
+reloads a mounted matching feature only after installation verifies.

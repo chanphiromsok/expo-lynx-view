@@ -14,7 +14,7 @@ const protocolVersion = /^[\u0020-\u007e]{1,128}$/;
  * Worker to verify and register it. Local Worker development uses its local
  * upload capability instead.
  */
-export async function uploadRelease({ releaseDirectory, server, apiKey, r2, fetchImpl = fetch, r2FetchImpl }) {
+export async function uploadRelease({ releaseDirectory, server, apiKey, r2, expectedHostBuild, confirmTarget, fetchImpl = fetch, r2FetchImpl }) {
   const endpoint = normalizeServer(server);
   if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
     throw new Error('A delivery API key is required. Set LYNX_DELIVERY_API_KEY or pass --api-key.');
@@ -22,13 +22,20 @@ export async function uploadRelease({ releaseDirectory, server, apiKey, r2, fetc
   if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required.');
 
   const artifacts = await readArtifacts(releaseDirectory);
+  if (artifacts.release.schemaVersion === 2 && !expectedHostBuild && !confirmTarget) {
+    throw new Error('Non-interactive v2 upload requires --host-build or LYNX_EXPECTED_HOST_BUILD.');
+  }
   const authorization = { Authorization: `Bearer ${apiKey}` };
   const registration = await requestJson(
     fetchImpl,
     `${endpoint}/api/uploads`,
     {
       method: 'POST',
-      headers: { ...authorization, 'content-type': 'application/json' },
+      headers: {
+        ...authorization,
+        'content-type': 'application/json',
+        ...(expectedHostBuild ? { 'lynx-expected-host-build': expectedHostBuild } : {}),
+      },
       body: JSON.stringify(artifacts.release),
     },
     'Registration',
@@ -39,12 +46,20 @@ export async function uploadRelease({ releaseDirectory, server, apiKey, r2, fetc
   }
   if (registration.complete === true) {
     return {
-      bundle: { id: bundleId, version: artifacts.release.version, runtimeVersion: artifacts.release.runtimeVersion },
+      bundle: {
+        id: bundleId,
+        version: artifacts.release.version,
+        ...(artifacts.release.schemaVersion === 1 ? { runtimeVersion: artifacts.release.runtimeVersion } : {}),
+      },
       created: false,
       alreadyComplete: true,
     };
   }
   if (registration.complete !== false) throw new Error('Registration returned an invalid completion state.');
+  const target = artifacts.release.schemaVersion === 2
+    ? requireTarget(registration.target, artifacts.release)
+    : null;
+  if (confirmTarget && target) await confirmTarget(target);
 
   if (registration.uploaded !== true) {
     if (registration.upload) {
@@ -68,12 +83,11 @@ export async function uploadRelease({ releaseDirectory, server, apiKey, r2, fetc
   const bundle = requireObject(completion.bundle, 'Completion returned an invalid bundle.');
   if (
     bundle.id !== bundleId || bundle.version !== artifacts.release.version ||
-    bundle.runtimeVersion !== artifacts.release.runtimeVersion ||
     bundle.archiveSha256 !== artifacts.release.archiveSha256 ||
     bundle.archiveBytes !== artifacts.release.archiveBytes ||
     typeof completion.created !== 'boolean'
   ) throw new Error('Completion returned metadata different from the uploaded release.');
-  return { bundle, created: completion.created, alreadyComplete: false };
+  return { bundle, ...(target ? { target } : {}), created: completion.created, alreadyComplete: false };
 }
 
 async function uploadDirectlyToR2(r2, artifacts, r2FetchImpl) {
@@ -118,16 +132,19 @@ function parseReleaseMetadata(bytes) {
   let value;
   try { value = JSON.parse(bytes.toString('utf8')); } catch { throw new Error('release.json must contain valid JSON.'); }
   const release = requireObject(value, 'release.json must contain an object.');
-  const allowed = ['schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'runtimeVersion', 'archiveSha256', 'archiveBytes'];
+  const allowed = release.schemaVersion === 2
+    ? ['schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'archiveSha256', 'archiveBytes']
+    : ['schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'runtimeVersion', 'archiveSha256', 'archiveBytes'];
   if (Object.keys(release).some((key) => !allowed.includes(key))) {
     throw new Error('release.json contains an unknown field.');
   }
-  if (release.schemaVersion !== 1) throw new Error('release.json schemaVersion must be 1.');
-  if (release.appId !== undefined && (typeof release.appId !== 'string' || !appId.test(release.appId))) throw new Error('release.json appId is invalid.');
+  if (release.schemaVersion !== 1 && release.schemaVersion !== 2) throw new Error('release.json schemaVersion must be 1 or 2.');
+  if (release.schemaVersion === 2 && (typeof release.appId !== 'string' || !appId.test(release.appId))) throw new Error('release.json appId is invalid.');
+  if (release.schemaVersion === 1 && release.appId !== undefined && (typeof release.appId !== 'string' || !appId.test(release.appId))) throw new Error('release.json appId is invalid.');
   if (typeof release.feature !== 'string' || !featureId.test(release.feature)) throw new Error('release.json feature is invalid.');
   if (typeof release.releaseId !== 'string' || !releaseId.test(release.releaseId)) throw new Error('release.json releaseId is invalid.');
   if (typeof release.version !== 'string' || !protocolVersion.test(release.version)) throw new Error('release.json version is invalid.');
-  if (typeof release.runtimeVersion !== 'string' || !protocolVersion.test(release.runtimeVersion)) throw new Error('release.json runtimeVersion is invalid.');
+  if (release.schemaVersion === 1 && (typeof release.runtimeVersion !== 'string' || !protocolVersion.test(release.runtimeVersion))) throw new Error('release.json runtimeVersion is invalid.');
   if (typeof release.archiveSha256 !== 'string' || !sha256.test(release.archiveSha256)) throw new Error('release.json archiveSha256 must be lowercase SHA-256.');
   if (!Number.isSafeInteger(release.archiveBytes) || release.archiveBytes <= 0 || release.archiveBytes > MAX_ARCHIVE_BYTES) {
     throw new Error(`release.json archiveBytes must be between 1 and ${MAX_ARCHIVE_BYTES}.`);
@@ -136,7 +153,7 @@ function parseReleaseMetadata(bytes) {
 }
 
 function missingArtifact(name, error) {
-  if (error?.code === 'ENOENT') throw new Error(`Release directory is missing ${name}. Run pnpm lynx release <feature> --draft first.`);
+  if (error?.code === 'ENOENT') throw new Error(`Release directory is missing ${name}. Run pnpm lynx release --draft first.`);
   throw error;
 }
 
@@ -169,10 +186,10 @@ async function r2ErrorCode(response) {
 }
 
 function requireR2Configuration(value) {
-  const r2 = requireObject(value, 'Direct R2 upload requires R2 credentials. Source .env.lynx with `set -a; source .env.lynx; set +a`.');
+  const r2 = requireObject(value, 'Direct R2 upload requires R2 credentials. Put them in .env.lynx or pass the matching flags.');
   const fields = ['accountId', 'bucketName', 'accessKeyId', 'secretAccessKey'];
   if (fields.some((field) => typeof r2[field] !== 'string' || r2[field].trim().length === 0)) {
-    throw new Error('Direct R2 upload requires account ID, bucket name, access key ID, and secret access key. Source .env.lynx with `set -a; source .env.lynx; set +a`.');
+    throw new Error('Direct R2 upload requires account ID, bucket name, access key ID, and secret access key. Put them in .env.lynx or pass the matching flags.');
   }
   return r2;
 }
@@ -210,6 +227,14 @@ function normalizeServer(server) {
 function requireBundleId(value) {
   if (typeof value !== 'string' || !releaseId.test(value)) throw new Error('Registration returned an invalid bundle ID.');
   return value;
+}
+
+function requireTarget(value, release) {
+  const target = requireObject(value, 'Registration returned no target host build.');
+  if (target.appId !== release.appId || target.feature !== release.feature || typeof target.appVersion !== 'string' || typeof target.buildNumber !== 'string') {
+    throw new Error('Registration returned an invalid target host build.');
+  }
+  return { appId: target.appId, feature: target.feature, appVersion: target.appVersion, buildNumber: target.buildNumber };
 }
 
 function requireUpload(value) {
