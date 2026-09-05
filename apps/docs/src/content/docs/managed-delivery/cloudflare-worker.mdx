@@ -1,102 +1,132 @@
 ---
-title: Cloudflare delivery console and data plane
-description: The unified console/Worker package, its public routes, R2/D1 contract, and the remaining authenticated control-plane work.
+title: Cloudflare Worker and data plane
+description: One Worker, D1 database, and R2 bucket for all host apps and mini-app features.
 ---
 
-## Current status: public read plane implemented
-
-The repository contains one console package that includes the Cloudflare Worker at:
-
-```text
-apps/console
-```
-
-It declares R2 and D1 bindings, includes the initial D1 migration, and
-implements the public read contract used by the iOS client:
+`apps/console` ships one TanStack console and one Elysia Cloudflare Worker. It
+serves many host apps and mini-apps:
 
 ```text
-GET  /v1/channels/:feature/:channel
-GET  /v1/releases/:feature/:releaseId/manifest
-GET  /v1/releases/:feature/:releaseId/release.zip
+appId + feature + runtimeVersion → selected immutable bundle
 ```
 
-The Worker is still **not ready for production delivery** because the
-authenticated console control plane has not yet been implemented to validate,
-upload, and promote releases. Do not point an app's `deliveryChannels` URL at a Worker
-until D1/R2 contain real signed data and the staging flow has passed on a device.
+## First-time Cloudflare setup
 
-## What has already been prepared
+This command provisions the shared delivery Console. Run it once from this
+repository, not from every Expo host app.
 
-The Worker has the following declared bindings in
-[`wrangler.toml`](https://github.com/chanphiromsok/expo-lynx-view/blob/main/apps/console/wrangler.toml):
+### 1. Prepare the Worker signing key
 
-| Binding     | Intended service | Responsibility                                                                                                    |
-| ----------- | ---------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `ARTIFACTS` | Cloudflare R2    | Immutable `release.zip` and signed manifest bytes.                                                                |
-| `DB`        | Cloudflare D1    | Exact signed channel envelope, channel head/revision, immutable release metadata, audit, and idempotency records. |
+The Worker must sign public deployment responses with the private half of the
+public key compiled into the mobile app. Put the PEM in the ignored local file:
 
-Provisioning the empty resources is safe, but it does not make remote updates
-work by itself:
+```dotenv title="apps/console/.dev.vars"
+DELIVERY_SIGNING_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
+...your PKCS#8 RSA private key...
+-----END PRIVATE KEY-----"
+```
+
+The setup command derives its public key and stops if it does not match
+`apps/expo-lynx-example/keys/lynx/updates.public.pem`. Never put this private
+key in an Expo app, `.env.lynx`, a Git commit, or an R2 bucket.
+
+### 2. Create the R2 S3 upload credential
+
+In Cloudflare Dashboard, open **R2 → Manage R2 API Tokens**, or use the URL
+printed by setup. Create an **R2 S3 API token** with:
+
+| Setting | Value |
+| --- | --- |
+| Permission | **Object Read & Write** |
+| Bucket | `lynx-artifacts`, or the bucket configured in `apps/console/wrangler.toml` |
+| Use | CLI upload from developer machines |
+
+Keep its access-key ID and secret access key private. This is an S3 credential,
+not a general Cloudflare API token. The Worker does not receive it.
+
+### 3. Run setup and authorize Wrangler
 
 ```sh
-cd apps/console
-pnpm exec wrangler r2 bucket create lynx-artifacts
-pnpm exec wrangler d1 create lynx-delivery
+pnpm lynx console setup --username your-console-name
 ```
 
-After creating D1, replace the placeholder `database_id` in `wrangler.toml`
-with the ID returned by Wrangler, then apply the tracked schema locally:
+If Wrangler is not signed in, it opens a browser for Cloudflare OAuth and then
+lists your accounts. Choose the account, paste the R2 S3 access-key ID, then
+paste the secret at the hidden prompt. Wrangler OAuth needs account/user read,
+D1 write, and Workers write to create the shared infrastructure.
+
+Setup then creates or reuses D1 and R2, deploys the Worker, writes Worker
+secrets, applies D1 migrations, and writes the ignored root `.env.lynx`:
+
+```dotenv title=".env.lynx"
+CLOUDFLARE_ACCOUNT_ID="..."
+R2_ACCESS_KEY_ID="..."
+R2_SECRET_ACCESS_KEY="..."
+LYNX_DELIVERY_SERVER="https://your-worker.workers.dev"
+LYNX_DELIVERY_API_KEY="lynx_live_..."
+LYNX_DELIVERY_USERNAME="your-console-name"
+LYNX_DELIVERY_PASSWORD="generated-password"
+LYNX_DELIVERY_R2_BUCKET="lynx-artifacts"
+```
+
+Do not commit `.env.lynx`. It is the private handoff file for future releases.
+
+### 4. Point the native app at the deployed Worker
+
+Use the public deployment URL in the Expo plugin, then make a new native app
+binary because the endpoint is a native configuration value:
+
+```json
+{
+  "deliveryEndpoints": {
+    "delivery": "https://your-worker.workers.dev/v1/default/delivery"
+  }
+}
+```
+
+After that one-time setup, publishing a normal bundle is only:
 
 ```sh
-pnpm exec wrangler d1 migrations apply lynx-delivery --local
+set -a
+source .env.lynx
+set +a
+pnpm lynx release delivery
 ```
 
-Use `--remote` only as a deliberate provisioning action after reviewing the
-migration. Applying a migration does not publish an update.
+Open the deployed Worker URL, sign in with the generated console credentials,
+and select then enable the uploaded bundle for its app, feature, and runtime.
+The CLI upload itself does not enable a release.
 
-## Implemented public delivery API
+| D1 table | Purpose |
+| --- | --- |
+| `bundles` | Immutable verified ZIP metadata, including app, feature, and runtime fingerprint. |
+| `deployments` | Selected bundle, enabled state, force flag, and revision for one runtime scope. |
+| `users` | Console username/password and hashed CLI API key. |
 
-The public Cloudflare Worker is a **read-only data plane**. It exposes only the
-client contract already exercised by the local server:
+Public mobile routes require no user credential:
 
 ```text
-GET  /v1/channels/:feature/:channel
-GET  /v1/releases/:feature/:releaseId/manifest
-GET  /v1/releases/:feature/:releaseId/release.zip
+GET /v1/:appId/:feature
+GET /v1/:appId/:feature/:releaseId/release.zip
 ```
 
-Channel response bodies are the exact signed envelope text stored in D1. Release
-manifest and ZIP bytes are read from server-constructed, release-scoped R2
-keys. Channel responses use a strong ETag plus `no-cache`; manifest/ZIP
-responses use strong ETags and long-lived immutable caching. `If-None-Match`
-returns `304`; the ZIP endpoint deliberately advertises `Accept-Ranges: none`
-so the mobile client performs clean full-download retries.
+The deployment response is signed by `DELIVERY_SIGNING_PRIVATE_KEY`; its public
+counterpart is embedded in the app. The CLI uploads directly to R2 with local
+S3 credentials, then asks the Worker to verify exact ZIP size and SHA-256
+before D1 registration. The Worker never receives an R2 S3 secret.
 
-The Worker performs only cheap route, D1, and R2-size checks while reading. It
-does not rehash or reverify every artifact response. The iOS install path still
-verifies signature, archive SHA-256, and extracted files before activation.
+Clients without `lynx-runtime-version` are supported only while one deployment
+is unambiguous. This temporary bridge fails closed once multiple runtimes exist.
 
-For the initial operator workflow, publishing and promotion are deliberately
-not public Worker routes. The unified console currently shows safe preview
-data. A future hosted control plane must authenticate every write and use the
-Worker's D1/R2 bindings directly. See
-[delivery console](/managed-delivery/local-console/).
+## Later Worker changes
 
-## Remaining safe migration path
+Deploy Console/Worker code changes without recreating D1, R2, users, or API
+keys:
 
-1. Implement the console's authenticated Cloudflare R2/D1 control plane, including
-   release-envelope validation, immutable object writes, idempotency, and an
-   audit record.
-2. Put publisher credentials and the **private** release-signing key in CI or
-   an ignored local environment file—not the Worker source, `wrangler.toml`,
-   browser JavaScript, or mobile app.
-3. Deploy a staging Worker and add its `https://.../v1/channels/...` URLs to an
-   internal app's Expo plugin configuration.
-4. Prebuild and install that internal app because the endpoint map is native
-   configuration.
-5. Publish a staging release, verify device install and next-open activation,
-   then promote the same API design to production.
+```sh
+pnpm --filter @expo-lynx/delivery-console run deploy
+```
 
-The app's embedded public key stays the trust root through this migration, so
-moving from local storage to R2 does not weaken device-side signature
-verification.
+Use `console setup --dry-run --username your-console-name` to check local key
+prerequisites without changing Cloudflare. Setup intentionally refuses to
+overwrite an existing `.env.lynx`.

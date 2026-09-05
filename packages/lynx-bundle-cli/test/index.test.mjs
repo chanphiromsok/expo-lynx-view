@@ -11,6 +11,7 @@ import {
   checkEmbedded,
   loadConfigAsync,
   packRelease,
+  readEmbeddedRuntimeVersion,
 } from '../src/index.mjs';
 
 const fixtureRoot = resolve(dirname(fileURLToPath(import.meta.url)), 'fixtures/app');
@@ -30,6 +31,7 @@ test('resolves two canonical feature roots and builds an atomic embedded tree', 
   const built = buildEmbedded(config, [], 'expo-57');
   assert.deepEqual(Object.keys(built.registry.features), ['orders', 'shopping']);
   assert.deepEqual(checkEmbedded(config, 'expo-57').features, built.registry.features);
+  assert.equal(readEmbeddedRuntimeVersion(config), 'expo-57');
   assert.equal(
     readFileSync(resolve(root, 'generated/expo-lynx/embedded/shopping/main.lynx.bundle'), 'utf8').includes('shopping'),
     true

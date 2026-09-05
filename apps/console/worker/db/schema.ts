@@ -23,13 +23,14 @@ export const deployments = sqliteTable(
   {
     appId: text('app_id').notNull(),
     featureId: text('feature_id').notNull(),
+    runtimeVersion: text('runtime_version').notNull(),
     bundleId: text('bundle_id'),
     enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
     force: integer('force', { mode: 'boolean' }).notNull().default(false),
     revision: integer('revision').notNull().default(0),
     updatedAt: text('updated_at').notNull(),
   },
-  (table) => [primaryKey({ columns: [table.appId, table.featureId] })],
+  (table) => [primaryKey({ columns: [table.appId, table.featureId, table.runtimeVersion] })],
 );
 
 export const users = sqliteTable(

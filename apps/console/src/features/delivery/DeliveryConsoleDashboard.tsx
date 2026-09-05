@@ -53,7 +53,8 @@ function initialScope() {
   const params = new URLSearchParams(window.location.search);
   const appId = params.get('app') ?? 'default';
   const feature = params.get('feature') ?? 'delivery';
-  return { appId: identifier.test(appId) ? appId : 'default', feature: identifier.test(feature) ? feature : 'delivery' };
+  const runtimeVersion = params.get('runtime') ?? '';
+  return { appId: identifier.test(appId) ? appId : 'default', feature: identifier.test(feature) ? feature : 'delivery', runtimeVersion };
 }
 
 function formatBytes(bytes: number) {
@@ -303,7 +304,7 @@ function ConsoleContent({ appId, feature, overview, pending, onToggle, onSelect 
   const deploymentState = overview.deployment.enabled ? 'Remote delivery is enabled' : 'Remote delivery is disabled';
   return (
     <section className="mx-auto max-w-7xl px-4 py-5 sm:px-7 lg:py-7">
-      <div className="mb-5 flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">{appId} / {feature}</p><h1 className="mt-1 text-2xl font-semibold tracking-tight">Release delivery</h1></div><div className="flex flex-wrap items-center gap-2 text-sm"><Badge variant={overview.deployment.enabled ? 'default' : 'secondary'}>{deploymentState}</Badge><Badge variant="outline">Revision {overview.deployment.revision}</Badge></div></div>
+      <div className="mb-5 flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">{appId} / {feature}</p><h1 className="mt-1 text-2xl font-semibold tracking-tight">Release delivery</h1><p className="mt-1 break-all font-mono text-xs text-muted-foreground">runtime {overview.deployment.runtimeVersion}</p></div><div className="flex flex-wrap items-center gap-2 text-sm"><Badge variant={overview.deployment.enabled ? 'default' : 'secondary'}>{deploymentState}</Badge><Badge variant="outline">Revision {overview.deployment.revision}</Badge></div></div>
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]"><BundleTable bundles={overview.bundles} onSelect={onSelect} selectedId={overview.deployment.bundleId} /><aside className="lg:sticky lg:top-20"><DeploymentCard activeBundle={activeBundle} deployment={overview.deployment} onToggle={onToggle} pending={pending} /></aside></div>
     </section>
   );
@@ -329,11 +330,16 @@ export function DeliveryConsoleDashboard() {
     enabled: Boolean(sessionQuery.data),
     retry: false,
   });
-  const queryKey = deliveryQueryKeys.overview(scope.appId, scope.feature, sessionRevision);
+  const scopes = scopesQuery.data ?? [];
+  const selectedScope = scopes.find((item) => item.appId === scope.appId && item.feature === scope.feature && item.runtimeVersion === scope.runtimeVersion)
+    ?? scopes.find((item) => item.appId === scope.appId && item.feature === scope.feature)
+    ?? scopes[0]
+    ?? scope;
+  const queryKey = deliveryQueryKeys.overview(selectedScope.appId, selectedScope.feature, selectedScope.runtimeVersion, sessionRevision);
   const overviewQuery = useQuery({
     queryKey,
-    queryFn: () => deliveryApi.getOverview(scope.appId, scope.feature),
-    enabled: Boolean(sessionQuery.data),
+    queryFn: () => deliveryApi.getOverview(selectedScope.appId, selectedScope.feature, selectedScope.runtimeVersion),
+    enabled: Boolean(sessionQuery.data && selectedScope.runtimeVersion),
     retry: false,
   });
   const loginMutation = useMutation({
@@ -354,11 +360,11 @@ export function DeliveryConsoleDashboard() {
       setSessionRevision((revision) => revision + 1);
     },
   });
-  const updateDeployment = useMutation({ mutationFn: (update: UpdateDeployment) => deliveryApi.updateDeployment(scope.appId, scope.feature, update), onSuccess: (overview) => queryClient.setQueryData(queryKey, overview) });
+  const updateDeployment = useMutation({ mutationFn: (update: UpdateDeployment) => deliveryApi.updateDeployment(selectedScope.appId, selectedScope.feature, selectedScope.runtimeVersion, update), onSuccess: (overview) => queryClient.setQueryData(queryKey, overview) });
 
-  function changeScope(appId: string, feature: string) {
-    window.history.replaceState(null, '', `?app=${encodeURIComponent(appId)}&feature=${encodeURIComponent(feature)}`);
-    setScope({ appId, feature });
+  function changeScope(appId: string, feature: string, runtimeVersion: string) {
+    window.history.replaceState(null, '', `?app=${encodeURIComponent(appId)}&feature=${encodeURIComponent(feature)}&runtime=${encodeURIComponent(runtimeVersion)}`);
+    setScope({ appId, feature, runtimeVersion });
     setNotice(null);
     setSelectedBundle(null);
   }
@@ -374,21 +380,20 @@ export function DeliveryConsoleDashboard() {
 
   if (sessionQuery.isPending) return <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" />Checking session…</main>;
   if (!sessionQuery.data) return <LoginScreen error={loginMutation.error} onLogin={signIn} password={password} pending={loginMutation.isPending} setPassword={setPassword} setUsername={setUsername} username={username} />;
-  if (overviewQuery.isPending) return <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" />Loading deployment…</main>;
+  if (scopesQuery.isPending || !selectedScope.runtimeVersion || overviewQuery.isPending) return <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground"><LoaderCircle className="size-5 animate-spin" aria-hidden="true" />Loading deployment…</main>;
   if (overviewQuery.isError || !overviewQuery.data) return <FailureScreen error={overviewQuery.error} onSignOut={() => logoutMutation.mutate()} onRetry={() => void overviewQuery.refetch()} />;
 
   const overview = overviewQuery.data;
-  const scopes = scopesQuery.data ?? [];
-  const currentScope: DeliveryScope = scope;
-  const scopeOptions = scopes.some((item) => item.appId === scope.appId && item.feature === scope.feature)
+  const currentScope: DeliveryScope = selectedScope;
+  const scopeOptions = scopes.some((item) => item.appId === selectedScope.appId && item.feature === selectedScope.feature && item.runtimeVersion === selectedScope.runtimeVersion)
     ? scopes
     : [currentScope, ...scopes];
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_82%_-20%,rgb(59_130_246_/_20%),transparent_28rem)] bg-background text-foreground">
       <ConsoleHeader onRefresh={() => void overviewQuery.refetch()} onSignOut={() => logoutMutation.mutate()} />
       {notice && <output className="mx-auto mt-6 flex max-w-6xl items-start justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50/70 px-4 py-3 text-sm text-blue-950 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-100"><span>{notice}</span><button aria-label="Dismiss notice" onClick={() => setNotice(null)} type="button"><X className="size-4" aria-hidden="true" /></button></output>}
-      <section className="mx-auto max-w-7xl px-4 pt-5 sm:px-7"><label className="grid max-w-sm gap-1 text-xs font-medium text-muted-foreground">App / mini app<select aria-label="Choose deployment" className="h-9 rounded-lg border bg-background px-3 text-sm text-foreground" disabled={scopesQuery.isPending} onChange={(event) => { const [appId, feature] = event.target.value.split('\u0000'); if (appId && feature) changeScope(appId, feature); }} value={`${scope.appId}\u0000${scope.feature}`}>{scopeOptions.map((item) => <option key={`${item.appId}/${item.feature}`} value={`${item.appId}\u0000${item.feature}`}>{item.appId} / {item.feature}</option>)}</select></label></section>
-      <ConsoleContent appId={scope.appId} feature={scope.feature} onSelect={(bundle) => setSelectedBundle(bundle)} onToggle={() => apply({ enabled: !overview.deployment.enabled }, overview.deployment.enabled ? 'Remote delivery disabled. Existing installed bundles stay on devices.' : 'Remote delivery enabled for the selected bundle.')} overview={overview} pending={updateDeployment.isPending} />
+      <section className="mx-auto max-w-7xl px-4 pt-5 sm:px-7"><label className="grid max-w-xl gap-1 text-xs font-medium text-muted-foreground">App / mini app / runtime<select aria-label="Choose deployment" className="h-9 rounded-lg border bg-background px-3 text-sm text-foreground" disabled={scopesQuery.isPending} onChange={(event) => { const [appId, feature, runtimeVersion] = event.target.value.split('\u0000'); if (appId && feature && runtimeVersion) changeScope(appId, feature, runtimeVersion); }} value={`${selectedScope.appId}\u0000${selectedScope.feature}\u0000${selectedScope.runtimeVersion}`}>{scopeOptions.map((item) => <option key={`${item.appId}/${item.feature}/${item.runtimeVersion}`} value={`${item.appId}\u0000${item.feature}\u0000${item.runtimeVersion}`}>{item.appId} / {item.feature} / {item.runtimeVersion}</option>)}</select></label></section>
+      <ConsoleContent appId={selectedScope.appId} feature={selectedScope.feature} onSelect={(bundle) => setSelectedBundle(bundle)} onToggle={() => apply({ enabled: !overview.deployment.enabled }, overview.deployment.enabled ? 'Remote delivery disabled. Existing installed bundles stay on devices.' : 'Remote delivery enabled for the selected bundle.')} overview={overview} pending={updateDeployment.isPending} />
       <SelectionDialog bundle={selectedBundle} key={selectedBundle?.id ?? 'empty'} onClose={() => setSelectedBundle(null)} onSelect={(force) => selectedBundle && apply({ bundleId: selectedBundle.id, force }, force ? `${selectedBundle.version} selected with a forced reload request.` : `${selectedBundle.version} selected for the next feature open.`)} pending={updateDeployment.isPending} />
     </main>
   );

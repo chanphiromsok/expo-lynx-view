@@ -28,6 +28,7 @@ type StoredBundle = {
 type StoredDeployment = {
   appId: string;
   featureId: string;
+  runtimeVersion: string;
   bundleId: string | null;
   enabled: number;
   force: number;
@@ -49,7 +50,7 @@ function createDatabase() {
   const deployments = new Map<string, StoredDeployment>();
   const users = new Map<string, StoredUser>();
   const bundleKey = (appId: string, id: string) => `${appId}/${id}`;
-  const deploymentKey = (appId: string, featureId: string) => `${appId}/${featureId}`;
+  const deploymentKey = (appId: string, featureId: string, runtimeVersion: string) => `${appId}/${featureId}/${runtimeVersion}`;
   const database = {
     prepare(sql: string) {
       const query = sql.toLowerCase();
@@ -61,7 +62,7 @@ function createDatabase() {
               if (sql.includes('FROM users WHERE username')) return [...users.values()].find((user) => user.username === String(values[0])) ?? null;
               if (sql.includes('FROM users WHERE api_key_hash')) return [...users.values()].find((user) => user.apiKeyHash === String(values[0])) ?? null;
               if (sql.includes('FROM users WHERE id')) return users.get(String(values[0])) ?? null;
-              if (sql.includes('FROM deployments')) return deployments.get(deploymentKey(String(values[0]), String(values[1]))) ?? null;
+              if (sql.includes('FROM deployments')) return deployments.get(deploymentKey(String(values[0]), String(values[1]), String(values[2]))) ?? null;
               if (sql.includes('FROM bundles')) {
                 return bundles.get(bundleKey(String(values[0]), String(values[1]))) ?? null;
               }
@@ -83,14 +84,14 @@ function createDatabase() {
               }
               if (query.includes('from "deployments"')) {
                 if (query.includes('group by')) {
-                  return [...deployments.values()].map((deployment) => [deployment.appId, deployment.featureId]);
+                  return [...deployments.values()].map((deployment) => [deployment.appId, deployment.featureId, deployment.runtimeVersion]);
                 }
-                const deployment = deployments.get(deploymentKey(String(values[0]), String(values[1])));
+                const deployment = deployments.get(deploymentKey(String(values[0]), String(values[1]), String(values[2])));
                 return { results: deployment ? [deployment] : [] };
               }
               if (query.includes('from "bundles"')) {
                 if (query.includes('group by')) {
-                  return [...bundles.values()].map((bundle) => [bundle.appId, bundle.featureId]);
+                  return [...bundles.values()].map((bundle) => [bundle.appId, bundle.featureId, bundle.runtimeVersion]);
                 }
                 if (query.includes('"bundles"."id" = ?')) {
                   const bundle = bundles.get(bundleKey(String(values[0]), String(values[1])));
@@ -117,12 +118,13 @@ function createDatabase() {
               }
               if (query.includes('from "deployments"')) {
                 if (query.includes('group by')) {
-                  return [...deployments.values()].map((deployment) => [deployment.appId, deployment.featureId]);
+                  return [...deployments.values()].map((deployment) => [deployment.appId, deployment.featureId, deployment.runtimeVersion]);
                 }
-                const deployment = deployments.get(deploymentKey(String(values[0]), String(values[1])));
+                const deployment = deployments.get(deploymentKey(String(values[0]), String(values[1]), String(values[2])));
                 return deployment ? [[
                   deployment.appId,
                   deployment.featureId,
+                  deployment.runtimeVersion,
                   deployment.bundleId,
                   deployment.enabled,
                   deployment.force,
@@ -132,7 +134,7 @@ function createDatabase() {
               }
               if (query.includes('from "bundles"')) {
                 if (query.includes('group by')) {
-                  return [...bundles.values()].map((bundle) => [bundle.appId, bundle.featureId]);
+                  return [...bundles.values()].map((bundle) => [bundle.appId, bundle.featureId, bundle.runtimeVersion]);
                 }
                 const rows = query.includes('"bundles"."id" = ?')
                   ? [bundles.get(bundleKey(String(values[0]), String(values[1])))].filter(Boolean) as StoredBundle[]
@@ -183,18 +185,20 @@ function createDatabase() {
               if (query.includes('insert into "deployments"')) {
                 const appId = String(values[0]);
                 const feature = String(values[1]);
-                const key = deploymentKey(appId, feature);
+                const runtimeVersion = String(values[2]);
+                const key = deploymentKey(appId, feature, runtimeVersion);
                 const current = deployments.get(key);
                 const expectedRevision = Number(values.at(-1));
                 if (current && current.revision !== expectedRevision) return { meta: { changes: 0 } };
                 deployments.set(key, {
                   appId,
                   featureId: feature,
-                  bundleId: values[2] === null ? null : String(values[2]),
-                  enabled: Number(values[3]),
-                  force: Number(values[4]),
-                  revision: Number(values[5]),
-                  updatedAt: String(values[6]),
+                  runtimeVersion,
+                  bundleId: values[3] === null ? null : String(values[3]),
+                  enabled: Number(values[4]),
+                  force: Number(values[5]),
+                  revision: Number(values[6]),
+                  updatedAt: String(values[7]),
                 });
                 return { meta: { changes: 1 } };
               }
@@ -332,7 +336,7 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     environment,
     new Request('http://127.0.0.1:8787/api/deployments', { headers: sessionAuthorization }),
   );
-  assert.deepEqual(await scopes.json(), [{ appId: 'shop', feature: 'delivery' }]);
+  assert.deepEqual(await scopes.json(), [{ appId: 'shop', feature: 'delivery', runtimeVersion: 'expo-57' }]);
 }
 
 {
@@ -352,58 +356,99 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
 {
   const promote = await updateDeployment(
     environment,
-    new Request('http://127.0.0.1:8787/api/deploy/delivery', { headers: sessionAuthorization }),
+    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-57', { headers: sessionAuthorization }),
     release.appId!,
     'delivery',
     { bundleId: release.releaseId, force: false },
   );
   assert.equal(promote.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery')?.revision, 1);
-  assert.equal(storage.deployments.get('shop/delivery')?.enabled, 0);
+  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.revision, 1);
+  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.enabled, 0);
 
   const enabled = await updateDeployment(
     environment,
-    new Request('http://127.0.0.1:8787/api/deploy/delivery', { headers: sessionAuthorization }),
+    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-57', { headers: sessionAuthorization }),
     release.appId!,
     'delivery',
     { enabled: true },
   );
   assert.equal(enabled.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery')?.revision, 2);
-  assert.equal(storage.deployments.get('shop/delivery')?.enabled, 1);
+  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.revision, 2);
+  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.enabled, 1);
 
   const noOp = await updateDeployment(
     environment,
-    new Request('http://127.0.0.1:8787/api/deploy/delivery', { headers: sessionAuthorization }),
+    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-57', { headers: sessionAuthorization }),
     release.appId!,
     'delivery',
     { bundleId: release.releaseId, force: false },
   );
   assert.equal(noOp.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery')?.revision, 2);
+  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.revision, 2);
 
   const forced = await updateDeployment(
     environment,
-    new Request('http://127.0.0.1:8787/api/deploy/delivery', { headers: sessionAuthorization }),
+    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-57', { headers: sessionAuthorization }),
     release.appId!,
     'delivery',
     { bundleId: release.releaseId, force: true },
   );
   assert.equal(forced.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery')?.revision, 3);
-  assert.equal(storage.deployments.get('shop/delivery')?.force, 1);
+  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.revision, 3);
+  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.force, 1);
 
   const disabled = await updateDeployment(
     environment,
-    new Request('http://127.0.0.1:8787/api/deploy/delivery', { headers: sessionAuthorization }),
+    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-57', { headers: sessionAuthorization }),
     release.appId!,
     'delivery',
     { enabled: false },
   );
   assert.equal(disabled.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery')?.bundleId, release.releaseId);
-  assert.equal(storage.deployments.get('shop/delivery')?.force, 0);
+  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.bundleId, release.releaseId);
+  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.force, 0);
 }
+
+const alternateRuntimeRelease: ReleaseMetadata = {
+  ...release,
+  releaseId: 'delivery-20260902T000000000Z-runtime2',
+  runtimeVersion: 'expo-fingerprint-2',
+};
+const alternateRegistered = await registerUpload(
+  environment,
+  new Request('http://127.0.0.1:8787/api/uploads', { headers: apiKeyAuthorization }),
+  alternateRuntimeRelease,
+);
+const alternateRegistration = await alternateRegistered.json() as {
+  upload: { url: string; headers: Record<string, string> };
+};
+assert.equal(alternateRegistered.status, 200);
+assert.equal((await handleLocalUpload(
+  environment,
+  new Request(alternateRegistration.upload.url, {
+    method: 'PUT',
+    headers: alternateRegistration.upload.headers,
+    body: archive,
+  }),
+  alternateRuntimeRelease.appId!,
+  alternateRuntimeRelease.feature,
+  alternateRuntimeRelease.releaseId,
+)).status, 200);
+assert.equal((await completeUpload(
+  environment,
+  new Request(`http://127.0.0.1:8787/api/uploads/${alternateRuntimeRelease.releaseId}/complete`, { headers: apiKeyAuthorization }),
+  alternateRuntimeRelease.releaseId,
+  alternateRuntimeRelease,
+)).status, 201);
+assert.equal((await updateDeployment(
+  environment,
+  new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-fingerprint-2', { headers: sessionAuthorization }),
+  alternateRuntimeRelease.appId!,
+  alternateRuntimeRelease.feature,
+  { bundleId: alternateRuntimeRelease.releaseId, force: false },
+)).status, 200);
+assert.equal(storage.deployments.get('shop/delivery/expo-57')?.bundleId, release.releaseId);
+assert.equal(storage.deployments.get('shop/delivery/expo-fingerprint-2')?.bundleId, alternateRuntimeRelease.releaseId);
 
 assert.equal(hexToBase64(release.archiveSha256).length, 44);
 console.log('Cloudflare control API tests passed.');

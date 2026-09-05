@@ -17,6 +17,7 @@ export type DeploymentStatus = 'active' | 'disabled' | 'empty';
 export type Deployment = {
   appId: string;
   feature: string;
+  runtimeVersion: string;
   bundleId: string | null;
   enabled: boolean;
   force: boolean;
@@ -30,7 +31,7 @@ export type DeliveryOverview = {
   bundles: Bundle[];
 };
 
-export type DeliveryScope = Pick<Deployment, 'appId' | 'feature'>;
+export type DeliveryScope = Pick<Deployment, 'appId' | 'feature' | 'runtimeVersion'>;
 
 export type UpdateDeployment =
   | { enabled: boolean }
@@ -39,8 +40,8 @@ export type UpdateDeployment =
 export const deliveryQueryKeys = {
   session: ['auth', 'session'] as const,
   scopes: ['delivery', 'scopes'] as const,
-  overview: (appId: string, feature: string, sessionRevision: number) =>
-    ['delivery', 'overview', appId, feature, sessionRevision] as const,
+  overview: (appId: string, feature: string, runtimeVersion: string, sessionRevision: number) =>
+    ['delivery', 'overview', appId, feature, runtimeVersion, sessionRevision] as const,
 };
 
 export type ConsoleUser = {
@@ -108,9 +109,9 @@ export const deliveryApi = {
     if (!response.ok) throw new DeliveryApiError(response.status, `Request failed with HTTP ${response.status}.`);
   },
 
-  getOverview(appId: string, feature: string): Promise<DeliveryOverview> {
+  getOverview(appId: string, feature: string, runtimeVersion: string): Promise<DeliveryOverview> {
     return request<DeliveryOverview>(
-      `/api/deploy/${encodeURIComponent(appId)}/${encodeURIComponent(feature)}`,
+      `/api/deploy/${encodeURIComponent(appId)}/${encodeURIComponent(feature)}?runtimeVersion=${encodeURIComponent(runtimeVersion)}`,
     );
   },
 
@@ -121,10 +122,11 @@ export const deliveryApi = {
   updateDeployment(
     appId: string,
     feature: string,
+    runtimeVersion: string,
     update: UpdateDeployment,
   ): Promise<DeliveryOverview> {
     return request<DeliveryOverview>(
-      `/api/deploy/${encodeURIComponent(appId)}/${encodeURIComponent(feature)}`,
+      `/api/deploy/${encodeURIComponent(appId)}/${encodeURIComponent(feature)}?runtimeVersion=${encodeURIComponent(runtimeVersion)}`,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

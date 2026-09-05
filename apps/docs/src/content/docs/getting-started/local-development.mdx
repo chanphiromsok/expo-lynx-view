@@ -1,59 +1,31 @@
 ---
 title: Local development
-description: Build and test a signed remote Lynx mini-app update on a physical iPhone.
+description: Test the same Worker, D1, R2, and mobile contract locally.
 ---
 
-The Delivery source is in the Expo monorepo:
-
-```text
-apps/expo-lynx-example/features/delivery
-```
-
-Complete [installation](/getting-started/installation/) once before using this
-loop. It creates the embedded baseline and compiles the delivery endpoint and
-verification key into the iOS app. The commands below only publish routine
-remote mini-app changes.
-
-For normal remote-update development, keep one local delivery server running and publish a new signed release whenever the mini-app source changes.
-
-For its storage layout, token behavior, API contract, and LAN safety guidance,
-see [local delivery server](/managed-delivery/local-server/).
-
-## Start the local delivery service
-
-In the first terminal, run this from the repository root and leave it running:
+Use three terminals from the repository root:
 
 ```sh
-pnpm lynx local start --host 0.0.0.0 --port 3000
-```
+# Terminal 1: Vite console, local D1/R2, and LAN-accessible Worker.
+pnpm lynx console
 
-The command stores its publisher token only in ignored local state and prints both a loopback and a LAN channel URL.
+# Terminal 2: Expo app.
+pnpm start
 
-:::caution[Use the app's compiled LAN address]
-A physical iPhone must use the Mac's LAN IP, never `localhost`. If the Mac IP changes, update the Expo plugin's channel URL and make a new internal iOS build.
-:::
-
-## Publish a source change
-
-After editing files in `features/delivery`, use a second terminal:
-
-```sh
+# Terminal 3: after a feature source change.
 pnpm lynx release delivery
 ```
 
-This command builds the Lynx production output, packages the bundle and static resources into a ZIP, signs it, uploads it to the local service, and promotes `delivery/stable`.
+The release command builds the Lynx feature, packages `release.zip`, uploads
+it to the local Worker, and registers the immutable bundle. It does not enable
+it. Open the local console, choose the bundle, and enable delivery.
 
-Check the active channel at any time:
+For a physical iPhone, compile the app with the LAN Worker URL printed by
+`pnpm lynx console`, for example `http://192.168.x.x:8787/v1/default/delivery`.
+Never use `localhost` on a phone. HTTP is allowed only in an internal Release
+build with `LYNX_ALLOW_LOCAL_MANAGED_RELEASE=1`; production must use HTTPS.
 
-```sh
-pnpm lynx status delivery
-```
-
-## Test it on the phone
-
-The current implementation uses the safe `next-open` activation behavior:
-
-1. Fully close and reopen the host app. The new remote bundle downloads and stages while the existing local bundle remains usable.
-2. Fully close and reopen the app again. The staged release becomes active.
-
-No Expo prebuild or iOS rebuild is needed for a routine remote release. A native rebuild is required only when changing a compiled input such as the embedded fallback, trust key, or delivery channel URL.
+The local Worker persists D1 and R2 data under
+`apps/console/.wrangler/delivery-worker-v2`. To inspect D1 in TablePlus, select
+the newest Wrangler-managed `.sqlite` file in that directory; do not commit its
+path because Wrangler controls the filename.

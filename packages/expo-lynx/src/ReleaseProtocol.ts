@@ -46,6 +46,7 @@ export type DirectDeploymentPayload =
       feature: string;
       revision: number;
       enabled: false;
+      runtimeVersion: string;
       issuedAt: string;
     }
   | {
@@ -238,7 +239,7 @@ export function parseDeploymentPayload(
             'force',
             'issuedAt',
           ]
-        : ['schemaVersion', 'type', 'feature', 'revision', 'enabled', 'issuedAt']
+        : ['schemaVersion', 'type', 'feature', 'revision', 'enabled', 'runtimeVersion', 'issuedAt']
     );
     assertString(value.feature, 'invalid-feature', 'Deployment feature must be a string.');
     assertFeature(value.feature);
@@ -252,6 +253,8 @@ export function parseDeploymentPayload(
       'invalid-revision',
       'Revision must be a positive safe integer.'
     );
+    assertString(value.runtimeVersion, 'invalid-version', 'Runtime version must be a string.');
+    assertProtocolVersion(value.runtimeVersion, 'runtimeVersion');
     assertString(value.issuedAt, 'invalid-timestamp', 'issuedAt must be an ISO-8601 timestamp.');
     assertTimestamp(value.issuedAt, 'issuedAt');
 
@@ -262,6 +265,7 @@ export function parseDeploymentPayload(
         feature: value.feature,
         revision: value.revision,
         enabled: false,
+        runtimeVersion: value.runtimeVersion,
         issuedAt: value.issuedAt,
       };
     }

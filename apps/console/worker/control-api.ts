@@ -23,6 +23,7 @@ const featureId = /^[a-z][a-z0-9-]{0,63}$/;
 const appId = /^[a-z][a-z0-9-]{0,63}$/;
 const bundleId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const sha256 = /^[a-f0-9]{64}$/;
+const runtimeVersion = /^[\u0020-\u007e]{1,128}$/;
 
 export interface ControlEnv extends AuthEnv {
   ARTIFACTS: R2Bucket;
@@ -70,7 +71,7 @@ export async function getDeploymentOverview(
     const [app, feature] = deploymentScope(appOrFeature, requestedFeature);
     assertApp(app);
     assertFeature(feature);
-    return jsonResponse(200, await readOverview(environment, app, feature));
+    return jsonResponse(200, await readOverview(environment, app, feature, requestRuntimeVersion(request)));
   });
 }
 
@@ -81,16 +82,16 @@ export async function getDeploymentScopes(
   return handleConsoleRequest(environment, request, async () => {
     const database = createDeliveryDatabase(environment.DB);
     const [bundleScopes, deploymentScopes] = await Promise.all([
-      database.select({ appId: bundles.appId, feature: bundles.featureId })
+      database.select({ appId: bundles.appId, feature: bundles.featureId, runtimeVersion: bundles.runtimeVersion })
         .from(bundles)
-        .groupBy(bundles.appId, bundles.featureId),
-      database.select({ appId: deployments.appId, feature: deployments.featureId })
+        .groupBy(bundles.appId, bundles.featureId, bundles.runtimeVersion),
+      database.select({ appId: deployments.appId, feature: deployments.featureId, runtimeVersion: deployments.runtimeVersion })
         .from(deployments)
-        .groupBy(deployments.appId, deployments.featureId),
+        .groupBy(deployments.appId, deployments.featureId, deployments.runtimeVersion),
     ]);
-    const scopes = new Map<string, { appId: string; feature: string }>();
+    const scopes = new Map<string, { appId: string; feature: string; runtimeVersion: string }>();
     for (const scope of [...bundleScopes, ...deploymentScopes]) {
-      scopes.set(`${scope.appId}/${scope.feature}`, scope);
+      scopes.set(`${scope.appId}/${scope.feature}/${scope.runtimeVersion}`, scope);
     }
     return jsonResponse(200, [...scopes.values()].sort((left, right) =>
       left.appId.localeCompare(right.appId) || left.feature.localeCompare(right.feature),
@@ -110,8 +111,9 @@ export async function updateDeployment(
     const input = (maybeInput ?? requestedFeatureOrInput) as DeploymentUpdateInput;
     assertApp(app);
     assertFeature(feature);
+    const selectedRuntimeVersion = requestRuntimeVersion(request);
     const update = normalizeUpdate(input);
-    const current = await readDeployment(environment, app, feature);
+    const current = await readDeployment(environment, app, feature, selectedRuntimeVersion);
     const enabled = current?.enabled ?? false;
     const currentBundleId = current?.bundleId ?? null;
     const currentRevision = current?.revision ?? 0;
@@ -121,7 +123,7 @@ export async function updateDeployment(
     let nextForce = false;
 
     if ('enabled' in update) {
-      if (update.enabled === enabled) return jsonResponse(200, await readOverview(environment, app, feature));
+      if (update.enabled === enabled) return jsonResponse(200, await readOverview(environment, app, feature, selectedRuntimeVersion));
       if (update.enabled && !currentBundleId) {
         throw new ApiError(409, 'deployment-empty', 'Select a bundle before enabling delivery.');
       }
@@ -129,8 +131,11 @@ export async function updateDeployment(
     } else {
       const bundle = await readBundle(environment, app, feature, update.bundleId);
       if (!bundle) throw new ApiError(404, 'bundle-not-found', 'Registered bundle was not found.');
+      if (bundle.runtimeVersion !== selectedRuntimeVersion) {
+        throw new ApiError(409, 'runtime-mismatch', 'Select a bundle built for the current runtime.');
+      }
       if (currentBundleId === bundle.id && !update.force) {
-        return jsonResponse(200, await readOverview(environment, app, feature));
+        return jsonResponse(200, await readOverview(environment, app, feature, selectedRuntimeVersion));
       }
       nextBundleId = bundle.id;
       nextForce = update.force;
@@ -143,6 +148,7 @@ export async function updateDeployment(
       .values({
         appId: app,
         featureId: feature,
+        runtimeVersion: selectedRuntimeVersion,
         bundleId: nextBundleId,
         enabled: nextEnabled,
         force: nextForce,
@@ -150,7 +156,7 @@ export async function updateDeployment(
         updatedAt,
       })
       .onConflictDoUpdate({
-        target: [deployments.appId, deployments.featureId],
+        target: [deployments.appId, deployments.featureId, deployments.runtimeVersion],
         set: {
           bundleId: nextBundleId,
           enabled: nextEnabled,
@@ -164,7 +170,7 @@ export async function updateDeployment(
     if (Number(result.meta.changes ?? 0) !== 1) {
       throw new ApiError(409, 'deployment-conflict', 'Deployment changed concurrently; refresh and try again.');
     }
-    return jsonResponse(200, await readOverview(environment, app, feature));
+    return jsonResponse(200, await readOverview(environment, app, feature, selectedRuntimeVersion));
   });
 }
 
@@ -406,11 +412,11 @@ async function hashStoredObject(bucket: R2Bucket, key: string, expectedBytes: nu
   return sha256Hex(bytes);
 }
 
-async function readOverview(environment: ControlEnv, app: string, feature: string) {
+async function readOverview(environment: ControlEnv, app: string, feature: string, runtimeVersion: string) {
   const database = createDeliveryDatabase(environment.DB);
   const [deployment, availableBundles] = await Promise.all([
-    readDeployment(environment, app, feature),
-    database.select().from(bundles).where(and(eq(bundles.appId, app), eq(bundles.featureId, feature))).orderBy(desc(bundles.createdAt)).limit(50),
+    readDeployment(environment, app, feature, runtimeVersion),
+    database.select().from(bundles).where(and(eq(bundles.appId, app), eq(bundles.featureId, feature), eq(bundles.runtimeVersion, runtimeVersion))).orderBy(desc(bundles.createdAt)).limit(50),
   ]);
   const selectedBundleId = deployment?.bundleId ?? null;
   const enabled = deployment?.enabled ?? false;
@@ -418,6 +424,7 @@ async function readOverview(environment: ControlEnv, app: string, feature: strin
     deployment: {
       appId: app,
       feature,
+      runtimeVersion,
       bundleId: selectedBundleId,
       enabled,
       force: deployment?.force ?? false,
@@ -432,11 +439,11 @@ async function readOverview(environment: ControlEnv, app: string, feature: strin
   };
 }
 
-async function readDeployment(environment: ControlEnv, app: string, feature: string): Promise<DeploymentRow | null> {
+async function readDeployment(environment: ControlEnv, app: string, feature: string, runtimeVersion: string): Promise<DeploymentRow | null> {
   const [deployment] = await createDeliveryDatabase(environment.DB)
     .select()
     .from(deployments)
-    .where(and(eq(deployments.appId, app), eq(deployments.featureId, feature)))
+    .where(and(eq(deployments.appId, app), eq(deployments.featureId, feature), eq(deployments.runtimeVersion, runtimeVersion)))
     .limit(1);
   return deployment ?? null;
 }
@@ -491,6 +498,14 @@ function assertFeature(feature: string): void {
 
 function assertApp(value: string): void {
   if (!appId.test(value)) throw new ApiError(400, 'invalid-request', 'App ID is invalid.');
+}
+
+function requestRuntimeVersion(request: Request): string {
+  const value = new URL(request.url).searchParams.get('runtimeVersion') ?? '';
+  if (!runtimeVersion.test(value)) {
+    throw new ApiError(400, 'invalid-request', 'runtimeVersion is required.');
+  }
+  return value;
 }
 
 function deploymentScope(appOrFeature: string, requestedFeature?: string): [string, string] {

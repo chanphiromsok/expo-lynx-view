@@ -1,6 +1,7 @@
 import {
   createHash,
 } from 'node:crypto';
+import { createProjectHashAsync } from '@expo/fingerprint';
 import {
   cpSync,
   existsSync,
@@ -111,6 +112,24 @@ export function buildEmbedded(config, featureIds, runtimeVersion) {
 export function checkEmbedded(config, runtimeVersion) {
   assertVersion(runtimeVersion, 'runtimeVersion');
   return verifyEmbeddedTree(config.embeddedOutputDir, config, runtimeVersion, selectFeatures(config));
+}
+
+export async function createNativeRuntimeVersion(projectRoot) {
+  const runtimeVersion = await createProjectHashAsync(projectRoot);
+  assertVersion(runtimeVersion, 'Expo native runtime fingerprint');
+  return runtimeVersion;
+}
+
+export function readEmbeddedRuntimeVersion(config) {
+  const registry = parseJson(
+    readFileSync(resolve(config.embeddedOutputDir, 'registry.json')),
+    'Embedded registry'
+  );
+  if (!isObject(registry) || registry.schemaVersion !== 1 || !isObject(registry.features)) {
+    throw new Error('Embedded registry is malformed. Build the embedded baseline for the intended native app first.');
+  }
+  assertVersion(registry.runtimeVersion, 'Embedded registry runtimeVersion');
+  return registry.runtimeVersion;
 }
 
 export function packRelease(config, options) {

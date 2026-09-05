@@ -38,6 +38,7 @@
     }
   },
   "dependencies": {
+    "@expo/fingerprint": "0.20.10",
     "@oclif/core": "^4.14.0",
     "aws4fetch": "^1.0.20"
   }

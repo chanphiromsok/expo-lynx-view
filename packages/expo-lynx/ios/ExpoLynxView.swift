@@ -248,6 +248,7 @@ private struct ExpoLynxLoadTarget {
   let version: String
   let source: String
   let managedFeature: String?
+  let managedRuntimeVersion: String?
   let candidateManifestID: String?
 }
 
@@ -584,6 +585,7 @@ private extension ExpoLynxView {
             version: "embedded",
             source: "embedded",
             managedFeature: nil,
+            managedRuntimeVersion: nil,
             candidateManifestID: nil
           ),
           generation: generation
@@ -612,6 +614,7 @@ private extension ExpoLynxView {
           version: "development",
           source: "development",
           managedFeature: nil,
+          managedRuntimeVersion: nil,
           candidateManifestID: nil
         ),
         generation: generation
@@ -645,6 +648,7 @@ private extension ExpoLynxView {
           ?? "embedded",
         source: "embedded",
         managedFeature: nil,
+        managedRuntimeVersion: nil,
         candidateManifestID: nil
       ),
       generation: generation
@@ -674,16 +678,30 @@ extension ExpoLynxView {
     managedFeature = feature
     LynxManagedViewRegistry.shared.register(self)
 
-    let state = LynxManagedDeploymentState.shared.recover(feature: feature)
+    let runtimeVersion: String
+    do {
+      runtimeVersion = try LynxManagedDeliveryConfiguration.runtimeVersion()
+    } catch {
+      emitDeliveryError(error, fallbackURL: "", feature: feature)
+      loadEmbedded(feature: feature, generation: generation)
+      return
+    }
+
+    let state = LynxManagedDeploymentState.shared.recover(
+      feature: feature,
+      runtimeVersion: runtimeVersion
+    )
     if let pendingID = state.pendingReleaseID,
       let pending = LynxManagedBundleStore.shared.launchInstalledRelease(
         feature: feature,
-        releaseID: pendingID
+        releaseID: pendingID,
+        expectedRuntimeVersion: runtimeVersion
       )
     {
       LynxManagedDeploymentState.shared.beginAttempt(
         releaseID: pendingID,
-        feature: feature
+        feature: feature,
+        runtimeVersion: runtimeVersion
       )
       loadManagedRelease(
         pending,
@@ -693,7 +711,8 @@ extension ExpoLynxView {
     } else if let activeID = state.activeReleaseID,
       let active = LynxManagedBundleStore.shared.launchInstalledRelease(
         feature: feature,
-        releaseID: activeID
+        releaseID: activeID,
+        expectedRuntimeVersion: runtimeVersion
       )
     {
       loadManagedRelease(
@@ -768,6 +787,7 @@ extension ExpoLynxView {
         version: release.version,
         source: "cache",
         managedFeature: release.feature,
+        managedRuntimeVersion: try? LynxManagedDeliveryConfiguration.runtimeVersion(),
         candidateManifestID: candidate ? release.manifestID : nil
       ),
       generation: generation
@@ -1119,7 +1139,8 @@ private extension ExpoLynxView {
     generation: Int
   ) {
     guard let manifestID = target.candidateManifestID,
-      let feature = target.managedFeature
+      let feature = target.managedFeature,
+      let runtimeVersion = target.managedRuntimeVersion
     else { return }
 
     watchdogWorkItem?.cancel()
@@ -1137,14 +1158,19 @@ private extension ExpoLynxView {
     guard generation == loadGeneration else { return }
     LynxManagedDeploymentState.shared.fail(
       releaseID: manifestID,
-      feature: feature
+      feature: feature,
+      runtimeVersion: runtimeVersion
     )
-    let state = LynxManagedDeploymentState.shared.recover(feature: feature)
+    let state = LynxManagedDeploymentState.shared.recover(
+      feature: feature,
+      runtimeVersion: runtimeVersion
+    )
     if let activeID = state.activeReleaseID,
       activeID != manifestID,
       let active = LynxManagedBundleStore.shared.launchInstalledRelease(
         feature: feature,
-        releaseID: activeID
+        releaseID: activeID,
+        expectedRuntimeVersion: runtimeVersion
       )
     {
       loadManagedRelease(
@@ -1216,7 +1242,8 @@ extension ExpoLynxView {
     watchdogWorkItem?.cancel()
 
     if let manifestID = target.candidateManifestID,
-      let feature = target.managedFeature
+      let feature = target.managedFeature,
+      let runtimeVersion = target.managedRuntimeVersion
     {
       if forceReloadCompletion != nil {
         emitUpdate([
@@ -1230,7 +1257,8 @@ extension ExpoLynxView {
       } else {
         LynxManagedDeploymentState.shared.confirm(
           releaseID: manifestID,
-          feature: feature
+          feature: feature,
+          runtimeVersion: runtimeVersion
         )
       }
     }

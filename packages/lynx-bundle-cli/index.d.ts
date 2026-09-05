@@ -36,3 +36,5 @@ export type EmbeddedBaselineV1 = {
 };
 
 export function defineConfig(config: LynxBundleConfig): LynxBundleConfig;
+export function createNativeRuntimeVersion(projectRoot: string): Promise<string>;
+export function readEmbeddedRuntimeVersion(config: LynxBundleConfig): string;

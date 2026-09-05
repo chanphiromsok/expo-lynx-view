@@ -11,7 +11,11 @@ import { dirname, relative, resolve } from 'node:path';
 import { loadEnvFile } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { loadConfigAsync } from '../packages/lynx-bundle-cli/src/index.mjs';
+import {
+  createNativeRuntimeVersion,
+  loadConfigAsync,
+  readEmbeddedRuntimeVersion,
+} from '../packages/lynx-bundle-cli/src/index.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const exampleRoot = resolve(repositoryRoot, 'apps/expo-lynx-example');
@@ -20,7 +24,6 @@ const deliveryConsolePackage = '@expo-lynx/delivery-console';
 const bundleConfigPath = resolve(exampleRoot, 'lynx-bundle.config.mjs');
 const operationalCli = resolve(repositoryRoot, 'packages/lynx-bundle-cli/bin/lynx.mjs');
 const localDeliveryEnvPath = resolve(repositoryRoot, 'apps/console/.dev.vars');
-const runtimeVersion = 'expo-57';
 const FEATURE_ID = /^[a-z][a-z0-9-]{0,63}$/;
 
 function help() {
@@ -234,6 +237,7 @@ async function initProject(options) {
   } else if (dryRun) {
     process.stdout.write(`Would build the embedded baseline from ${paths.configPath}\n`);
   } else {
+    const runtimeVersion = await createNativeRuntimeVersion(paths.appRoot);
     run(process.execPath, [bundleCli, 'build-embedded', '--config', paths.configPath, '--runtime-version', runtimeVersion]);
     process.stdout.write(`Built embedded baselines at ${paths.bundle.embeddedOutputDir}\n`);
   }
@@ -248,7 +252,8 @@ function startConsole() {
   child.once('exit', (code) => { process.exitCode = code ?? 1; });
 }
 
-function buildEmbedded(feature) {
+async function buildEmbedded(feature) {
+  const runtimeVersion = await createNativeRuntimeVersion(exampleRoot);
   run(process.execPath, [bundleCli, 'build-embedded', feature, '--config', bundleConfigPath, '--runtime-version', runtimeVersion]);
 }
 
@@ -262,12 +267,15 @@ function configureLocalDeliveryUpload() {
   }
 }
 
-function release(feature, options) {
+async function release(feature, options) {
   if (options.has('--channel') || options.has('--activation')) {
     throw new Error('Release channels and activation flags were retired. Upload first, then select and enable the bundle in the console.');
   }
   const releaseId = generatedReleaseId(feature);
   const version = generatedVersion();
+  const runtimeVersion = readEmbeddedRuntimeVersion(
+    await loadConfigAsync({ configPath: bundleConfigPath })
+  );
   process.stdout.write(`Preparing ${feature}. Release identity is generated automatically.\n`);
   run(process.execPath, [bundleCli, 'pack', feature, '--config', bundleConfigPath, '--release-id', releaseId, '--version', version, '--platform', 'ios', '--runtime-version', runtimeVersion]);
   const releaseDirectory = resolve(exampleRoot, 'dist/lynx-releases', feature, releaseId);
@@ -316,11 +324,11 @@ async function main() {
   }
   const { options, positionals } = parseOptions(rest);
   if (scope === 'bundle' && command) {
-    buildEmbedded(requireFeature(command));
+    await buildEmbedded(requireFeature(command));
     return;
   }
   if (scope === 'release' && command) {
-    release(requireFeature(command), options);
+    await release(requireFeature(command), options);
     return;
   }
   if (positionals.length > 0) throw new Error(`Unexpected arguments: ${positionals.join(' ')}`);

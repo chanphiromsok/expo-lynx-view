@@ -47,15 +47,6 @@ actor LynxManagedBundleStore {
     manifestID: String
   ) throws -> LynxManagedRelease? {
     guard isSafeFeature(feature) else { return nil }
-    // V2 release IDs are opaque signed identifiers, not legacy manifest
-    // hashes. Prefer the V2 completion marker before considering the legacy
-    // manifest layout so a staged signed release can reopen cheaply.
-    if let installed = try installedV2Release(
-      feature: feature,
-      releaseID: manifestID
-    ) {
-      return installed
-    }
     guard isSHA256(manifestID) else { return nil }
     let releaseURL = readyURL(feature: feature, manifestID: manifestID)
     let manifestURL = releaseURL.appendingPathComponent("manifest.json")
@@ -90,9 +81,11 @@ actor LynxManagedBundleStore {
   /// receive its local template without an asynchronous gap.
   nonisolated func launchInstalledRelease(
     feature: String,
-    releaseID: String
+    releaseID: String,
+    expectedRuntimeVersion: String
   ) -> LynxManagedRelease? {
     guard Self.isSafeFeatureValue(feature),
+      Self.isSafeRuntimeVersionValue(expectedRuntimeVersion),
       releaseID.range(
         of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
         options: .regularExpression
@@ -110,7 +103,8 @@ actor LynxManagedBundleStore {
       let data = try? Data(contentsOf: completionURL, options: .mappedIfSafe),
       let completion = try? JSONDecoder().decode(V2Completion.self, from: data),
       completion.feature == feature,
-      completion.releaseID == releaseID
+      completion.releaseID == releaseID,
+      completion.runtimeVersion == expectedRuntimeVersion
     else { return nil }
 
     return LynxManagedRelease(
@@ -227,6 +221,7 @@ actor LynxManagedBundleStore {
   ) async throws -> LynxDeploymentUpdateResult {
     var request = noCacheURLRequest(deploymentURL)
     if let eTag, !eTag.isEmpty { request.setValue(eTag, forHTTPHeaderField: "If-None-Match") }
+    request.setValue(expectedRuntimeVersion, forHTTPHeaderField: "lynx-runtime-version")
     let (deploymentBytes, response) = try await URLSession.shared.bytes(for: request)
     guard let httpResponse = response as? HTTPURLResponse else {
       throw LynxDeliveryError(stage: .download, code: "ERR_LYNX_HTTP_0", message: "The Lynx deployment response was not HTTP.")
@@ -274,8 +269,7 @@ actor LynxManagedBundleStore {
       return .disabled(eTag: responseETag, revision: deployment.revision)
     }
     guard let releaseID = deployment.releaseId,
-      let runtimeVersion = deployment.runtimeVersion,
-      runtimeVersion == expectedRuntimeVersion,
+      deployment.runtimeVersion == expectedRuntimeVersion,
       let archiveURL = deployment.archiveUrl,
       let archiveSHA256 = deployment.archiveSha256,
       let archiveBytes = deployment.archiveBytes,
@@ -295,7 +289,11 @@ actor LynxManagedBundleStore {
         revision: deployment.revision
       )
     }
-    if let installed = try installedV2Release(feature: expectedFeature, releaseID: releaseID) {
+    if let installed = try installedV2Release(
+      feature: expectedFeature,
+      releaseID: releaseID,
+      expectedRuntimeVersion: expectedRuntimeVersion
+    ) {
       return .selected(
         release: installed,
         force: force,
@@ -309,6 +307,7 @@ actor LynxManagedBundleStore {
       feature: expectedFeature,
       releaseID: releaseID,
       version: version,
+      runtimeVersion: expectedRuntimeVersion,
       archiveURL: try resolveRemoteURL(archiveURL, relativeTo: deploymentURL),
       archiveBytes: archiveBytes,
       archiveSHA256: archiveSHA256
@@ -326,12 +325,17 @@ actor LynxManagedBundleStore {
     feature: String,
     releaseID: String,
     version: String,
+    runtimeVersion: String,
     archiveURL: URL,
     archiveBytes: Int64,
     archiveSHA256: String
   ) async throws -> LynxManagedRelease {
     let key = "\(feature)/\(releaseID)"
-    if let installed = try installedV2Release(feature: feature, releaseID: releaseID) { return installed }
+    if let installed = try installedV2Release(
+      feature: feature,
+      releaseID: releaseID,
+      expectedRuntimeVersion: runtimeVersion
+    ) { return installed }
     if let task = v2Installs[key] { return try await task.value }
     let task = Task { [self] in
       try ensureDiskSpace(requiredBytes: archiveBytes + LynxArchiveLimits.maxUncompressedBytes)
@@ -339,6 +343,7 @@ actor LynxManagedBundleStore {
         feature: feature,
         releaseID: releaseID,
         version: version,
+        runtimeVersion: runtimeVersion,
         archiveURL: archiveURL,
         archiveBytes: archiveBytes,
         archiveSHA256: archiveSHA256
@@ -353,6 +358,7 @@ actor LynxManagedBundleStore {
     feature: String,
     releaseID: String,
     version: String,
+    runtimeVersion: String,
     archiveURL: URL,
     archiveBytes: Int64,
     archiveSHA256: String
@@ -378,66 +384,46 @@ actor LynxManagedBundleStore {
       feature: feature,
       releaseID: releaseID,
       version: version,
+      runtimeVersion: runtimeVersion,
       archiveSHA256: archiveSHA256
     )
     try JSONEncoder().encode(completion).write(to: extracted.appendingPathComponent("completion.json"), options: .atomic)
     let final = v2ReadyURL(feature: feature, releaseID: releaseID)
     try fileManager.createDirectory(at: final.deletingLastPathComponent(), withIntermediateDirectories: true)
     if !fileManager.fileExists(atPath: final.path) { try fileManager.moveItem(at: extracted, to: final) }
-    guard let installed = try installedV2Release(feature: feature, releaseID: releaseID) else { throw LynxDeliveryError(stage: .archive, code: "ERR_LYNX_RELEASE_INSTALL", message: "The completed Lynx release could not be reopened.") }
+    guard let installed = try installedV2Release(
+      feature: feature,
+      releaseID: releaseID,
+      expectedRuntimeVersion: runtimeVersion
+    ) else { throw LynxDeliveryError(stage: .archive, code: "ERR_LYNX_RELEASE_INSTALL", message: "The completed Lynx release could not be reopened.") }
     return installed
   }
 
-  private func installedV2Release(feature: String, releaseID: String) throws -> LynxManagedRelease? {
+  private func installedV2Release(
+    feature: String,
+    releaseID: String,
+    expectedRuntimeVersion: String
+  ) throws -> LynxManagedRelease? {
     guard isSafeFeature(feature), releaseID.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", options: .regularExpression) != nil else { return nil }
     let directory = v2ReadyURL(feature: feature, releaseID: releaseID)
     let completionURL = directory.appendingPathComponent("completion.json")
     let bundleURL = directory.appendingPathComponent("main.lynx.bundle")
-    if !isRegularFile(completionURL), try migrateLegacyV2Release(feature: feature, releaseID: releaseID) {
-      return try installedV2Release(feature: feature, releaseID: releaseID)
-    }
-    guard isRegularFile(completionURL), isRegularFile(bundleURL), let completion = try? JSONDecoder().decode(V2Completion.self, from: Data(contentsOf: completionURL)), completion.feature == feature, completion.releaseID == releaseID else { return nil }
+    guard isRegularFile(completionURL), isRegularFile(bundleURL), let completion = try? JSONDecoder().decode(V2Completion.self, from: Data(contentsOf: completionURL)), completion.feature == feature, completion.releaseID == releaseID, completion.runtimeVersion == expectedRuntimeVersion else { return nil }
     // Archive SHA-256 and ZIP structure were checked during installation. A
     // healthy cache reopen needs only its atomic completion marker and entry
     // bundle; it never rereads every installed asset.
     return LynxManagedRelease(feature: feature, manifestID: releaseID, version: completion.version, bundleURL: bundleURL)
   }
 
-  /// Idempotent startup/after-install maintenance. It removes work-in-progress
-  /// directories and incomplete releases, then evicts only unprotected oldest
-  /// complete releases. State pointers are supplied by the deployment coordinator,
-  /// so active/pending/previous candidates are never selected for eviction.
-  func reconcile(feature: String, protectedReleaseIDs: Set<String>) throws {
+  /// Runtime state is independently scoped. Until cleanup can prove every
+  /// namespace that protects a release, it only removes abandoned staging.
+  // ponytail: no ready-release eviction until runtime scopes can be enumerated;
+  // add scoped protection before enforcing a cache quota again.
+  func reconcile(feature: String) throws {
     guard isSafeFeature(feature) else { return }
     let root = featureRoot(feature: feature)
     let staging = root.appendingPathComponent("staging", isDirectory: true)
     removeInactiveStagingDirectories(at: staging)
-    let ready = root.appendingPathComponent("ready", isDirectory: true)
-    guard let directories = try? fileManager.contentsOfDirectory(
-      at: ready,
-      includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey],
-      options: [.skipsHiddenFiles]
-    ) else { return }
-    var complete: [(url: URL, date: Date, size: Int64)] = []
-    for directory in directories {
-      guard (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
-      let id = directory.lastPathComponent
-      guard let release = try installedV2Release(feature: feature, releaseID: id) else {
-        try? fileManager.removeItem(at: directory)
-        continue
-      }
-      let values = try? directory.resourceValues(forKeys: [.contentModificationDateKey])
-      complete.append((directory, values?.contentModificationDate ?? .distantPast, try directorySize(release.bundleURL.deletingLastPathComponent())))
-    }
-    var total = complete.reduce(Int64(0)) { $0 + $1.size }
-    var remainingCount = complete.count
-    for release in complete.sorted(by: { $0.date < $1.date }) where total > Self.maxReadyBytes || remainingCount > Self.maxReadyReleases {
-      let id = release.url.lastPathComponent
-      guard !protectedReleaseIDs.contains(id) else { continue }
-      try? fileManager.removeItem(at: release.url)
-      total -= release.size
-      remainingCount -= 1
-    }
   }
 
   private func readyURL(feature: String, manifestID: String) -> URL {
@@ -446,9 +432,6 @@ actor LynxManagedBundleStore {
       .appendingPathComponent("ready", isDirectory: true)
       .appendingPathComponent(manifestID, isDirectory: true)
   }
-
-  private static let maxReadyReleases = 4
-  private static let maxReadyBytes: Int64 = 256 * 1_024 * 1_024
 
   private func featureRoot(feature: String) -> URL {
     rootURL
@@ -459,21 +442,6 @@ actor LynxManagedBundleStore {
     featureRoot(feature: feature)
       .appendingPathComponent("ready", isDirectory: true)
       .appendingPathComponent(releaseID, isDirectory: true)
-  }
-
-  private func migrateLegacyV2Release(feature: String, releaseID: String) throws -> Bool {
-    let legacy = rootURL
-      .appendingPathComponent(feature, isDirectory: true)
-      .appendingPathComponent("active", isDirectory: true)
-      .appendingPathComponent("ready", isDirectory: true)
-      .appendingPathComponent(releaseID, isDirectory: true)
-    let completion = legacy.appendingPathComponent("completion.json")
-    guard isRegularFile(completion), isRegularFile(legacy.appendingPathComponent("main.lynx.bundle")) else { return false }
-    let destination = v2ReadyURL(feature: feature, releaseID: releaseID)
-    try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-    guard !fileManager.fileExists(atPath: destination.path) else { return true }
-    try fileManager.moveItem(at: legacy, to: destination)
-    return true
   }
 
   private func ensureDiskSpace(requiredBytes: Int64) throws {
@@ -488,15 +456,6 @@ actor LynxManagedBundleStore {
     else {
       throw LynxDeliveryError(stage: .resource, code: "ERR_LYNX_DISK_SPACE", message: "There is not enough free storage to install this Lynx release.")
     }
-  }
-
-  private func directorySize(_ directory: URL) throws -> Int64 {
-    guard let enumerator = fileManager.enumerator(at: directory, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
-    var size: Int64 = 0
-    for case let url as URL in enumerator {
-      size += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-    }
-    return size
   }
 
   private func removeInactiveStagingDirectories(at stagingRoot: URL) {
@@ -526,6 +485,10 @@ actor LynxManagedBundleStore {
     return feature.unicodeScalars.allSatisfy {
       CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0)
     }
+  }
+
+  private nonisolated static func isSafeRuntimeVersionValue(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.count <= 128 && !value.contains("\0")
   }
 
   private nonisolated static func isRegularFileValue(_ url: URL) -> Bool {

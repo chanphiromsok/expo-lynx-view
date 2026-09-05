@@ -1,47 +1,38 @@
 ---
 title: Local delivery troubleshooting
-description: Diagnose LAN, channel, and local-server failures during managed delivery testing.
+description: Diagnose local Console, Worker, CLI upload, and iPhone connection failures.
 ---
 
-## `Channel was not found`
+## CLI cannot reach the Worker
 
-The delivery service is running, but no release has been promoted to `delivery/stable`.
+Start the local environment and retry:
 
 ```sh
+pnpm lynx console
 pnpm lynx release delivery
-pnpm lynx status delivery
 ```
 
-Then verify the exact LAN URL from the phone's point of view:
+For a remote Worker, confirm `LYNX_DELIVERY_SERVER` is the canonical public
+deployment URL, such as `https://worker.workers.dev/v1/default/delivery`, and
+that `LYNX_DELIVERY_API_KEY` is present in your ignored `.env.lynx`.
 
-```sh
-curl -i http://YOUR_MAC_LAN_IP:3000/v1/channels/delivery/stable
-```
+## R2 upload returns 403
 
-## `Request failed (404): Not found` while releasing
-
-An older static/legacy server is probably listening on port `3000`. It can answer an older public URL but does not support the authenticated `/v1/admin/...` upload routes.
-
-```sh
-lsof -nP -iTCP:3000 -sTCP:LISTEN
-```
-
-Stop the old listeners, then start one current delivery service:
-
-```sh
-pnpm lynx local start --host 0.0.0.0 --port 3000
-```
+The CLI uploads from your machine. Check the R2 S3 account ID, bucket, access
+key ID, and secret access key in `.env.lynx`; the access key needs write access
+to that bucket. The mobile app never receives these credentials.
 
 ## iPhone cannot connect
 
-Check all of these:
+For local testing, use your Mac's current LAN IP in the build-time endpoint,
+not `localhost`. Check Wi-Fi, firewall, VPN, and that the Worker listens on
+`0.0.0.0`. Plain HTTP additionally needs an internal Release build compiled
+with `LYNX_ALLOW_LOCAL_MANAGED_RELEASE=1`.
 
-- Phone and Mac are on the same Wi-Fi network.
-- The server was started with `--host 0.0.0.0`.
-- macOS firewall permits the selected port.
-- The channel URL uses the current LAN IP, not `localhost`.
-- VPN, guest-network isolation, and private relay are disabled for the test.
+## A published update does not appear
 
-## A published update does not appear immediately
-
-The current managed flow stages the update safely. Close and reopen the host app once to download/stage the release, then close and reopen it again to activate it.
+The Console must select and enable the uploaded bundle for the exact
+`(appId, feature, runtimeVersion)` scope. With force disabled, close and reopen
+the feature after it stages. If the Worker reports a runtime mismatch or the
+app keeps its embedded baseline, build a matching native binary with
+`pnpm lynx bundle <feature>` and Expo prebuild.

@@ -6,7 +6,7 @@ import { ion } from "starlight-ion-theme";
 export default defineConfig({
   integrations: [
     starlight({
-      plugins: [ion()],
+      // plugins: [ion()],
       title: "Expo Lynx",
       description:
         "Embed, deliver, and operate signed Lynx mini-app bundles in Expo.",

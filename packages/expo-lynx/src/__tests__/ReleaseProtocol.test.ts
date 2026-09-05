@@ -61,6 +61,7 @@ describe('V2 release protocol', () => {
       feature: 'shopping',
       revision: 8,
       enabled: false,
+      runtimeVersion: 'expo-57',
       issuedAt: '2026-08-29T10:00:00.000Z',
     });
     expect(parsed(parseReleasePayload(releaseFixture(), 'shopping'))).toMatchObject({

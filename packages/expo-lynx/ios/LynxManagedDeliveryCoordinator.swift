@@ -2,8 +2,7 @@ import Foundation
 
 enum LynxManagedDeliveryConfiguration {
   private static let infoPlistDeliveryEndpoints = "ExpoLynxDeliveryEndpoints"
-  private static let infoPlistRuntimeVersion = "EXUpdatesRuntimeVersion"
-  private static let legacyInfoPlistRuntimeVersion = "ExpoLynxRuntimeVersion"
+  private static let infoPlistRuntimeVersion = "ExpoLynxRuntimeVersion"
 
   static func deploymentURL(feature: String) throws -> URL {
     guard let endpoints = Bundle.main.object(
@@ -36,8 +35,7 @@ enum LynxManagedDeliveryConfiguration {
   }
 
   static func runtimeVersion() throws -> String {
-    let value = (Bundle.main.object(forInfoDictionaryKey: infoPlistRuntimeVersion) as? String)
-      ?? (Bundle.main.object(forInfoDictionaryKey: legacyInfoPlistRuntimeVersion) as? String)
+    let value = Bundle.main.object(forInfoDictionaryKey: infoPlistRuntimeVersion) as? String
     guard let value, !value.isEmpty, value.utf8.count <= 128, !value.contains("\0") else {
       throw LynxDeliveryError(
         stage: .compatibility,
@@ -147,22 +145,22 @@ actor LynxManagedDeliveryCoordinator {
   }
 
   private func reconcileCache(feature: String) async {
-    let state = await LynxManagedDeploymentState.shared.recover(feature: feature)
-    try? await LynxManagedBundleStore.shared.reconcile(
-      feature: feature,
-      protectedReleaseIDs: state.protectedReleaseIDs
-    )
+    try? await LynxManagedBundleStore.shared.reconcile(feature: feature)
   }
 
   private func performCheckForUpdate(
     feature: String,
     deploymentURL: URL
   ) async throws -> LynxManagedUpdateCheckResult {
-    let state = await LynxManagedDeploymentState.shared.recover(feature: feature)
+    let runtimeVersion = try LynxManagedDeliveryConfiguration.runtimeVersion()
+    let state = await LynxManagedDeploymentState.shared.recover(
+      feature: feature,
+      runtimeVersion: runtimeVersion
+    )
     let result = try await LynxManagedBundleStore.shared.checkForUpdate(
       deploymentURL: deploymentURL,
       expectedFeature: feature,
-      expectedRuntimeVersion: try LynxManagedDeliveryConfiguration.runtimeVersion(),
+      expectedRuntimeVersion: runtimeVersion,
       eTag: state.lastETag,
       lastRevision: state.lastRevision,
       blockedReleaseIDs: Set(state.failedReleaseIDs)
@@ -173,7 +171,8 @@ actor LynxManagedDeliveryCoordinator {
       await LynxManagedDeploymentState.shared.recordDeploymentCheck(
         eTag: eTag,
         revision: nil,
-        feature: feature
+        feature: feature,
+        runtimeVersion: runtimeVersion
       )
       return LynxManagedUpdateCheckResult(
         feature: feature,
@@ -187,7 +186,8 @@ actor LynxManagedDeliveryCoordinator {
       await LynxManagedDeploymentState.shared.recordDeploymentCheck(
         eTag: eTag,
         revision: revision,
-        feature: feature
+        feature: feature,
+        runtimeVersion: runtimeVersion
       )
       return LynxManagedUpdateCheckResult(
         feature: feature,
@@ -201,7 +201,8 @@ actor LynxManagedDeliveryCoordinator {
       await LynxManagedDeploymentState.shared.recordDeploymentCheck(
         eTag: eTag,
         revision: revision,
-        feature: feature
+        feature: feature,
+        runtimeVersion: runtimeVersion
       )
       return LynxManagedUpdateCheckResult(
         feature: feature,
@@ -217,9 +218,13 @@ actor LynxManagedDeliveryCoordinator {
       await LynxManagedDeploymentState.shared.recordDeploymentCheck(
         eTag: eTag,
         revision: revision,
-        feature: feature
+        feature: feature,
+        runtimeVersion: runtimeVersion
       )
-      let latest = await LynxManagedDeploymentState.shared.recover(feature: feature)
+      let latest = await LynxManagedDeploymentState.shared.recover(
+        feature: feature,
+        runtimeVersion: runtimeVersion
+      )
 
       if !force {
         guard latest.activeReleaseID != release.manifestID,
@@ -235,7 +240,8 @@ actor LynxManagedDeliveryCoordinator {
         }
         await LynxManagedDeploymentState.shared.stage(
           releaseID: release.manifestID,
-          feature: feature
+          feature: feature,
+          runtimeVersion: runtimeVersion
         )
         return LynxManagedUpdateCheckResult(
           feature: feature,
@@ -250,7 +256,8 @@ actor LynxManagedDeliveryCoordinator {
       guard mounted else {
         await LynxManagedDeploymentState.shared.stage(
           releaseID: release.manifestID,
-          feature: feature
+          feature: feature,
+          runtimeVersion: runtimeVersion
         )
         return LynxManagedUpdateCheckResult(
           feature: feature,
@@ -263,7 +270,8 @@ actor LynxManagedDeliveryCoordinator {
 
       await LynxManagedDeploymentState.shared.beginAttempt(
         releaseID: release.manifestID,
-        feature: feature
+        feature: feature,
+        runtimeVersion: runtimeVersion
       )
       do {
         try await LynxManagedViewRegistry.shared.reloadMountedViews(
@@ -272,7 +280,8 @@ actor LynxManagedDeliveryCoordinator {
         )
         await LynxManagedDeploymentState.shared.confirm(
           releaseID: release.manifestID,
-          feature: feature
+          feature: feature,
+          runtimeVersion: runtimeVersion
         )
         return LynxManagedUpdateCheckResult(
           feature: feature,
@@ -284,7 +293,8 @@ actor LynxManagedDeliveryCoordinator {
       } catch {
         await LynxManagedDeploymentState.shared.fail(
           releaseID: release.manifestID,
-          feature: feature
+          feature: feature,
+          runtimeVersion: runtimeVersion
         )
         throw error
       }

@@ -13,12 +13,11 @@ export interface DeliveryEnv {
 type DeploymentRow = typeof deployments.$inferSelect & Partial<Pick<typeof bundles.$inferSelect,
   'version' | 'runtimeVersion' | 'archiveSha256' | 'archiveBytes'>>;
 
-type BundleRow = typeof bundles.$inferSelect;
-
 const featureId = /^[a-z][a-z0-9-]{0,63}$/;
 const appId = /^[a-z][a-z0-9-]{0,63}$/;
 const bundleId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const sha256 = /^[a-f0-9]{64}$/;
+const runtimeVersion = /^[\u0020-\u007e]{1,128}$/;
 const immutableCacheControl = 'public, max-age=31536000, immutable';
 
 export async function handlePublicDeliveryRequest(
@@ -70,21 +69,30 @@ async function getDeployment(
   if (!environment.DELIVERY_SIGNING_PRIVATE_KEY?.trim()) {
     return jsonResponse(503, { error: { code: 'signing-not-configured', message: 'Delivery signing is unavailable.' } });
   }
+  const runtime = request.headers.get('lynx-runtime-version') ?? '';
+  if (!runtimeVersion.test(runtime)) {
+    return jsonResponse(400, { error: { code: 'runtime-version-required', message: 'lynx-runtime-version is required.' } });
+  }
   const database = createDeliveryDatabase(environment.DB);
   const [deployment] = await database.select().from(deployments)
-    .where(and(eq(deployments.appId, app), eq(deployments.featureId, feature)))
+    .where(and(
+      eq(deployments.appId, app),
+      eq(deployments.featureId, feature),
+      eq(deployments.runtimeVersion, runtime),
+    ))
     .limit(1);
   const [bundle] = deployment?.bundleId
     ? await database.select().from(bundles).where(and(
       eq(bundles.appId, app),
       eq(bundles.featureId, feature),
+      eq(bundles.runtimeVersion, runtime),
       eq(bundles.id, deployment.bundleId),
     )).limit(1)
     : [];
   const row: DeploymentRow | null = deployment
-    ? { ...deployment, ...(bundle ?? {}) }
+    ? (bundle ? { ...deployment, ...bundle } : deployment)
     : null;
-  const document = deploymentDocument(feature, row, app, scopedRoute);
+  const document = deploymentDocument(feature, runtime, row, app, scopedRoute);
   if (!document) return unavailable();
   try {
     const signed = await signDocument(document, environment.DELIVERY_SIGNING_PRIVATE_KEY);
@@ -108,7 +116,7 @@ async function getDeployment(
   }
 }
 
-function deploymentDocument(feature: string, row: DeploymentRow | null, app: string, scopedRoute: boolean): Record<string, unknown> | null {
+function deploymentDocument(feature: string, runtimeVersion: string, row: DeploymentRow | null, app: string, scopedRoute: boolean): Record<string, unknown> | null {
   if (!row || !row.enabled) {
     return {
       schemaVersion: 1,
@@ -116,6 +124,7 @@ function deploymentDocument(feature: string, row: DeploymentRow | null, app: str
       feature,
       revision: Math.max(1, row?.revision ?? 0),
       enabled: false,
+      runtimeVersion,
       issuedAt: row?.updatedAt ?? new Date(0).toISOString(),
     };
   }

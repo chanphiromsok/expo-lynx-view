@@ -26,7 +26,7 @@ Expo Lynx lets an Expo / React Native app render a Lynx mini-app from a verified
 		Remote ZIP releases are signed, hash checked, installed atomically, and served only from local verified files.
 	</Card>
 	<Card title="Test on an iPhone" icon="mobile">
-		Use the local delivery service to build, sign, upload, promote, and test a mini-app over your LAN.
+		Run the local Console and Worker, then build, upload, select, and test a mini-app over your LAN.
 	</Card>
 </CardGrid>
 
@@ -38,7 +38,7 @@ For a managed mini-app, the host loads the newest **verified local** version imm
 confirmed remote cache → otherwise embedded baseline
 ```
 
-It checks the remote channel after that first local render. A remote URL is never passed directly to `LynxView` in a production managed flow.
+It checks the remote deployment after that first local render. A remote URL is never passed directly to `LynxView` in a production managed flow.
 
 :::tip[Start with the local test loop]
 If you are adding Expo Lynx to a host app, begin with [installation](/getting-started/installation/). If it is already installed and you are changing the Delivery mini-app, use [local development](/getting-started/local-development/).

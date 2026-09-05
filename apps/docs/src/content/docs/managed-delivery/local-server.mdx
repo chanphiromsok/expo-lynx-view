@@ -1,147 +1,40 @@
 ---
-title: Local delivery server
-description: Run the persistent, signed local server that a physical iPhone can use for remote mini-app tests.
+title: Local Console and Worker
+description: Run the same Console and Worker contract locally before deploying to Cloudflare.
 ---
 
-The local delivery server is the server you use **today** for iOS testing. It
-is a persistent Node service in
-`scripts/local-lynx-delivery.mjs`, started through the friendly `pnpm lynx`
-command. It is intentionally production-shaped—immutable releases, signed
-channel pointers, separate archive upload, and token-protected operator
-routes—but it must not be deployed as the production service.
-
-## One-time setup
-
-From the repository root:
-
-```sh
-pnpm lynx init
-```
-
-This configures missing Expo Lynx plugin values, generates an RSA signing pair
-for local testing when needed, and builds the embedded baseline. The private
-key stays at:
+The local environment is the Console plus a Wrangler Worker runtime. It uses
+local D1/R2-compatible storage and the same public deployment route as the
+deployed Worker:
 
 ```text
-apps/expo-lynx-example/.local-lynx-keys/updates.private.pem
+GET /v1/:appId/:feature
 ```
 
-It is ignored by Git. The matching public key is copied to:
-
-```text
-apps/expo-lynx-example/keys/lynx/updates.public.pem
-```
-
-That public key is compiled into the iOS app during Expo prebuild. Because the
-trust root changed, run prebuild and install a new internal app before testing
-with the new local key.
-
-If you need the local phone endpoint to be set while initializing, run:
+Start it from the repository root:
 
 ```sh
-pnpm lynx init \
-  --channel-url http://192.168.1.20:3000/v1/channels/delivery/stable
+pnpm lynx console
 ```
 
-## Start it for a phone
+The local Worker requires `apps/console/.dev.vars` with these values:
 
-```sh
-pnpm lynx local start --host 0.0.0.0 --port 3000
+```dotenv
+INITIAL_ADMIN_USERNAME=your-name
+INITIAL_ADMIN_PASSWORD=choose-a-local-password
+INITIAL_ADMIN_API_KEY=lynx_live_local_key
+AUTH_SESSION_SECRET=random-local-secret
+DELIVERY_SIGNING_PRIVATE_KEY=your-local-private-key
+LOCAL_UPLOADS=true
 ```
 
-The process prints a loopback URL and LAN URLs. Put the **LAN** channel URL in
-the Expo plugin configuration, for example:
+The root command uses `INITIAL_ADMIN_API_KEY` automatically for local release
+uploads. Do not commit `.dev.vars`.
 
-```text
-http://192.168.1.20:3000/v1/channels/delivery/stable
-```
+Local D1/R2 state persists below `apps/console/.wrangler/delivery-worker-v2`.
+Wrangler owns the exact SQLite filename. In TablePlus, open the newest SQLite
+file in that directory to inspect the local tables.
 
-The iPhone and Mac must be on the same network. `localhost` does not work on a
-physical phone because it refers to the phone itself.
-
-:::caution[Keep the local publisher token private]
-Starting the server saves a randomly generated token in the ignored file
-`.local-lynx-delivery/lynx-cli.json`, with owner-only file permissions. The
-release CLI reads it automatically. Do not paste the token into `app.json`,
-source code, screenshots, or a remote environment.
-:::
-
-## Publish and activate a release
-
-In another terminal, after editing the Lynx source:
-
-```sh
-pnpm lynx release delivery
-pnpm lynx status delivery
-```
-
-`release` performs this sequence:
-
-```text
-ReactLynx source
-  → production bundle + static assets
-  → release.zip + signed release manifest
-  → authenticated upload
-  → channel promotion
-  → iPhone background check, verify, stage
-  → next mini-app open activates the new local release
-```
-
-The CLI creates an immutable release ID and version automatically. Use a
-different channel only when you deliberately want an isolated audience:
-
-```sh
-pnpm lynx release delivery --channel preview
-pnpm lynx status delivery --channel preview
-```
-
-The app must have that feature/channel endpoint compiled in its Expo plugin
-configuration before it can use it.
-
-## Where local data is stored
-
-| Location | Contents | Commit it? |
-| --- | --- | --- |
-| `.local-lynx-delivery/lynx-cli.json` | local server address and publisher token | No |
-| `.local-lynx-delivery/` | local server's releases, channel state, and upload staging | No |
-| `apps/expo-lynx-example/.local-lynx-keys/` | local RSA private key | No |
-| `apps/expo-lynx-example/keys/lynx/updates.public.pem` | public verification key embedded into iOS | Yes for an intentional shared development key; never commit private keys |
-| `apps/expo-lynx-example/dist/lynx-releases/` | generated release ZIPs and envelopes | No |
-
-## HTTP contract
-
-The app uses only public, read-only endpoints:
-
-| Method | Route | Purpose |
-| --- | --- | --- |
-| `GET` | `/v1/channels/:feature/:channel` | Gets a signed channel pointer. |
-| `GET` | `/v1/releases/:feature/:releaseId/manifest` | Gets the signed release envelope. |
-| `GET` | `/v1/releases/:feature/:releaseId/release.zip` | Downloads the immutable release archive. |
-
-The publisher uses a Bearer token for operator routes:
-
-| Method | Route | Purpose |
-| --- | --- | --- |
-| `PUT` | `/v1/admin/releases/:feature/:releaseId/manifest` | Uploads and verifies the signed release manifest. |
-| `PUT` | `/v1/admin/releases/:feature/:releaseId/archive` | Uploads the ZIP and verifies its size and SHA-256 against the manifest. |
-| `POST` | `/v1/admin/channels/:feature/:channel/promote` | Atomically points a channel at a ready immutable release. |
-
-The local server validates the release signature before accepting the archive,
-checks the archive hash, and refuses to replace a release ID with different
-content. The mobile app verifies again before installation; server checks do
-not replace device-side trust verification.
-
-## Troubleshooting
-
-- **Phone gets HTTP 404 for the channel:** a release has not been promoted to
-  that feature/channel, or the app points at a different server. Run
-  `pnpm lynx status delivery` against the server you started.
-- **Phone gets connection error `-1004`:** check the LAN IP, Wi-Fi network,
-  firewall, and that the server was started with `--host 0.0.0.0`.
-- **Release gets 404 at `/v1/admin/...`:** you are publishing to an older
-  static server, not this delivery service. Stop the stale process, start
-  `pnpm lynx local start`, then run release again.
-- **New app does not accept a release:** the device build may embed a different
-  public key or channel map. Rebuild after changing either one.
-
-For the mobile behavior after a successful publish, see [the managed lifecycle](/managed-delivery/lifecycle/).
+Use [local iPhone testing](/managed-delivery/local-testing/) for the device
+flow, or [Cloudflare Worker](/managed-delivery/cloudflare-worker/) to deploy
+the same model remotely.

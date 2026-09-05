@@ -24,11 +24,11 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
       prepare(sql: string) {
         const query = sql.toLowerCase();
         return {
-          bind() {
+          bind(...values: unknown[]) {
             return {
               async first() {
                 if (sql.includes('FROM deployments')) {
-                  return includeDeployment ? {
+                  return includeDeployment && values[2] === 'expo-57' ? {
                     bundleId: releaseId,
                     enabled: 1,
                     force: 0,
@@ -44,9 +44,10 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
               },
               async raw() {
                 if (query.includes('from "deployments"')) {
-                  return includeDeployment ? [[
+                  return includeDeployment && values[2] === 'expo-57' ? [[
                     'default',
                     feature,
+                    'expo-57',
                     releaseId,
                     1,
                     0,
@@ -90,7 +91,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
 {
   const response = await handlePublicDeliveryRequest(
     environment(),
-    new Request(`https://delivery.example/v1/shop/${feature}`),
+    new Request(`https://delivery.example/v1/shop/${feature}`, { headers: { 'lynx-runtime-version': 'expo-57' } }),
   );
   assert.equal(response.status, 200);
   const body = await response.json() as { archiveUrl: string };
@@ -100,7 +101,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
 {
   const response = await handlePublicDeliveryRequest(
     environment(),
-    new Request(`https://delivery.example/v1/deploy/${feature}`),
+    new Request(`https://delivery.example/v1/deploy/${feature}`, { headers: { 'lynx-runtime-version': 'expo-57' } }),
   );
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
@@ -132,7 +133,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
   const notModified = await handlePublicDeliveryRequest(
     environment(),
     new Request(`https://delivery.example/v1/deploy/${feature}`, {
-      headers: { 'If-None-Match': eTag! },
+      headers: { 'If-None-Match': eTag!, 'lynx-runtime-version': 'expo-57' },
     }),
   );
   assert.equal(notModified.status, 304);
@@ -143,7 +144,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
 {
   const response = await handlePublicDeliveryRequest(
     environment({ deployment: false }),
-    new Request(`https://delivery.example/v1/deploy/${feature}`),
+    new Request(`https://delivery.example/v1/deploy/${feature}`, { headers: { 'lynx-runtime-version': 'expo-57' } }),
   );
   assert.equal(response.status, 200);
   const body = await response.json() as { enabled: boolean; revision: number };
@@ -153,6 +154,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
     feature,
     revision: 1,
     enabled: false,
+    runtimeVersion: 'expo-57',
     issuedAt: '1970-01-01T00:00:00.000Z',
   });
   assert.ok(response.headers.get('Lynx-Signature'));
@@ -160,8 +162,25 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyOn
 
 {
   const response = await handlePublicDeliveryRequest(
+    environment(),
+    new Request(`https://delivery.example/v1/deploy/${feature}`, { headers: { 'lynx-runtime-version': 'expo-58' } }),
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    schemaVersion: 1,
+    type: 'lynx-deployment',
+    feature,
+    revision: 1,
+    enabled: false,
+    runtimeVersion: 'expo-58',
+    issuedAt: '1970-01-01T00:00:00.000Z',
+  });
+}
+
+{
+  const response = await handlePublicDeliveryRequest(
     environment({ signingKey: '' }),
-    new Request(`https://delivery.example/v1/deploy/${feature}`),
+    new Request(`https://delivery.example/v1/deploy/${feature}`, { headers: { 'lynx-runtime-version': 'expo-57' } }),
   );
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), {

@@ -8,7 +8,7 @@ struct LynxDeploymentPayload: Decodable, Sendable {
   let enabled: Bool
   let releaseId: String?
   let version: String?
-  let runtimeVersion: String?
+  let runtimeVersion: String
   let archiveUrl: String?
   let archiveSha256: String?
   let archiveBytes: Int64?
@@ -33,7 +33,7 @@ struct LynxDeploymentPayload: Decodable, Sendable {
       throw invalid("The signed deployment payload is invalid JSON.")
     }
 
-    let commonKeys: Set<String> = ["schemaVersion", "type", "feature", "revision", "enabled", "issuedAt"]
+    let commonKeys: Set<String> = ["schemaVersion", "type", "feature", "revision", "enabled", "runtimeVersion", "issuedAt"]
     let enabledKeys = commonKeys.union([
       "releaseId", "version", "runtimeVersion", "archiveUrl", "archiveSha256", "archiveBytes", "force",
     ])
@@ -46,7 +46,8 @@ struct LynxDeploymentPayload: Decodable, Sendable {
       payload.feature == expectedFeature,
       expectedFeature.range(of: "^[a-z][a-z0-9-]{0,63}$", options: .regularExpression) != nil,
       payload.revision > 0,
-      parseTimestamp(payload.issuedAt) != nil
+      parseTimestamp(payload.issuedAt) != nil,
+      isSafeRuntimeVersion(payload.runtimeVersion)
     else {
       throw invalid("The signed deployment payload violates the V2 protocol.")
     }
@@ -56,8 +57,6 @@ struct LynxDeploymentPayload: Decodable, Sendable {
         releaseId.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", options: .regularExpression) != nil,
         let version = payload.version,
         version.range(of: "^[A-Za-z0-9][A-Za-z0-9.+-]{0,127}$", options: .regularExpression) != nil,
-        let runtimeVersion = payload.runtimeVersion,
-        isSafeRuntimeVersion(runtimeVersion),
         let archiveUrl = payload.archiveUrl,
         isSafeArtifactURL(archiveUrl),
         let archiveSha256 = payload.archiveSha256,
@@ -69,8 +68,7 @@ struct LynxDeploymentPayload: Decodable, Sendable {
       else {
         throw invalid("An enabled deployment is missing a valid release selection.")
       }
-    } else if payload.releaseId != nil || payload.version != nil || payload.runtimeVersion != nil
-      || payload.archiveUrl != nil || payload.archiveSha256 != nil || payload.archiveBytes != nil
+    } else if payload.releaseId != nil || payload.version != nil || payload.archiveUrl != nil || payload.archiveSha256 != nil || payload.archiveBytes != nil
       || payload.force != nil
     {
       throw invalid("A disabled deployment cannot select a release.")
