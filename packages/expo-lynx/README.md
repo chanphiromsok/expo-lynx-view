@@ -28,6 +28,12 @@ npx expo run:ios
 
 This module contains native code and does not work in Expo Go. The iOS deployment target is 16.4 or newer.
 
+> **Current limitation — Lynx images are unavailable.** The iOS package does
+> not include `LynxService/Image`, because Lynx 4.0.x pins an SDWebImage version
+> that conflicts with current Expo hosts. Do not use Lynx `<image>` elements:
+> embedded, remote, WebP, GIF, and animated images will not render. Release ZIPs
+> continue to preserve `static/**` files for a future compatible image service.
+
 The config plugin keeps Lynx's CocoaPods target on its required GNU C++ dialect, applies the Xcode 26 warning compatibility flags, and can copy static Lynx bundles into the iOS application bundle. Run prebuild again after changing the plugin configuration.
 
 ## Use
@@ -56,7 +62,7 @@ installation and staged for the next mini-app open; it never replaces a mounted
 view. The legacy `url` prop remains available for compatibility, but Release
 iOS builds reject raw remote URLs.
 
-For a bundled resource, add the `.lynx` bundle and every Rspeedy sidecar directory to `bundledResources`. Directory structure is preserved, so a template reference such as `static/image/logo.abc123.png` resolves in both the embedded baseline and a managed release.
+For a bundled resource, add the `.lynx` bundle and every Rspeedy sidecar directory to `bundledResources`. Directory structure is preserved in both the embedded baseline and a managed release. This does not currently enable Lynx `<image>` rendering; see the limitation above.
 
 ### Feature-name autocomplete for V2 embedded bundles
 

@@ -11,22 +11,17 @@ Pod::Spec.new do |s|
 
 
   s.dependency 'ExpoModulesCore'
-  s.dependency 'MMKV', '2.4.2'
+  # Managed delivery uses MMKV for its tiny synchronous boot-state snapshot;
+  # it does not share an MMKV instance with React Native. Keep this range on
+  # 2.x so the host resolves one compatible MMKVCore for the whole app target.
+  s.dependency 'MMKV', '>= 2.4.0', '< 3.0'
   s.dependency 'Lynx/Framework', '4.0.0'
   s.dependency 'PrimJS/quickjs', '4.0.0'
   s.dependency 'PrimJS/napi', '4.0.0'
-  s.dependency 'LynxService/Image', '4.0.0'
-  s.dependency 'LynxService/Log', '4.0.0', :configurations => ['Debug']
   s.dependency 'LynxService/Http', '4.0.0'
-  # DevTool and DebugRouter are development-only; excluding them from Release
-  # avoids shipping their startup work, code, and native dependencies.
-  s.dependency 'LynxService/Devtool', '4.0.0', :configurations => ['Debug']
-
-  # s.dependency 'LynxDevtool', '4.0.0'
-  # s.dependency 'DebugRouter', '5.0.15'
-  # s.dependency 'DebugRouter/MessageTransceiverEnable', '5.0.15'
-  s.dependency 'SDWebImage', '5.15.5'
-  s.dependency 'SDWebImageWebPCoder', '0.11.0'
+  # Do not add LynxService/Devtool or LynxService/Log here. CocoaPods applies
+  # podspec dependencies to every build configuration, so a "Debug" option
+  # would still link DebugRouter into production hosts.
 
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {

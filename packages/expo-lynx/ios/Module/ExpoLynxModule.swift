@@ -22,29 +22,6 @@ public final class ExpoLynxModule: Module {
       // Lynx requires the shared environment to exist before any other Lynx API is used.
       let lynxEnv = LynxEnv.sharedInstance()
 
-#if DEBUG
-      // LynxService/Devtool registers LynxDevToolService at load time. Set its
-      // presets immediately after LynxEnv initialization, then enable the
-      // environment and all sessions for subsequently-created LynxViews.
-      let devToolService = LynxServices.getInstanceWith(LynxServiceDevToolProtocol.self)
-        as? LynxServiceDevToolProtocol
-      devToolService?.lynxDebugPresetValue = true
-      devToolService?.logBoxPresetValue = true
-      devToolService?.enableAllSessions()
-
-      // Lynx DevTool is disabled by default in embedded hosts. These switches
-      // must be set after LynxEnv initialization and before creating a LynxView.
-      // Keep this in the native module's OnCreate hook so every view created by
-      // ExpoLynx is inspectable from the Lynx DevTool desktop app.
-      lynxEnv.lynxDebugEnabled = true
-      lynxEnv.devtoolEnabled = true
-      lynxEnv.logBoxEnabled = true
-
-      let devToolSettings = DevToolSettings.sharedInstance()
-      devToolSettings.devToolEnabled = true
-      devToolSettings.logBoxEnabled = true
-#endif
-
       // Match Lynx Explorer's setupEnvironment: prepare one global config
       // before constructing any LynxView. The view creates a per-view config
       // from this provider and installs it as both the template and generic
