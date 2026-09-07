@@ -23,6 +23,10 @@ Pod::Spec.new do |s|
   # podspec dependencies to every build configuration, so a "Debug" option
   # would still link DebugRouter into production hosts.
 
+  # Backs the <x-lynx-fast-image> element (ios/FastImage/). Shared range with
+  # Expo Image 57.x so the host resolves one SDWebImage for the whole target.
+  s.dependency 'SDWebImage', '~> 5.21.0'
+
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
@@ -30,4 +34,9 @@ Pod::Spec.new do |s|
 
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
   s.exclude_files = "tests/**/*"
+  # Keep the FastImage ObjC headers out of the generated umbrella: they
+  # #import <Lynx/...>, and a non-modular include would break the ExpoLynx
+  # framework module. Nothing outside the pod needs them — ExpoLynxView
+  # registers the element by runtime class name.
+  s.private_header_files = "FastImage/**/*.h"
 end

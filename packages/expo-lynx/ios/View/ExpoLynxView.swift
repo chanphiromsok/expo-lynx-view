@@ -100,6 +100,11 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       // Match Lynx Explorer: each view gets a config backed by the provider
       // prepared on LynxEnv, while the fetcher handles remote URL reloads.
       builder.config = LynxConfig(provider: provider)
+      // Register the SDWebImage-backed <x-lynx-fast-image> element (ios/FastImage/).
+      // Runtime lookup so ExpoLynx still compiles if the sources are stripped.
+      if let fastImageElement = NSClassFromString("LynxFastImageElement") {
+        builder.config?.registerUI(fastImageElement, withName: "x-lynx-fast-image")
+      }
       // Match Lynx Explorer: native URL reloads and lazy bundles use the
       // resource-fetcher pipeline when one is supplied by the host.
       builder.templateResourceFetcher = provider

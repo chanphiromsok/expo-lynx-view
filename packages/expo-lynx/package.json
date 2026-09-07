@@ -38,7 +38,10 @@
     "ios/*.podspec",
     "ios/Module/*.swift",
     "ios/View/*.swift",
-    "ios/Delivery/*.swift"
+    "ios/Delivery/*.swift",
+    "ios/FastImage/*.swift",
+    "ios/FastImage/*.h",
+    "ios/FastImage/*.m"
   ],
   "dependencies": {},
   "devDependencies": {
