@@ -42,5 +42,6 @@ export type LynxMiniAppConfig = {
   releaseOutputDir?: string;
 };
 export function defineMiniApp(config: LynxMiniAppConfig): LynxMiniAppConfig;
-export function createNativeRuntimeVersion(projectRoot: string): Promise<string>;
+export type LynxDeliveryPlatform = 'ios' | 'android';
+export function createNativeRuntimeVersion(projectRoot: string, platform?: LynxDeliveryPlatform): Promise<string>;
 export function readEmbeddedRuntimeVersion(config: LynxBundleConfig): string;

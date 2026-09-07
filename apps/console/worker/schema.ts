@@ -4,6 +4,7 @@ export const featurePattern = '^[a-z][a-z0-9-]{0,63}$';
 export const appPattern = '^[a-z][a-z0-9-]{0,63}$';
 export const bundlePattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$';
 export const sha256Pattern = '^[a-f0-9]{64}$';
+export const platformPattern = '^(ios|android)$';
 
 export const FeatureParametersSchema = Type.Object({
   feature: Type.String({ pattern: featurePattern }),
@@ -30,6 +31,7 @@ export const LocalUploadParametersSchema = Type.Object({
 export const AppLocalUploadParametersSchema = Type.Object({
   appId: Type.String({ pattern: appPattern }),
   feature: Type.String({ pattern: featurePattern }),
+  platform: Type.String({ pattern: platformPattern }),
   bundleId: Type.String({ pattern: bundlePattern }),
 });
 
@@ -42,6 +44,7 @@ export const ReleaseMetadataSchema = Type.Object(
     feature: Type.String({ pattern: featurePattern }),
     releaseId: Type.String({ pattern: bundlePattern }),
     version: Type.String({ minLength: 1, maxLength: 128, pattern: '^[\\u0020-\\u007e]+$' }),
+    platform: Type.String({ pattern: platformPattern }),
     runtimeVersion: Type.String({ minLength: 1, maxLength: 128, pattern: '^[\\u0020-\\u007e]+$' }),
     archiveSha256: Type.String({ pattern: sha256Pattern }),
     archiveBytes: Type.Integer({ minimum: 1, maximum: 64 * 1024 * 1024 }),
@@ -56,6 +59,7 @@ export const MiniAppReleaseV2Schema = Type.Object(
     feature: Type.String({ pattern: featurePattern }),
     releaseId: Type.String({ pattern: bundlePattern }),
     version: Type.String({ minLength: 1, maxLength: 128 }),
+    platform: Type.String({ pattern: platformPattern }),
     archiveSha256: Type.String({ pattern: sha256Pattern }),
     archiveBytes: Type.Integer({ minimum: 1, maximum: 64 * 1024 * 1024 }),
   },
@@ -81,6 +85,7 @@ export const MiniAppCreateSchema = Type.Object(
 export const HostRuntimeRegistrationSchema = Type.Object(
   {
     schemaVersion: Type.Literal(1),
+    platform: Type.String({ pattern: platformPattern }),
     runtimeVersion: Type.String({ minLength: 1, maxLength: 128, pattern: '^[\\u0020-\\u007e]+$' }),
     appVersion: Type.String({ minLength: 1, maxLength: 128, pattern: '^[\\u0020-\\u007e]+$' }),
     buildNumber: Type.String({ minLength: 1, maxLength: 128, pattern: '^[\\u0020-\\u007e]+$' }),
@@ -122,3 +127,4 @@ export type MiniAppCreateInput = Static<typeof MiniAppCreateSchema>;
 export type HostRuntimeRegistrationInput = Static<typeof HostRuntimeRegistrationSchema>;
 export type DeploymentUpdateInput = Static<typeof DeploymentUpdateSchema>;
 export type LoginInput = Static<typeof LoginSchema>;
+export type DeliveryPlatform = 'ios' | 'android';

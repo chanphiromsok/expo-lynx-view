@@ -9,6 +9,7 @@ import {
   loadConfigAsync,
   packRelease,
 } from '../src/index.mjs';
+import { generateSigningKeyPair } from '../src/signing-keys.mjs';
 
 const [command, ...argumentsList] = process.argv.slice(2);
 
@@ -39,7 +40,15 @@ function required(value, name) {
 
 async function main() {
   if (!command || command === '--help') {
-    process.stdout.write(`Usage:\n  lynx-bundle build <feature> [--config file]\n  lynx-bundle build-embedded [feature...] --runtime-version version [--config file]\n  lynx-bundle check-embedded --runtime-version version [--config file]\n  lynx-bundle pack <feature> --release-id id --version version --platform ios --runtime-version version [--config file]\n`);
+    process.stdout.write(`Usage:\n  lynx-bundle keys generate --output-dir directory\n  lynx-bundle build <feature> [--config file]\n  lynx-bundle build-embedded [feature...] --runtime-version version [--config file]\n  lynx-bundle check-embedded --runtime-version version [--config file]\n  lynx-bundle pack <feature> --release-id id --version version --platform ios|android --runtime-version version [--config file]\n`);
+    return;
+  }
+  if (command === 'keys' && positional()[0] === 'generate') {
+    const outputDirectory = required(option('--output-dir'), '--output-dir');
+    writeResult(generateSigningKeyPair({
+      publicKeyPath: resolve(outputDirectory, 'updates.public.pem'),
+      privateKeyPath: resolve(outputDirectory, 'updates.private.pem'),
+    }), option('--output'));
     return;
   }
   const config = await loadConfigAsync({ configPath: option('--config') });

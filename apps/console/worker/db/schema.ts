@@ -20,6 +20,19 @@ export const miniApps = sqliteTable(
   (table) => [primaryKey({ columns: [table.appId, table.id] })],
 );
 
+export const hostRuntimes = sqliteTable(
+  'host_runtimes',
+  {
+    appId: text('app_id').notNull(),
+    platform: text('platform').notNull(),
+    runtimeVersion: text('runtime_version').notNull(),
+    appVersion: text('app_version').notNull(),
+    buildNumber: text('build_number').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.appId, table.platform] })],
+);
+
 export const bundles = sqliteTable(
   'bundles',
   {
@@ -27,6 +40,7 @@ export const bundles = sqliteTable(
     id: text('id').notNull(),
     featureId: text('feature_id').notNull(),
     version: text('version').notNull(),
+    platform: text('platform').notNull(),
     runtimeVersion: text('runtime_version').notNull(),
     archiveSha256: text('archive_sha256').notNull(),
     archiveBytes: integer('archive_bytes').notNull(),
@@ -46,6 +60,7 @@ export const deployments = sqliteTable(
   {
     appId: text('app_id').notNull(),
     featureId: text('feature_id').notNull(),
+    platform: text('platform').notNull(),
     runtimeVersion: text('runtime_version').notNull(),
     bundleId: text('bundle_id'),
     enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
@@ -53,7 +68,7 @@ export const deployments = sqliteTable(
     revision: integer('revision').notNull().default(0),
     updatedAt: text('updated_at').notNull(),
   },
-  (table) => [primaryKey({ columns: [table.appId, table.featureId, table.runtimeVersion] })],
+  (table) => [primaryKey({ columns: [table.appId, table.featureId, table.platform, table.runtimeVersion] })],
 );
 
 export const users = sqliteTable(

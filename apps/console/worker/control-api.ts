@@ -25,7 +25,7 @@ import {
   ReleaseMetadataSchema,
 } from './schema.ts';
 import { createDeliveryDatabase } from './db/client.ts';
-import { apps, bundles, deployments, miniApps } from './db/schema.ts';
+import { apps, bundles, deployments, hostRuntimes, miniApps } from './db/schema.ts';
 
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const UPLOAD_EXPIRY_SECONDS = 15 * 60;
@@ -34,6 +34,7 @@ const appId = /^[a-z][a-z0-9-]{0,63}$/;
 const bundleId = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const sha256 = /^[a-f0-9]{64}$/;
 const runtimeVersion = /^[\u0020-\u007e]{1,128}$/;
+const platform = /^(ios|android)$/;
 
 export interface ControlEnv extends AuthEnv {
   ARTIFACTS: R2Bucket;
@@ -49,6 +50,7 @@ type UpdateDeployment =
 type BundleRow = typeof bundles.$inferSelect;
 type DeploymentRow = typeof deployments.$inferSelect;
 type AppRow = typeof apps.$inferSelect;
+type HostRuntimeRow = typeof hostRuntimes.$inferSelect;
 type UploadRelease = ReleaseMetadata | MiniAppReleaseV2;
 
 type UploadInstruction = {
@@ -83,7 +85,7 @@ export async function getDeploymentOverview(
     const [app, feature] = deploymentScope(appOrFeature, requestedFeature);
     assertApp(app);
     assertFeature(feature);
-    return jsonResponse(200, await readOverview(environment, app, feature, requestRuntimeVersion(request)));
+    return jsonResponse(200, await readOverview(environment, app, feature, requestPlatform(request), requestRuntimeVersion(request)));
   });
 }
 
@@ -94,20 +96,20 @@ export async function getDeploymentScopes(
   return handleConsoleRequest(environment, request, async () => {
     const database = createDeliveryDatabase(environment.DB);
     const [bundleScopes, deploymentScopes] = await Promise.all([
-      database.select({ appId: bundles.appId, feature: bundles.featureId, runtimeVersion: bundles.runtimeVersion })
+      database.select({ appId: bundles.appId, feature: bundles.featureId, platform: bundles.platform, runtimeVersion: bundles.runtimeVersion })
         .from(bundles)
         .where(isNotNull(bundles.verifiedAt))
-        .groupBy(bundles.appId, bundles.featureId, bundles.runtimeVersion),
-      database.select({ appId: deployments.appId, feature: deployments.featureId, runtimeVersion: deployments.runtimeVersion })
+        .groupBy(bundles.appId, bundles.featureId, bundles.platform, bundles.runtimeVersion),
+      database.select({ appId: deployments.appId, feature: deployments.featureId, platform: deployments.platform, runtimeVersion: deployments.runtimeVersion })
         .from(deployments)
-        .groupBy(deployments.appId, deployments.featureId, deployments.runtimeVersion),
+        .groupBy(deployments.appId, deployments.featureId, deployments.platform, deployments.runtimeVersion),
     ]);
-    const scopes = new Map<string, { appId: string; feature: string; runtimeVersion: string }>();
+    const scopes = new Map<string, { appId: string; feature: string; platform: string; runtimeVersion: string }>();
     for (const scope of [...bundleScopes, ...deploymentScopes]) {
-      scopes.set(`${scope.appId}/${scope.feature}/${scope.runtimeVersion}`, scope);
+      scopes.set(`${scope.appId}/${scope.feature}/${scope.platform}/${scope.runtimeVersion}`, scope);
     }
     return jsonResponse(200, [...scopes.values()].sort((left, right) =>
-      left.appId.localeCompare(right.appId) || left.feature.localeCompare(right.feature),
+      left.appId.localeCompare(right.appId) || left.feature.localeCompare(right.feature) || left.platform.localeCompare(right.platform),
     ));
   });
 }
@@ -202,8 +204,9 @@ export async function registerHostRuntime(
     if (expected.length !== supplied.length || expected.some((id, index) => id !== supplied[index])) {
       throw new ApiError(409, 'mini-app-mismatch', 'The host feature list does not match this app’s registered mini apps. Update the Console registration before registering the host build.');
     }
-    if (registeredApp.currentRuntimeVersion === input.runtimeVersion) {
-      if (registeredApp.currentAppVersion !== input.appVersion || registeredApp.currentBuildNumber !== input.buildNumber) {
+    const currentRuntime = await readHostRuntime(environment, app, input.platform);
+    if (currentRuntime?.runtimeVersion === input.runtimeVersion) {
+      if (currentRuntime.appVersion !== input.appVersion || currentRuntime.buildNumber !== input.buildNumber) {
         throw new ApiError(409, 'host-runtime-conflict', 'This runtime is already registered with a different app version or build number.');
       }
       return jsonResponse(200, { app: publicApp(registeredApp), created: false });
@@ -211,14 +214,17 @@ export async function registerHostRuntime(
     const updatedAt = new Date().toISOString();
     const statements = [
       environment.DB.prepare(
+        'INSERT INTO host_runtimes (app_id, platform, runtime_version, app_version, build_number, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(app_id, platform) DO UPDATE SET runtime_version = excluded.runtime_version, app_version = excluded.app_version, build_number = excluded.build_number, updated_at = excluded.updated_at',
+      ).bind(app, input.platform, input.runtimeVersion, input.appVersion, input.buildNumber, updatedAt),
+      ...(input.platform === 'ios' ? [environment.DB.prepare(
         'UPDATE apps SET current_runtime_version = ?, current_app_version = ?, current_build_number = ? WHERE id = ?',
-      ).bind(input.runtimeVersion, input.appVersion, input.buildNumber, app),
+      ).bind(input.runtimeVersion, input.appVersion, input.buildNumber, app)] : []),
       ...supplied.map((feature) => environment.DB.prepare(
         // A missing runtime is represented publicly as signed disabled revision 1.
         // Start the durable row after it so mobile never observes a changed
         // document at the same revision after host registration.
-        'INSERT OR IGNORE INTO deployments (app_id, feature_id, runtime_version, bundle_id, enabled, force, revision, updated_at) VALUES (?, ?, ?, NULL, 0, 0, 2, ?)',
-      ).bind(app, feature, input.runtimeVersion, updatedAt)),
+        'INSERT OR IGNORE INTO deployments (app_id, feature_id, platform, runtime_version, bundle_id, enabled, force, revision, updated_at) VALUES (?, ?, ?, ?, NULL, 0, 0, 2, ?)',
+      ).bind(app, feature, input.platform, input.runtimeVersion, updatedAt)),
     ];
     await environment.DB.batch(statements);
     const updated = await readApp(environment, app);
@@ -239,9 +245,10 @@ export async function updateDeployment(
     const input = (maybeInput ?? requestedFeatureOrInput) as DeploymentUpdateInput;
     assertApp(app);
     assertFeature(feature);
+    const selectedPlatform = requestPlatform(request);
     const selectedRuntimeVersion = requestRuntimeVersion(request);
     const update = normalizeUpdate(input);
-    const current = await readDeployment(environment, app, feature, selectedRuntimeVersion);
+    const current = await readDeployment(environment, app, feature, selectedPlatform, selectedRuntimeVersion);
     const enabled = current?.enabled ?? false;
     const currentBundleId = current?.bundleId ?? null;
     const currentRevision = current?.revision ?? 0;
@@ -251,7 +258,7 @@ export async function updateDeployment(
     let nextForce = false;
 
     if ('enabled' in update) {
-      if (update.enabled === enabled) return jsonResponse(200, await readOverview(environment, app, feature, selectedRuntimeVersion));
+      if (update.enabled === enabled) return jsonResponse(200, await readOverview(environment, app, feature, selectedPlatform, selectedRuntimeVersion));
       if (update.enabled && !currentBundleId) {
         throw new ApiError(409, 'deployment-empty', 'Select a bundle before enabling delivery.');
       }
@@ -260,11 +267,11 @@ export async function updateDeployment(
       const bundle = await readBundle(environment, app, feature, update.bundleId);
       if (!bundle) throw new ApiError(404, 'bundle-not-found', 'Registered bundle was not found.');
       if (!bundle.verifiedAt) throw new ApiError(409, 'bundle-not-ready', 'Wait for the R2 upload to be verified before selecting this bundle.');
-      if (bundle.runtimeVersion !== selectedRuntimeVersion) {
-        throw new ApiError(409, 'runtime-mismatch', 'Select a bundle built for the current runtime.');
+      if (bundle.platform !== selectedPlatform || bundle.runtimeVersion !== selectedRuntimeVersion) {
+        throw new ApiError(409, 'runtime-mismatch', 'Select a bundle built for the current platform and runtime.');
       }
       if (currentBundleId === bundle.id && !update.force) {
-        return jsonResponse(200, await readOverview(environment, app, feature, selectedRuntimeVersion));
+        return jsonResponse(200, await readOverview(environment, app, feature, selectedPlatform, selectedRuntimeVersion));
       }
       nextBundleId = bundle.id;
       nextForce = update.force;
@@ -277,6 +284,7 @@ export async function updateDeployment(
       .values({
         appId: app,
         featureId: feature,
+        platform: selectedPlatform,
         runtimeVersion: selectedRuntimeVersion,
         bundleId: nextBundleId,
         enabled: nextEnabled,
@@ -285,7 +293,7 @@ export async function updateDeployment(
         updatedAt,
       })
       .onConflictDoUpdate({
-        target: [deployments.appId, deployments.featureId, deployments.runtimeVersion],
+        target: [deployments.appId, deployments.featureId, deployments.platform, deployments.runtimeVersion],
         set: {
           bundleId: nextBundleId,
           enabled: nextEnabled,
@@ -299,7 +307,7 @@ export async function updateDeployment(
     if (Number(result.meta.changes ?? 0) !== 1) {
       throw new ApiError(409, 'deployment-conflict', 'Deployment changed concurrently; refresh and try again.');
     }
-    return jsonResponse(200, await readOverview(environment, app, feature, selectedRuntimeVersion));
+    return jsonResponse(200, await readOverview(environment, app, feature, selectedPlatform, selectedRuntimeVersion));
   });
 }
 
@@ -320,17 +328,20 @@ export async function registerUpload(
     if (registeredApp && !(await readMiniApp(environment, app, release.feature))) {
       throw new ApiError(404, 'mini-app-not-found', 'This mini app is not registered. Ask the Console operator to create it first.');
     }
+    const registeredRuntime = registeredApp
+      ? await readHostRuntime(environment, app, release.platform)
+      : null;
     const targetRuntime = release.schemaVersion === 1
       ? release.runtimeVersion
-      : registeredApp?.currentRuntimeVersion;
+      : registeredRuntime?.runtimeVersion;
     if (!targetRuntime) {
       throw new ApiError(409, 'host-runtime-not-registered', `${registeredApp?.name ?? app} has no registered current host build. Ask the host team to run lynx host register.`);
     }
-    if (release.schemaVersion === 2) assertExpectedHostBuild(request, registeredApp!);
+    if (release.schemaVersion === 2) assertExpectedHostBuild(request, registeredRuntime!);
     const existing = await readBundle(environment, app, release.feature, release.releaseId);
     if (existing) {
       if (sameBundle(existing, release)) {
-        return jsonResponse(200, uploadState(existing, registeredApp, await objectUploaded(environment, app, release)));
+        return jsonResponse(200, uploadState(existing, registeredRuntime, await objectUploaded(environment, app, release)));
       }
       throw new ApiError(409, 'bundle-conflict', 'Bundle ID is already assigned to different immutable metadata.');
     }
@@ -343,12 +354,13 @@ export async function registerUpload(
         id: release.releaseId,
         featureId: release.feature,
         version: release.version,
+        platform: release.platform,
         runtimeVersion: targetRuntime,
         archiveSha256: release.archiveSha256,
         archiveBytes: release.archiveBytes,
         verifiedAt: null,
-        targetAppVersion: registeredApp?.currentAppVersion ?? null,
-        targetBuildNumber: registeredApp?.currentBuildNumber ?? null,
+        targetAppVersion: registeredRuntime?.appVersion ?? null,
+        targetBuildNumber: registeredRuntime?.buildNumber ?? null,
         createdAt,
       })
       .onConflictDoNothing()
@@ -358,10 +370,10 @@ export async function registerUpload(
       if (!raced || !sameBundle(raced, release)) {
         throw new ApiError(409, 'bundle-conflict', 'Bundle ID is already assigned to different immutable metadata.');
       }
-      return jsonResponse(200, uploadState(raced, registeredApp, await objectUploaded(environment, app, release)));
+      return jsonResponse(200, uploadState(raced, registeredRuntime, await objectUploaded(environment, app, release)));
     }
 
-    const key = archiveObjectKey(app, release.feature, release.releaseId);
+    const key = archiveObjectKey(app, release.feature, release.platform, release.releaseId);
     const uploaded = await objectUploaded(environment, app, release);
     return jsonResponse(200, {
       ...uploadState({
@@ -369,14 +381,15 @@ export async function registerUpload(
         id: release.releaseId,
         featureId: release.feature,
         version: release.version,
+        platform: release.platform,
         runtimeVersion: targetRuntime,
         archiveSha256: release.archiveSha256,
         archiveBytes: release.archiveBytes,
         verifiedAt: null,
-        targetAppVersion: registeredApp?.currentAppVersion ?? null,
-        targetBuildNumber: registeredApp?.currentBuildNumber ?? null,
+        targetAppVersion: registeredRuntime?.appVersion ?? null,
+        targetBuildNumber: registeredRuntime?.buildNumber ?? null,
         createdAt,
-      }, registeredApp, uploaded),
+      }, registeredRuntime, uploaded),
       ...(localUploadsEnabled(environment, request)
         && !uploaded ? {
             expiresIn: UPLOAD_EXPIRY_SECONDS,
@@ -410,7 +423,7 @@ export async function completeUpload(
 
     await requireObject(
       environment.ARTIFACTS,
-      archiveObjectKey(app, release.feature, release.releaseId),
+      archiveObjectKey(app, release.feature, release.platform, release.releaseId),
       release.archiveSha256,
       release.archiveBytes,
     );
@@ -446,10 +459,7 @@ export async function login(
 
 export async function logout(environment: ControlEnv, request: Request): Promise<Response> {
   const secure = new URL(request.url).protocol === 'https:';
-  return new Response(null, {
-    status: 204,
-    headers: { 'Set-Cookie': clearSessionCookie(secure) },
-  });
+  return jsonResponse(200, { ok: true }, { 'Set-Cookie': clearSessionCookie(secure) });
 }
 
 export async function getCurrentUser(environment: ControlEnv, request: Request): Promise<Response> {
@@ -466,22 +476,27 @@ export async function handleLocalUpload(
   environment: ControlEnv,
   request: Request,
   appOrFeature: string,
-  featureOrReleaseId: string,
+  featureOrPlatform: string,
+  platformOrReleaseId?: string,
   maybeReleaseId?: string,
 ): Promise<Response> {
   if (request.method !== 'PUT' || !localUploadsEnabled(environment, request)) return notFound();
   try {
-    const [app, feature] = maybeReleaseId ? [appOrFeature, featureOrReleaseId] : ['default', appOrFeature];
-    const releaseId = maybeReleaseId ?? featureOrReleaseId;
+    const [app, feature, targetPlatform, releaseId] = maybeReleaseId
+      ? [appOrFeature, featureOrPlatform, platformOrReleaseId!, maybeReleaseId]
+      : platformOrReleaseId
+        ? ['default', appOrFeature, featureOrPlatform, platformOrReleaseId]
+        : ['default', appOrFeature, 'ios', featureOrPlatform];
     assertApp(app);
     assertFeature(feature);
+    assertPlatform(targetPlatform);
     if (!bundleId.test(releaseId)) return notFound();
     const url = new URL(request.url);
     const expires = Number(url.searchParams.get('expires'));
     const digest = url.searchParams.get('sha256') ?? '';
     const signature = url.searchParams.get('signature') ?? '';
     if (!Number.isSafeInteger(expires) || expires < Date.now() || !sha256.test(digest)) return notFound();
-    const key = archiveObjectKey(app, feature, releaseId);
+    const key = archiveObjectKey(app, feature, targetPlatform, releaseId);
     if (!(await matchesCapability(environment.AUTH_SESSION_SECRET, key, digest, expires, signature))) return notFound();
     if (request.headers.get('Content-Type')?.toLowerCase() !== 'application/zip') {
       throw new ApiError(400, 'invalid-request', 'Local upload must use application/zip.');
@@ -573,13 +588,14 @@ async function hashStoredObject(bucket: R2Bucket, key: string, expectedBytes: nu
   return sha256Hex(bytes);
 }
 
-async function readOverview(environment: ControlEnv, app: string, feature: string, runtimeVersion: string) {
+async function readOverview(environment: ControlEnv, app: string, feature: string, platform: string, runtimeVersion: string) {
   const database = createDeliveryDatabase(environment.DB);
   const [deployment, availableBundles] = await Promise.all([
-    readDeployment(environment, app, feature, runtimeVersion),
+    readDeployment(environment, app, feature, platform, runtimeVersion),
     database.select().from(bundles).where(and(
       eq(bundles.appId, app),
       eq(bundles.featureId, feature),
+      eq(bundles.platform, platform),
       eq(bundles.runtimeVersion, runtimeVersion),
       isNotNull(bundles.verifiedAt),
     )).orderBy(desc(bundles.createdAt)).limit(50),
@@ -590,6 +606,7 @@ async function readOverview(environment: ControlEnv, app: string, feature: strin
     deployment: {
       appId: app,
       feature,
+      platform,
       runtimeVersion,
       bundleId: selectedBundleId,
       enabled,
@@ -605,11 +622,11 @@ async function readOverview(environment: ControlEnv, app: string, feature: strin
   };
 }
 
-async function readDeployment(environment: ControlEnv, app: string, feature: string, runtimeVersion: string): Promise<DeploymentRow | null> {
+async function readDeployment(environment: ControlEnv, app: string, feature: string, platform: string, runtimeVersion: string): Promise<DeploymentRow | null> {
   const [deployment] = await createDeliveryDatabase(environment.DB)
     .select()
     .from(deployments)
-    .where(and(eq(deployments.appId, app), eq(deployments.featureId, feature), eq(deployments.runtimeVersion, runtimeVersion)))
+    .where(and(eq(deployments.appId, app), eq(deployments.featureId, feature), eq(deployments.platform, platform), eq(deployments.runtimeVersion, runtimeVersion)))
     .limit(1);
   return deployment ?? null;
 }
@@ -630,6 +647,15 @@ async function readApp(environment: ControlEnv, id: string): Promise<AppRow | nu
     .where(eq(apps.id, id))
     .limit(1);
   return app ?? null;
+}
+
+async function readHostRuntime(environment: ControlEnv, app: string, platform: string): Promise<HostRuntimeRow | null> {
+  const [runtime] = await createDeliveryDatabase(environment.DB)
+    .select()
+    .from(hostRuntimes)
+    .where(and(eq(hostRuntimes.appId, app), eq(hostRuntimes.platform, platform)))
+    .limit(1);
+  return runtime ?? null;
 }
 
 async function readMiniApp(environment: ControlEnv, app: string, id: string) {
@@ -661,6 +687,7 @@ function publicBundle(bundle: BundleRow) {
     appId: bundle.appId,
     feature: bundle.featureId,
     version: bundle.version,
+    platform: bundle.platform,
     runtimeVersion: bundle.runtimeVersion,
     archiveSha256: bundle.archiveSha256,
     archiveBytes: bundle.archiveBytes,
@@ -674,6 +701,7 @@ function publicBundle(bundle: BundleRow) {
 function sameBundle(bundle: BundleRow, release: UploadRelease): boolean {
   return bundle.appId === releaseAppId(release)
     && bundle.featureId === release.feature
+    && bundle.platform === release.platform
     && bundle.version === release.version
     && bundle.archiveSha256 === release.archiveSha256
     && bundle.archiveBytes === release.archiveBytes
@@ -701,42 +729,43 @@ function releaseAppId(release: UploadRelease): string {
 }
 
 async function objectUploaded(environment: ControlEnv, app: string, release: UploadRelease): Promise<boolean> {
-  return Boolean(await environment.ARTIFACTS.head(archiveObjectKey(app, release.feature, release.releaseId)));
+  return Boolean(await environment.ARTIFACTS.head(archiveObjectKey(app, release.feature, release.platform, release.releaseId)));
 }
 
-function uploadState(bundle: BundleRow, app: AppRow | null, uploaded: boolean) {
+function uploadState(bundle: BundleRow, runtime: HostRuntimeRow | null, uploaded: boolean) {
   return {
     schemaVersion: 2,
     bundleId: bundle.id,
     target: {
       appId: bundle.appId,
       feature: bundle.featureId,
-      appVersion: bundle.targetAppVersion,
-      buildNumber: bundle.targetBuildNumber,
+      platform: bundle.platform,
+      appVersion: runtime?.appVersion ?? bundle.targetAppVersion,
+      buildNumber: runtime?.buildNumber ?? bundle.targetBuildNumber,
     },
     complete: Boolean(bundle.verifiedAt),
     uploaded,
   };
 }
 
-function assertExpectedHostBuild(request: Request, app: AppRow): void {
+function assertExpectedHostBuild(request: Request, runtime: HostRuntimeRow): void {
   const expected = request.headers.get('lynx-expected-host-build');
   if (!expected) return;
-  if (!hasPrintableText(expected) || expected !== app.currentBuildNumber) {
-    throw new ApiError(409, 'host-build-mismatch', `The current host build is ${app.currentBuildNumber ?? 'not labelled'}. Update the mini-app release target before uploading.`);
+  if (!hasPrintableText(expected) || expected !== runtime.buildNumber) {
+    throw new ApiError(409, 'host-build-mismatch', `The current host build is ${runtime.buildNumber}. Update the mini-app release target before uploading.`);
   }
 }
 
 function hasPrintableText(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 128 && !/[\x00-\x1f\x7f]/.test(value);
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 && !/\p{Cc}/u.test(value);
 }
 
 function isDisplayName(value: unknown): value is string {
   return hasPrintableText(value) && value.trim().length > 0;
 }
 
-function archiveObjectKey(app: string, feature: string, id: string): string {
-  return `${app}/${feature}/releases/${id}/release.zip`;
+function archiveObjectKey(app: string, feature: string, platform: string, id: string): string {
+  return `${app}/${feature}/${platform}/releases/${id}/release.zip`;
 }
 
 function normalizeUpdate(input: DeploymentUpdateInput): UpdateDeployment {
@@ -754,6 +783,16 @@ function assertFeature(feature: string): void {
 
 function assertApp(value: string): void {
   if (!appId.test(value)) throw new ApiError(400, 'invalid-request', 'App ID is invalid.');
+}
+
+function assertPlatform(value: string): asserts value is 'ios' | 'android' {
+  if (!platform.test(value)) throw new ApiError(400, 'invalid-request', 'platform must be ios or android.');
+}
+
+function requestPlatform(request: Request): 'ios' | 'android' {
+  const value = new URL(request.url).searchParams.get('platform') ?? 'ios';
+  assertPlatform(value);
+  return value;
 }
 
 function requestRuntimeVersion(request: Request): string {

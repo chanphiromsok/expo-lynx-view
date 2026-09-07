@@ -11,17 +11,20 @@ RSA private key.
 - [Independent mini-app `lynx-miniapp.config.ts`](./examples/mini-app/lynx-miniapp.config.ts)
 
 The host owns `embeddedBundlesPath`, the public trust key, and the public
-delivery endpoint. A mini app owns only its `appId` and `feature`. Neither the
-mini-app configuration nor its release metadata contains a runtime value.
+delivery endpoint. A mini app owns only its `appId` and `feature`; it does not
+copy host runtime values into its source repository.
 
 ```sh
-# host repository
+# Expo host repository
+lynx keys generate
+lynx doctor
+lynx host embed ../mart
 lynx host prepare
-# build the native archive
 lynx host register
 
 # independent mini-app repository
-lynx release
+lynx doctor
+lynx release --platform ios
 ```
 
 ## Release workflow
@@ -31,11 +34,16 @@ export LYNX_DELIVERY_SERVER="http://127.0.0.1:8787"
 export LYNX_DELIVERY_API_KEY="<local-delivery-api-key>"
 
 # Build, package, upload the ZIP, and ask the Worker to verify and register it.
-pnpm lynx release delivery
+pnpm exec lynx release --platform ios
 
 # Build only. This performs no network request.
-pnpm lynx release delivery --draft
+pnpm exec lynx release --platform ios --draft
 ```
+
+For a manual terminal release, the CLI shows the Worker's current host build
+and asks for confirmation. `--host-build` (or `LYNX_EXPECTED_HOST_BUILD`) is
+needed only for non-interactive CI, where it fails closed if the host team has
+registered a different build.
 
 The draft output contains exactly two files:
 
@@ -50,11 +58,12 @@ mobile and is never stored in R2:
 
 ```json
 {
-  "schemaVersion": 1,
-  "feature": "delivery",
-  "releaseId": "delivery-20260901T011848990Z-ac8c0e",
+  "schemaVersion": 2,
+  "appId": "bs-one",
+  "feature": "merchant-home",
+  "releaseId": "merchant-home-20260906T101930455Z",
   "version": "2026.09.01",
-  "runtimeVersion": "<Expo native fingerprint>",
+  "platform": "ios",
   "archiveSha256": "9da2223840940f013b8ffa763b4a1dde4959c8647cee8a9c1b465d16b7dd692f",
   "archiveBytes": 344959
 }
@@ -68,10 +77,24 @@ immutable bundle. Production upload requires `R2_ACCESS_KEY_ID`,
 `R2_BUCKET_NAME` (or `LYNX_DELIVERY_R2_BUCKET`). Local Worker mode needs none
 of these because it uses its local R2 binding.
 
-`pnpm lynx bundle <feature>` calculates the fingerprint and saves it in the
-embedded registry. `pnpm lynx release <feature>` reads that saved value so a
-remote ZIP can only target the native baseline it was built with. Run `bundle`
-again before creating a new native binary when native inputs change.
+The Worker assigns the mini-app release to the currently registered host
+runtime for its app and platform. The mini-app never supplies a host
+fingerprint. The host team runs `lynx host prepare` then `lynx host register`
+when deliberately preparing a new native build.
+
+Before host preparation, build the offline embedded fallback from every
+independent mini-app repository:
+
+```sh
+# Run from the Expo host repository.
+lynx host embed ../mart
+lynx host prepare
+```
+
+`host embed` reads the mini app's `lynx-miniapp.config.ts`, confirms that its
+app and feature match the host's configured endpoint, runs its production
+Rspeedy build, and writes the permitted runtime files to the host's configured
+`embeddedBundlesPath`.
 
 To retry an already-built draft:
 
@@ -86,17 +109,15 @@ enables delivery, or requests force reload; make those choices in the console.
 
 ## Configuration
 
-`lynx-bundle.config.ts` declares feature roots and output paths. It has no
-signing-key configuration.
+An independent mini app uses `lynx-miniapp.config.ts`. It has no signing-key
+or host-runtime configuration.
 
 ```ts
-import { defineConfig } from 'expo-lynx-bundle-cli';
+import { defineMiniApp } from 'expo-lynx-bundle-cli';
 
-export default defineConfig({
-  featuresDir: './features',
-  features: { delivery: {} },
-  embeddedOutputDir: './generated/expo-lynx/embedded',
-  releaseOutputDir: './dist/lynx-releases',
+export default defineMiniApp({
+  appId: 'bs-one',
+  feature: 'merchant-home',
 });
 ```
 

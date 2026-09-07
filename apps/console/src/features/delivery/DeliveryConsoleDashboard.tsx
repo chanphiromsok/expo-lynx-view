@@ -54,10 +54,12 @@ function initialScope() {
   const params = new URLSearchParams(window.location.search);
   const appId = params.get('app') ?? 'default';
   const feature = params.get('feature') ?? 'delivery';
+  const platform = params.get('platform') ?? 'ios';
   const runtimeVersion = params.get('runtime') ?? '';
   return {
     appId: identifier.test(appId) ? appId : 'default',
     feature: identifier.test(feature) ? feature : 'delivery',
+    platform: platform === 'android' ? 'android' : 'ios',
     runtimeVersion,
   };
 }
@@ -309,10 +311,14 @@ function ScopePicker({
   const featureScopes = appScopes.filter(
     (scope) => scope.feature === selectedScope.feature,
   );
+  const platforms = [...new Set(featureScopes.map((scope) => scope.platform))];
+  const platformScopes = featureScopes.filter(
+    (scope) => scope.platform === selectedScope.platform,
+  );
 
   return (
     <section className="mx-auto max-w-7xl px-4 pt-5 sm:px-7">
-      <div className="grid gap-4 rounded-xl border bg-card p-4 shadow-sm lg:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(14rem,1fr)]">
+      <div className="grid gap-4 rounded-xl border bg-card p-4 shadow-sm lg:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(8rem,auto)_minmax(14rem,1fr)]">
         <div>
           <p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
             App
@@ -362,20 +368,31 @@ function ScopePicker({
           </div>
         </div>
         <label className="grid content-start gap-2 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
+          Platform
+          <select
+            aria-label="Choose platform"
+            className="h-9 rounded-lg border bg-background px-3 text-sm font-normal normal-case tracking-normal text-foreground"
+            onChange={(event) => onChange(featureScopes.find((scope) => scope.platform === event.target.value) ?? selectedScope)}
+            value={selectedScope.platform}
+          >
+            {platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
+          </select>
+        </label>
+        <label className="grid content-start gap-2 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
           Runtime
           <select
             aria-label="Choose runtime"
             className="h-9 rounded-lg border bg-background px-3 text-sm font-normal normal-case tracking-normal text-foreground"
             onChange={(event) =>
               onChange(
-                featureScopes.find(
+                platformScopes.find(
                   (scope) => scope.runtimeVersion === event.target.value,
                 ) ?? selectedScope,
               )
             }
             value={selectedScope.runtimeVersion}
           >
-            {featureScopes.map((scope) => (
+            {platformScopes.map((scope) => (
               <option key={scope.runtimeVersion} value={scope.runtimeVersion}>
                 {scope.runtimeVersion}
               </option>
@@ -723,16 +740,18 @@ export function DeliveryConsoleDashboard() {
       (item) =>
         item.appId === scope.appId &&
         item.feature === scope.feature &&
+        item.platform === scope.platform &&
         item.runtimeVersion === scope.runtimeVersion,
     ) ??
     scopes.find(
-      (item) => item.appId === scope.appId && item.feature === scope.feature,
+      (item) => item.appId === scope.appId && item.feature === scope.feature && item.platform === scope.platform,
     ) ??
     scopes[0] ??
     scope;
   const queryKey = deliveryQueryKeys.overview(
     selectedScope.appId,
     selectedScope.feature,
+    selectedScope.platform,
     selectedScope.runtimeVersion,
     sessionRevision,
   );
@@ -742,6 +761,7 @@ export function DeliveryConsoleDashboard() {
       deliveryApi.getOverview(
         selectedScope.appId,
         selectedScope.feature,
+        selectedScope.platform,
         selectedScope.runtimeVersion,
       ),
     enabled: Boolean(sessionQuery.data && selectedScope.runtimeVersion),
@@ -770,6 +790,7 @@ export function DeliveryConsoleDashboard() {
       deliveryApi.updateDeployment(
         selectedScope.appId,
         selectedScope.feature,
+        selectedScope.platform,
         selectedScope.runtimeVersion,
         update,
       ),
@@ -792,13 +813,13 @@ export function DeliveryConsoleDashboard() {
     onError: (error) => setNotice(error instanceof Error ? error.message : 'Could not create the mini app.'),
   });
 
-  function changeScope(appId: string, feature: string, runtimeVersion: string) {
+  function changeScope(appId: string, feature: string, platform: 'ios' | 'android', runtimeVersion: string) {
     window.history.replaceState(
       null,
       '',
-      `?app=${encodeURIComponent(appId)}&feature=${encodeURIComponent(feature)}&runtime=${encodeURIComponent(runtimeVersion)}`,
+      `?app=${encodeURIComponent(appId)}&feature=${encodeURIComponent(feature)}&platform=${encodeURIComponent(platform)}&runtime=${encodeURIComponent(runtimeVersion)}`,
     );
-    setScope({ appId, feature, runtimeVersion });
+    setScope({ appId, feature, platform, runtimeVersion });
     setNotice(null);
     setSelectedBundle(null);
   }
@@ -918,6 +939,7 @@ export function DeliveryConsoleDashboard() {
           changeScope(
             nextScope.appId,
             nextScope.feature,
+            nextScope.platform,
             nextScope.runtimeVersion,
           )
         }

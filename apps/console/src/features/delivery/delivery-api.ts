@@ -5,6 +5,7 @@ export type Bundle = {
   appId: string;
   feature: string;
   version: string;
+  platform: 'ios' | 'android';
   runtimeVersion: string;
   archiveSha256: string;
   archiveBytes: number;
@@ -17,6 +18,7 @@ export type DeploymentStatus = 'active' | 'disabled' | 'empty';
 export type Deployment = {
   appId: string;
   feature: string;
+  platform: 'ios' | 'android';
   runtimeVersion: string;
   bundleId: string | null;
   enabled: boolean;
@@ -33,7 +35,7 @@ export type DeliveryOverview = {
 
 export type DeliveryScope = Pick<
   Deployment,
-  'appId' | 'feature' | 'runtimeVersion'
+  'appId' | 'feature' | 'platform' | 'runtimeVersion'
 >;
 
 export type UpdateDeployment =
@@ -47,6 +49,7 @@ export const deliveryQueryKeys = {
   overview: (
     appId: string,
     feature: string,
+    platform: string,
     runtimeVersion: string,
     sessionRevision: number,
   ) =>
@@ -55,6 +58,7 @@ export const deliveryQueryKeys = {
       'overview',
       appId,
       feature,
+      platform,
       runtimeVersion,
       sessionRevision,
     ] as const,
@@ -138,10 +142,11 @@ export const deliveryApi = {
   getOverview(
     appId: string,
     feature: string,
+    platform: string,
     runtimeVersion: string,
   ): Promise<DeliveryOverview> {
     return request<DeliveryOverview>(
-      `/api/deploy/${encodeURIComponent(appId)}/${encodeURIComponent(feature)}?runtimeVersion=${encodeURIComponent(runtimeVersion)}`,
+      `/api/deploy/${encodeURIComponent(appId)}/${encodeURIComponent(feature)}?platform=${encodeURIComponent(platform)}&runtimeVersion=${encodeURIComponent(runtimeVersion)}`,
     );
   },
 
@@ -172,11 +177,12 @@ export const deliveryApi = {
   updateDeployment(
     appId: string,
     feature: string,
+    platform: string,
     runtimeVersion: string,
     update: UpdateDeployment,
   ): Promise<DeliveryOverview> {
     return request<DeliveryOverview>(
-      `/api/deploy/${encodeURIComponent(appId)}/${encodeURIComponent(feature)}?runtimeVersion=${encodeURIComponent(runtimeVersion)}`,
+      `/api/deploy/${encodeURIComponent(appId)}/${encodeURIComponent(feature)}?platform=${encodeURIComponent(platform)}&runtimeVersion=${encodeURIComponent(runtimeVersion)}`,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

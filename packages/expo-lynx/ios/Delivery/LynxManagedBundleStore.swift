@@ -123,6 +123,7 @@ actor LynxManagedBundleStore {
     var request = noCacheURLRequest(deploymentURL)
     if let eTag, !eTag.isEmpty { request.setValue(eTag, forHTTPHeaderField: "If-None-Match") }
     request.setValue(expectedRuntimeVersion, forHTTPHeaderField: "lynx-runtime-version")
+    request.setValue("ios", forHTTPHeaderField: "lynx-platform")
     let (deploymentBytes, response) = try await URLSession.shared.bytes(for: request)
     guard let httpResponse = response as? HTTPURLResponse else {
       throw LynxDeliveryError(stage: .download, code: "ERR_LYNX_HTTP_0", message: "The Lynx deployment response was not HTTP.")

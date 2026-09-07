@@ -40,6 +40,7 @@ rollout groups in this MVP.
 
 ```sh
 # React console with HMR plus the local Cloudflare Worker on port 8787.
+# Local login is always admin / 123456. It is enabled only by this dev command.
 pnpm lynx console
 
 # Public Worker route contract, without Wrangler or a native build.
@@ -47,6 +48,10 @@ pnpm --filter @expo-lynx/delivery-console test
 
 # D1's checked-in v2 schema, applied only to local Worker state.
 pnpm --filter @expo-lynx/delivery-console db:migrate:local
+
+# Stop pnpm lynx console first. Then delete only this console's local D1/R2
+# state, reapply migrations, and restore the default local login (admin / 123456).
+pnpm --filter @expo-lynx/delivery-console db:reset:local
 ```
 
 The console deliberately persists the new local D1 and R2 state in
@@ -54,7 +59,14 @@ The console deliberately persists the new local D1 and R2 state in
 local state is not deleted or migrated automatically; the new directory starts
 with the delivery schema plus the one no-role `users` table.
 
-Before opening the local console, choose one local username and password, then
+`pnpm lynx console` intentionally ignores any initial-admin values in
+`.dev.vars` and always bootstraps local testing with `admin` / `123456`.
+The reset command removes only `.wrangler/delivery-worker-v2`, so use it when
+you need that account or local releases returned to their default state. The
+repository's `pnpm lynx release delivery` helper automatically uses the
+matching local-only CLI key.
+
+For deployed Workers, choose an administrator username and password, then
 generate a delivery API key for the CLI and a random session-signing secret:
 
 ```sh
@@ -62,7 +74,8 @@ cd apps/console
 openssl rand -base64 32 # run twice: one API key and one session secret
 ```
 
-Copy the values into the ignored `apps/console/.dev.vars` file:
+Copy the values into your deployment secret store (or the ignored
+`apps/console/.dev.vars` file when manually testing a non-default setup):
 
 ```dotenv
 INITIAL_ADMIN_USERNAME="phirom"
@@ -72,13 +85,11 @@ AUTH_SESSION_SECRET="paste-a-different-random-value-here"
 LOCAL_UPLOADS="true"
 ```
 
-Restart `pnpm lynx console`, then sign into the console with the username and
-password. The Worker creates the one initial user only when the `users` table
-is empty. Remote setup configures the equivalent Worker secrets; after the
-first successful login, keep the bootstrap values only in your deployment
-secret store. `LOCAL_UPLOADS=true` enables a short-lived same-origin PUT
-capability only on loopback local development; do not configure it in
-production.
+The deployed Worker creates the one initial user only when the `users` table
+is empty. After the first successful login, keep the bootstrap values only in
+your deployment secret store. `LOCAL_UPLOADS=true` enables a short-lived
+same-origin PUT capability only on loopback local development; do not
+configure it in production.
 
 The public deployment route also needs the one Worker-only signing secret:
 
@@ -219,15 +230,15 @@ After the first npm publish, install the CLI in the mini-app workspace:
 pnpm add -D expo-lynx-bundle-cli
 ```
 
-The app needs a `lynx-bundle.config.mjs` file. This is the smallest shape:
+The mini app needs a `lynx-miniapp.config.ts` file beside its `lynx.config.ts`:
 
-```js
-export default {
+```ts
+import { defineMiniApp } from 'expo-lynx-bundle-cli';
+
+export default defineMiniApp({
   appId: 'shop',
-  featuresDir: './features',
-  features: { delivery: {} },
-  releaseOutputDir: './dist/lynx-releases',
-};
+  feature: 'delivery',
+});
 ```
 
 Keep these values in that app's ignored `.env.lynx.local` file; copy them from
@@ -242,24 +253,16 @@ R2_ACCESS_KEY_ID="your-r2-access-key-id"
 R2_SECRET_ACCESS_KEY="your-r2-secret-access-key"
 ```
 
-Build/package the Lynx feature, then upload the resulting directory:
+Build, package, and upload the mini app. `--platform ios` is required;
+Android managed delivery is not available yet:
 
 ```sh
 set -a
 source .env.lynx.local
 set +a
 
-release_id="delivery-20260904-01"
-version="2026.09.04"
-
-pnpm exec lynx-bundle pack delivery \
-  --release-id "$release_id" \
-  --version "$version" \
-  --platform ios \
-  --runtime-version expo-57
-
-pnpm exec lynx release:upload \
-  "./dist/lynx-releases/delivery/$release_id"
+pnpm exec lynx doctor
+pnpm exec lynx release --platform ios
 ```
 
 `appId` is the Worker namespace for this host app. Give every host app a
@@ -268,10 +271,11 @@ then reuse names safely. The mobile endpoint for `shop`'s `delivery` feature
 is `https://your-worker.workers.dev/v1/shop/delivery`. Open that deployment in
 the Console at `/?app=shop&feature=delivery`.
 
-`lynx-bundle pack` runs the Rspeedy production build and creates
-`release.json` plus `release.zip`. `lynx release:upload` signs and uploads only
-the ZIP to R2, then registers it. Open the Console to select and enable the
-verified bundle.
+`lynx release` runs the Rspeedy production build, creates `release.json` plus
+`release.zip`, uploads only the ZIP to R2, then registers it. Open the Console
+to select and enable the verified bundle. The Worker assigns the release to
+the host runtime that the host team registered; the mini app never supplies a
+native fingerprint.
 
 ### Remote setup recovery
 

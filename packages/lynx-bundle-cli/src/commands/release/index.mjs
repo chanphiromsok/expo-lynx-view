@@ -27,7 +27,14 @@ async function confirmTarget(target) {
 }
 
 export default class Release extends Command {
-  static description = 'Build an independent mini-app release and upload it to the delivery Console.';
+  static description = 'Mini-app command: build, package, upload, and register an immutable iOS release.';
+
+  static examples = [
+    'lynx doctor',
+    'lynx release --platform ios',
+    'lynx release --platform ios --draft',
+    'lynx release upload ./dist/lynx-releases/merchant-home-20260906T101930455Z',
+  ];
 
   static args = {
     action: Args.string({ options: ['upload'] }),
@@ -40,6 +47,7 @@ export default class Release extends Command {
     config: Flags.file({ description: 'mini-app config path' }),
     'release-id': Flags.string({ description: 'immutable release ID' }),
     version: Flags.string({ description: 'display version' }),
+    platform: Flags.string({ description: 'target platform when building: ios or android', options: ['ios', 'android'] }),
     server: Flags.url({ description: 'delivery Worker base URL', env: 'LYNX_DELIVERY_SERVER' }),
     'api-key': Flags.string({ description: 'delivery API key', env: 'LYNX_DELIVERY_API_KEY' }),
     'host-build': Flags.string({ description: 'expected current host build for CI', env: 'LYNX_EXPECTED_HOST_BUILD' }),
@@ -67,10 +75,12 @@ export default class Release extends Command {
       });
       return this.log(flags.json ? JSON.stringify(result, null, 2) : `Uploaded: ${result.bundle.id} (${result.bundle.version})`);
     }
+    if (!flags.platform) throw new Error('Building a release requires --platform ios or --platform android.');
     const config = await loadMiniAppConfigAsync({ configPath: flags.config });
     const packed = packMiniAppRelease(config, {
       releaseId: flags['release-id'] ?? releaseId(config.feature),
       version: flags.version ?? releaseVersion(),
+      platform: flags.platform,
     });
     if (flags.draft) return this.log(JSON.stringify(packed, null, 2));
     if (!flags.server || !flags['api-key']) throw new Error('Set LYNX_DELIVERY_SERVER and LYNX_DELIVERY_API_KEY, or pass --server and --api-key.');

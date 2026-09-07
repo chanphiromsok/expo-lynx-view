@@ -23,6 +23,7 @@ type StoredBundle = {
   id: string;
   featureId: string;
   version: string;
+  platform: string;
   runtimeVersion: string;
   archiveSha256: string;
   archiveBytes: number;
@@ -51,11 +52,21 @@ type StoredMiniApp = {
 type StoredDeployment = {
   appId: string;
   featureId: string;
+  platform: string;
   runtimeVersion: string;
   bundleId: string | null;
   enabled: number;
   force: number;
   revision: number;
+  updatedAt: string;
+};
+
+type StoredHostRuntime = {
+  appId: string;
+  platform: string;
+  runtimeVersion: string;
+  appVersion: string;
+  buildNumber: string;
   updatedAt: string;
 };
 
@@ -74,8 +85,10 @@ function createDatabase() {
   const users = new Map<string, StoredUser>();
   const apps = new Map<string, StoredApp>();
   const miniApps = new Map<string, StoredMiniApp>();
+  const hostRuntimes = new Map<string, StoredHostRuntime>();
   const bundleKey = (appId: string, id: string) => `${appId}/${id}`;
-  const deploymentKey = (appId: string, featureId: string, runtimeVersion: string) => `${appId}/${featureId}/${runtimeVersion}`;
+  const deploymentKey = (appId: string, featureId: string, platform: string, runtimeVersion: string) => `${appId}/${featureId}/${platform}/${runtimeVersion}`;
+  const hostRuntimeKey = (appId: string, platform: string) => `${appId}/${platform}`;
   const miniAppKey = (appId: string, id: string) => `${appId}/${id}`;
   const database = {
     prepare(sql: string) {
@@ -88,7 +101,8 @@ function createDatabase() {
               if (sql.includes('FROM users WHERE username')) return [...users.values()].find((user) => user.username === String(values[0])) ?? null;
               if (sql.includes('FROM users WHERE api_key_hash')) return [...users.values()].find((user) => user.apiKeyHash === String(values[0])) ?? null;
               if (sql.includes('FROM users WHERE id')) return users.get(String(values[0])) ?? null;
-              if (sql.includes('FROM deployments')) return deployments.get(deploymentKey(String(values[0]), String(values[1]), String(values[2]))) ?? null;
+              if (sql.includes('FROM deployments')) return deployments.get(deploymentKey(String(values[0]), String(values[1]), String(values[2]), String(values[3]))) ?? null;
+              if (sql.includes('FROM host_runtimes')) return hostRuntimes.get(hostRuntimeKey(String(values[0]), String(values[1]))) ?? null;
               if (sql.includes('FROM apps')) return apps.get(String(values[0])) ?? null;
               if (sql.includes('FROM mini_apps')) return miniApps.get(miniAppKey(String(values[0]), String(values[1]))) ?? null;
               if (sql.includes('FROM bundles')) {
@@ -123,14 +137,18 @@ function createDatabase() {
               }
               if (query.includes('from "deployments"')) {
                 if (query.includes('group by')) {
-                  return [...deployments.values()].map((deployment) => [deployment.appId, deployment.featureId, deployment.runtimeVersion]);
+                  return [...deployments.values()].map((deployment) => [deployment.appId, deployment.featureId, deployment.platform, deployment.runtimeVersion]);
                 }
-                const deployment = deployments.get(deploymentKey(String(values[0]), String(values[1]), String(values[2])));
+                const deployment = deployments.get(deploymentKey(String(values[0]), String(values[1]), String(values[2]), String(values[3])));
                 return { results: deployment ? [deployment] : [] };
+              }
+              if (query.includes('from "host_runtimes"')) {
+                const runtime = hostRuntimes.get(hostRuntimeKey(String(values[0]), String(values[1])));
+                return { results: runtime ? [runtime] : [] };
               }
               if (query.includes('from "bundles"')) {
                 if (query.includes('group by')) {
-                  return [...bundles.values()].map((bundle) => [bundle.appId, bundle.featureId, bundle.runtimeVersion]);
+                  return [...bundles.values()].map((bundle) => [bundle.appId, bundle.featureId, bundle.platform, bundle.runtimeVersion]);
                 }
                 if (query.includes('"bundles"."id" = ?')) {
                   const bundle = bundles.get(bundleKey(String(values[0]), String(values[1])));
@@ -167,14 +185,19 @@ function createDatabase() {
                   ? [miniApp.id]
                   : [miniApp.appId, miniApp.id, miniApp.name, miniApp.createdAt]);
               }
+              if (query.includes('from "host_runtimes"')) {
+                const runtime = hostRuntimes.get(hostRuntimeKey(String(values[0]), String(values[1])));
+                return runtime ? [[runtime.appId, runtime.platform, runtime.runtimeVersion, runtime.appVersion, runtime.buildNumber, runtime.updatedAt]] : [];
+              }
               if (query.includes('from "deployments"')) {
                 if (query.includes('group by')) {
-                  return [...deployments.values()].map((deployment) => [deployment.appId, deployment.featureId, deployment.runtimeVersion]);
+                  return [...deployments.values()].map((deployment) => [deployment.appId, deployment.featureId, deployment.platform, deployment.runtimeVersion]);
                 }
-                const deployment = deployments.get(deploymentKey(String(values[0]), String(values[1]), String(values[2])));
+                const deployment = deployments.get(deploymentKey(String(values[0]), String(values[1]), String(values[2]), String(values[3])));
                 return deployment ? [[
                   deployment.appId,
                   deployment.featureId,
+                  deployment.platform,
                   deployment.runtimeVersion,
                   deployment.bundleId,
                   deployment.enabled,
@@ -185,7 +208,7 @@ function createDatabase() {
               }
               if (query.includes('from "bundles"')) {
                 if (query.includes('group by')) {
-                  return [...bundles.values()].map((bundle) => [bundle.appId, bundle.featureId, bundle.runtimeVersion]);
+                  return [...bundles.values()].map((bundle) => [bundle.appId, bundle.featureId, bundle.platform, bundle.runtimeVersion]);
                 }
                 const rows = query.includes('"bundles"."id" = ?')
                   ? [bundles.get(bundleKey(String(values[0]), String(values[1])))].filter(Boolean) as StoredBundle[]
@@ -195,6 +218,7 @@ function createDatabase() {
                   bundle.id,
                   bundle.featureId,
                   bundle.version,
+                  bundle.platform,
                   bundle.runtimeVersion,
                   bundle.archiveSha256,
                   bundle.archiveBytes,
@@ -249,13 +273,14 @@ function createDatabase() {
                   id,
                   featureId: String(values[2]),
                   version: String(values[3]),
-                  runtimeVersion: String(values[4]),
-                  archiveSha256: String(values[5]),
-                  archiveBytes: Number(values[6]),
-                  verifiedAt: values[7] === null ? null : String(values[7]),
-                  targetAppVersion: values[8] === null ? null : String(values[8]),
-                  targetBuildNumber: values[9] === null ? null : String(values[9]),
-                  createdAt: String(values[10]),
+                  platform: String(values[4]),
+                  runtimeVersion: String(values[5]),
+                  archiveSha256: String(values[6]),
+                  archiveBytes: Number(values[7]),
+                  verifiedAt: values[8] === null ? null : String(values[8]),
+                  targetAppVersion: values[9] === null ? null : String(values[9]),
+                  targetBuildNumber: values[10] === null ? null : String(values[10]),
+                  createdAt: String(values[11]),
                 });
                 return { meta: { changes: 1 } };
               }
@@ -279,29 +304,37 @@ function createDatabase() {
               if (query.includes('insert or ignore into deployments')) {
                 const appId = String(values[0]);
                 const featureId = String(values[1]);
-                const runtimeVersion = String(values[2]);
-                const key = deploymentKey(appId, featureId, runtimeVersion);
+                const platform = String(values[2]);
+                const runtimeVersion = String(values[3]);
+                const key = deploymentKey(appId, featureId, platform, runtimeVersion);
                 if (deployments.has(key)) return { meta: { changes: 0 } };
-                deployments.set(key, { appId, featureId, runtimeVersion, bundleId: null, enabled: 0, force: 0, revision: 2, updatedAt: String(values[3]) });
+                deployments.set(key, { appId, featureId, platform, runtimeVersion, bundleId: null, enabled: 0, force: 0, revision: 2, updatedAt: String(values[4]) });
+                return { meta: { changes: 1 } };
+              }
+              if (query.includes('insert into host_runtimes')) {
+                const [appId, platform, runtimeVersion, appVersion, buildNumber, updatedAt] = values.map(String);
+                hostRuntimes.set(hostRuntimeKey(appId, platform), { appId, platform, runtimeVersion, appVersion, buildNumber, updatedAt });
                 return { meta: { changes: 1 } };
               }
               if (query.includes('insert into "deployments"')) {
                 const appId = String(values[0]);
                 const feature = String(values[1]);
-                const runtimeVersion = String(values[2]);
-                const key = deploymentKey(appId, feature, runtimeVersion);
+                const platform = String(values[2]);
+                const runtimeVersion = String(values[3]);
+                const key = deploymentKey(appId, feature, platform, runtimeVersion);
                 const current = deployments.get(key);
                 const expectedRevision = Number(values.at(-1));
                 if (current && current.revision !== expectedRevision) return { meta: { changes: 0 } };
                 deployments.set(key, {
                   appId,
                   featureId: feature,
+                  platform,
                   runtimeVersion,
-                  bundleId: values[3] === null ? null : String(values[3]),
-                  enabled: Number(values[4]),
-                  force: Number(values[5]),
-                  revision: Number(values[6]),
-                  updatedAt: String(values[7]),
+                  bundleId: values[4] === null ? null : String(values[4]),
+                  enabled: Number(values[5]),
+                  force: Number(values[6]),
+                  revision: Number(values[7]),
+                  updatedAt: String(values[8]),
                 });
                 return { meta: { changes: 1 } };
               }
@@ -315,7 +348,7 @@ function createDatabase() {
       return Promise.all(statements.map((statement) => statement.run()));
     },
   } as D1Database;
-  return { database, bundles, deployments, users, apps, miniApps };
+  return { database, bundles, deployments, users, apps, miniApps, hostRuntimes };
 }
 
 const archive = new Uint8Array([80, 75, 3, 4, 1, 2, 3, 4]);
@@ -325,6 +358,7 @@ const release: ReleaseMetadata = {
   feature: 'delivery',
   releaseId: 'delivery-20260901T011848990Z-ac8c0e',
   version: '2026.09.01',
+  platform: 'ios',
   runtimeVersion: 'expo-57',
   archiveSha256: await sha256Hex(archive),
   archiveBytes: archive.byteLength,
@@ -360,6 +394,16 @@ const environment: ControlEnv = {
 };
 
 {
+  const localStorage = createDatabase();
+  const response = await login(
+    { ...environment, DB: localStorage.database, LOCAL_CONSOLE_DEFAULTS: 'true' },
+    new Request('http://127.0.0.1:8787/api/auth/login', { method: 'POST' }),
+    { username: 'admin', password: '123456' },
+  );
+  assert.equal(response.status, 200);
+}
+
+{
   const response = await getDeploymentOverview(
     environment,
     new Request('http://127.0.0.1:8787/api/deploy/delivery'),
@@ -382,8 +426,8 @@ const sessionAuthorization = { Cookie: sessionCookie };
     environment,
     new Request('http://127.0.0.1:8787/api/auth/logout', { method: 'POST' }),
   );
-  assert.equal(response.status, 204);
-  assert.equal(await response.text(), '');
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true });
   assert.match(response.headers.get('Set-Cookie') ?? '', /Max-Age=0/);
 }
 {
@@ -426,6 +470,7 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     }),
     release.appId!,
     release.feature,
+    release.platform,
     release.releaseId,
   );
   assert.equal(response.status, 200);
@@ -451,7 +496,7 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     environment,
     new Request('http://127.0.0.1:8787/api/deployments', { headers: sessionAuthorization }),
   );
-  assert.deepEqual(await scopes.json(), [{ appId: 'shop', feature: 'delivery', runtimeVersion: 'expo-57' }]);
+  assert.deepEqual(await scopes.json(), [{ appId: 'shop', feature: 'delivery', platform: 'ios', runtimeVersion: 'expo-57' }]);
 }
 
 {
@@ -464,7 +509,7 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
   assert.deepEqual(await response.json(), {
     schemaVersion: 2,
     bundleId: 'delivery-unconfigured',
-    target: { appId: 'shop', feature: 'delivery', appVersion: null, buildNumber: null },
+    target: { appId: 'shop', feature: 'delivery', platform: 'ios', appVersion: null, buildNumber: null },
     complete: false,
     uploaded: false,
   });
@@ -479,8 +524,8 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     { bundleId: release.releaseId, force: false },
   );
   assert.equal(promote.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.revision, 1);
-  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.enabled, 0);
+  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.revision, 1);
+  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.enabled, 0);
 
   const enabled = await updateDeployment(
     environment,
@@ -490,8 +535,8 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     { enabled: true },
   );
   assert.equal(enabled.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.revision, 2);
-  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.enabled, 1);
+  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.revision, 2);
+  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.enabled, 1);
 
   const noOp = await updateDeployment(
     environment,
@@ -501,7 +546,7 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     { bundleId: release.releaseId, force: false },
   );
   assert.equal(noOp.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.revision, 2);
+  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.revision, 2);
 
   const forced = await updateDeployment(
     environment,
@@ -511,8 +556,8 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     { bundleId: release.releaseId, force: true },
   );
   assert.equal(forced.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.revision, 3);
-  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.force, 1);
+  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.revision, 3);
+  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.force, 1);
 
   const disabled = await updateDeployment(
     environment,
@@ -522,8 +567,8 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     { enabled: false },
   );
   assert.equal(disabled.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.bundleId, release.releaseId);
-  assert.equal(storage.deployments.get('shop/delivery/expo-57')?.force, 0);
+  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.bundleId, release.releaseId);
+  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.force, 0);
 }
 
 const alternateRuntimeRelease: ReleaseMetadata = {
@@ -549,6 +594,7 @@ assert.equal((await handleLocalUpload(
   }),
   alternateRuntimeRelease.appId!,
   alternateRuntimeRelease.feature,
+  alternateRuntimeRelease.platform,
   alternateRuntimeRelease.releaseId,
 )).status, 200);
 assert.equal((await completeUpload(
@@ -564,8 +610,8 @@ assert.equal((await updateDeployment(
   alternateRuntimeRelease.feature,
   { bundleId: alternateRuntimeRelease.releaseId, force: false },
 )).status, 200);
-assert.equal(storage.deployments.get('shop/delivery/expo-57')?.bundleId, release.releaseId);
-assert.equal(storage.deployments.get('shop/delivery/expo-fingerprint-2')?.bundleId, alternateRuntimeRelease.releaseId);
+assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.bundleId, release.releaseId);
+assert.equal(storage.deployments.get('shop/delivery/ios/expo-fingerprint-2')?.bundleId, alternateRuntimeRelease.releaseId);
 
 {
   const createdApp = await createApp(
@@ -585,15 +631,16 @@ assert.equal(storage.deployments.get('shop/delivery/expo-fingerprint-2')?.bundle
     environment,
     new Request('http://127.0.0.1:8787/api/apps/bs-one/runtime', { headers: apiKeyAuthorization }),
     'bs-one',
-    { schemaVersion: 1, runtimeVersion: 'runtime-a', appVersion: '1.2.0', buildNumber: '42', features: ['merchant-home'] },
+    { schemaVersion: 1, platform: 'ios', runtimeVersion: 'runtime-a', appVersion: '1.2.0', buildNumber: '42', features: ['merchant-home'] },
   );
   assert.equal(runtimeA.status, 200);
-  assert.equal(storage.deployments.get('bs-one/merchant-home/runtime-a')?.revision, 2);
+  assert.equal(storage.deployments.get('bs-one/merchant-home/ios/runtime-a')?.revision, 2);
 
   const independentRelease: MiniAppReleaseV2 = {
     schemaVersion: 2,
     appId: 'bs-one',
     feature: 'merchant-home',
+    platform: 'ios',
     releaseId: 'merchant-home-20260905T120000Z-a1b2c3',
     version: '2026.09.05',
     archiveSha256: release.archiveSha256,
@@ -610,7 +657,7 @@ assert.equal(storage.deployments.get('shop/delivery/expo-fingerprint-2')?.bundle
   assert.deepEqual(await reserved.json(), {
     schemaVersion: 2,
     bundleId: independentRelease.releaseId,
-    target: { appId: 'bs-one', feature: 'merchant-home', appVersion: '1.2.0', buildNumber: '42' },
+    target: { appId: 'bs-one', feature: 'merchant-home', platform: 'ios', appVersion: '1.2.0', buildNumber: '42' },
     complete: false,
     uploaded: false,
   });
@@ -620,7 +667,7 @@ assert.equal(storage.deployments.get('shop/delivery/expo-fingerprint-2')?.bundle
     environment,
     new Request('http://127.0.0.1:8787/api/apps/bs-one/runtime', { headers: apiKeyAuthorization }),
     'bs-one',
-    { schemaVersion: 1, runtimeVersion: 'runtime-b', appVersion: '1.3.0', buildNumber: '43', features: ['merchant-home'] },
+    { schemaVersion: 1, platform: 'ios', runtimeVersion: 'runtime-b', appVersion: '1.3.0', buildNumber: '43', features: ['merchant-home'] },
   );
   assert.equal(runtimeB.status, 200);
   const retried = await registerUpload(

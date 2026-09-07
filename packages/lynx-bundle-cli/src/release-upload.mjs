@@ -93,7 +93,7 @@ export async function uploadRelease({ releaseDirectory, server, apiKey, r2, expe
 async function uploadDirectlyToR2(r2, artifacts, r2FetchImpl) {
   const configuration = requireR2Configuration(r2);
   const app = artifacts.release.appId ?? 'default';
-  const key = `${app}/${artifacts.release.feature}/releases/${artifacts.release.releaseId}/release.zip`;
+  const key = `${app}/${artifacts.release.feature}/${artifacts.release.platform}/releases/${artifacts.release.releaseId}/release.zip`;
   const url = r2ObjectUrl(configuration.accountId, configuration.bucketName, key);
   const headers = {
     'content-type': 'application/zip',
@@ -133,8 +133,8 @@ function parseReleaseMetadata(bytes) {
   try { value = JSON.parse(bytes.toString('utf8')); } catch { throw new Error('release.json must contain valid JSON.'); }
   const release = requireObject(value, 'release.json must contain an object.');
   const allowed = release.schemaVersion === 2
-    ? ['schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'archiveSha256', 'archiveBytes']
-    : ['schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'runtimeVersion', 'archiveSha256', 'archiveBytes'];
+    ? ['schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'platform', 'archiveSha256', 'archiveBytes']
+    : ['schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'platform', 'runtimeVersion', 'archiveSha256', 'archiveBytes'];
   if (Object.keys(release).some((key) => !allowed.includes(key))) {
     throw new Error('release.json contains an unknown field.');
   }
@@ -142,6 +142,7 @@ function parseReleaseMetadata(bytes) {
   if (release.schemaVersion === 2 && (typeof release.appId !== 'string' || !appId.test(release.appId))) throw new Error('release.json appId is invalid.');
   if (release.schemaVersion === 1 && release.appId !== undefined && (typeof release.appId !== 'string' || !appId.test(release.appId))) throw new Error('release.json appId is invalid.');
   if (typeof release.feature !== 'string' || !featureId.test(release.feature)) throw new Error('release.json feature is invalid.');
+  if (release.platform !== 'ios' && release.platform !== 'android') throw new Error('release.json platform must be ios or android.');
   if (typeof release.releaseId !== 'string' || !releaseId.test(release.releaseId)) throw new Error('release.json releaseId is invalid.');
   if (typeof release.version !== 'string' || !protocolVersion.test(release.version)) throw new Error('release.json version is invalid.');
   if (release.schemaVersion === 1 && (typeof release.runtimeVersion !== 'string' || !protocolVersion.test(release.runtimeVersion))) throw new Error('release.json runtimeVersion is invalid.');

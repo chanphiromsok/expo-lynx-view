@@ -28,14 +28,14 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyAm
             return {
               async first() {
                 if (sql.includes('FROM deployments')) {
-                  return includeDeployment && (values[2] === 2 || values[2] === 'expo-57') ? {
+                  return includeDeployment && values.includes('ios') && (values.includes(2) || values.includes('expo-57')) ? {
                     bundleId: releaseId,
                     enabled: 1,
                     force: 0,
                     revision: 7,
                     updatedAt: '2026-09-01T01:20:00.000Z',
                     version: '2026.09.01',
-                    runtimeVersion: 'expo-57',
+                    platform: 'ios', runtimeVersion: 'expo-57',
                     archiveSha256,
                     archiveBytes: archive.byteLength,
                   } : null;
@@ -47,6 +47,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyAm
                   const row = [
                     'default',
                     feature,
+                    'ios',
                     'expo-57',
                     releaseId,
                     1,
@@ -54,14 +55,15 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyAm
                     7,
                     '2026-09-01T01:20:00.000Z',
                   ];
-                  if (!includeDeployment || (values[2] !== 2 && values[2] !== 'expo-57')) return [];
-                  return values[2] === 2 && options.legacyAmbiguous ? [row, [...row.slice(0, 2), 'expo-58', ...row.slice(3)]] : [row];
+                  if (!includeDeployment || !values.includes('ios') || (!values.includes(2) && !values.includes('expo-57'))) return [];
+                  return values.includes(2) && options.legacyAmbiguous ? [row, [...row.slice(0, 3), 'expo-58', ...row.slice(4)]] : [row];
                 }
                 return includeBundle ? [[
                   'default',
                   releaseId,
                   feature,
                   '2026.09.01',
+                  'ios',
                   'expo-57',
                   archiveSha256,
                   archive.byteLength,
@@ -93,6 +95,25 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyAm
 
 {
   const response = await handlePublicDeliveryRequest(
+    environment(),
+    new Request(`https://delivery.example/v1/deploy/${feature}`, {
+      headers: { 'lynx-platform': 'android', 'lynx-runtime-version': 'expo-57' },
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    schemaVersion: 1,
+    type: 'lynx-deployment',
+    feature,
+    revision: 1,
+    enabled: false,
+    runtimeVersion: 'expo-57',
+    issuedAt: '1970-01-01T00:00:00.000Z',
+  });
+}
+
+{
+  const response = await handlePublicDeliveryRequest(
     environment({ legacyAmbiguous: true }),
     new Request(`https://delivery.example/v1/deploy/${feature}`),
   );
@@ -114,7 +135,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyAm
   );
   assert.equal(response.status, 200);
   const body = await response.json() as { archiveUrl: string };
-  assert.equal(body.archiveUrl, `/v1/shop/${feature}/${releaseId}/release.zip`);
+  assert.equal(body.archiveUrl, `/v1/shop/${feature}/ios/${releaseId}/release.zip`);
 }
 
 {

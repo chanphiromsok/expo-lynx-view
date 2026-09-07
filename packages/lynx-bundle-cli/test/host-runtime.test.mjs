@@ -39,8 +39,15 @@ test('prepares then registers the exact runtime held by the embedded registry', 
   assert.equal(registered.appId, 'bs-one');
   assert.equal(request.url, 'https://delivery.example/api/apps/bs-one/runtime');
   assert.deepEqual(JSON.parse(request.init.body), {
-    schemaVersion: 1, runtimeVersion: 'runtime-a', appVersion: '1.2.0', buildNumber: '42', features: ['delivery'],
+    schemaVersion: 1, platform: 'ios', runtimeVersion: 'runtime-a', appVersion: '1.2.0', buildNumber: '42', features: ['delivery'],
   });
+});
+
+test('does not pretend Android managed delivery is available', async () => {
+  await assert.rejects(
+    prepareHostRuntime({ cwd: temporaryHost(), platform: 'android' }),
+    /Android managed delivery is not implemented/,
+  );
 });
 
 test('refuses to register a host project changed since preparation', async () => {

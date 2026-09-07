@@ -2,10 +2,12 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { createNativeRuntimeVersion } from './index.mjs';
+import { loadExpoConfig } from './expo-config.mjs';
 
-export async function prepareHostRuntime({ cwd = process.cwd(), runtimeFactory = createNativeRuntimeVersion } = {}) {
+export async function prepareHostRuntime({ cwd = process.cwd(), platform = 'ios', runtimeFactory = createNativeRuntimeVersion } = {}) {
+  assertManagedPlatform(platform);
   const host = readHost(cwd);
-  const runtimeVersion = await runtimeFactory(host.root);
+  const runtimeVersion = await runtimeFactory(host.root, platform);
   const registryPath = resolve(host.root, host.embeddedBundlesPath, 'registry.json');
   const registry = readJson(registryPath, 'Embedded registry');
   assertRegistry(registry, host.features);
@@ -18,15 +20,16 @@ export async function prepareHostRuntime({ cwd = process.cwd(), runtimeFactory =
     writeJsonAtomic(baselinePath, baseline);
   }
   writeJsonAtomic(registryPath, registry);
-  return { ...host, runtimeVersion };
+  return { ...host, platform, runtimeVersion };
 }
 
-export async function registerPreparedHostRuntime({ cwd = process.cwd(), server = process.env.LYNX_DELIVERY_SERVER, apiKey = process.env.LYNX_DELIVERY_API_KEY, fetchImpl = fetch, runtimeFactory = createNativeRuntimeVersion } = {}) {
+export async function registerPreparedHostRuntime({ cwd = process.cwd(), platform = 'ios', server = process.env.LYNX_DELIVERY_SERVER, apiKey = process.env.LYNX_DELIVERY_API_KEY, fetchImpl = fetch, runtimeFactory = createNativeRuntimeVersion } = {}) {
+  assertManagedPlatform(platform);
   const host = readHost(cwd);
   const registryPath = resolve(host.root, host.embeddedBundlesPath, 'registry.json');
   const registry = readJson(registryPath, 'Embedded registry');
   assertRegistry(registry, host.features);
-  const actualRuntime = await runtimeFactory(host.root);
+  const actualRuntime = await runtimeFactory(host.root, platform);
   if (registry.runtimeVersion !== actualRuntime) {
     throw new Error('The host project changed after lynx host prepare. Run lynx host prepare again before registering.');
   }
@@ -37,6 +40,7 @@ export async function registerPreparedHostRuntime({ cwd = process.cwd(), server 
     headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
     body: JSON.stringify({
       schemaVersion: 1,
+      platform,
       runtimeVersion: registry.runtimeVersion,
       appVersion: host.appVersion,
       buildNumber: host.buildNumber,
@@ -50,22 +54,28 @@ export async function registerPreparedHostRuntime({ cwd = process.cwd(), server 
     const message = body?.error?.message;
     throw new Error(`Host registration failed with HTTP ${response.status}${typeof message === 'string' ? ` — ${message}` : ''}.`);
   }
-  return { appId: host.appId, appVersion: host.appVersion, buildNumber: host.buildNumber, features: host.features };
+  return { appId: host.appId, platform, appVersion: host.appVersion, buildNumber: host.buildNumber, features: host.features };
 }
 
-function readHost(cwd) {
+function assertManagedPlatform(platform) {
+  if (platform === 'ios') return;
+  if (platform === 'android') throw new Error('Android managed delivery is not implemented in expo-lynx-view yet. Do not register an Android runtime.');
+  throw new Error('platform must be ios or android.');
+}
+
+export function readHost(cwd = process.cwd()) {
   const root = resolve(cwd);
-  const app = readJson(resolve(root, 'app.json'), 'app.json')?.expo;
-  if (!app || typeof app !== 'object') throw new Error('app.json must contain an Expo configuration.');
+  const app = loadExpoConfig(root);
+  if (!app || typeof app !== 'object') throw new Error('Expo configuration must contain an object.');
   const plugin = Array.isArray(app.plugins)
     ? app.plugins.find((item) => Array.isArray(item) && item[0] === 'expo-lynx-view')
     : null;
   const options = plugin?.[1];
   if (!options || typeof options !== 'object' || typeof options.embeddedBundlesPath !== 'string' || !options.deliveryEndpoints || typeof options.deliveryEndpoints !== 'object') {
-    throw new Error('app.json must configure expo-lynx-view with embeddedBundlesPath and deliveryEndpoints.');
+    throw new Error('Expo config must configure expo-lynx-view with embeddedBundlesPath and deliveryEndpoints.');
   }
   if (typeof app.version !== 'string' || app.version.length === 0 || typeof app.ios?.buildNumber !== 'string' || app.ios.buildNumber.length === 0) {
-    throw new Error('app.json must declare expo.version and expo.ios.buildNumber before host preparation.');
+    throw new Error('Expo config must declare expo.version and expo.ios.buildNumber before host preparation.');
   }
   const entries = Object.entries(options.deliveryEndpoints);
   if (entries.length === 0 || entries.some(([feature, value]) => typeof feature !== 'string' || typeof value !== 'string')) {

@@ -14,7 +14,7 @@ function run(root, argumentsList) {
   return spawnSync(process.execPath, [cli, ...argumentsList], { cwd: root, encoding: 'utf8' });
 }
 
-test('the public CLI packages an iOS release and rejects Android packaging', () => {
+test('the public CLI packages platform-scoped releases', () => {
   const root = mkdtempSync(resolve(tmpdir(), 'lynx-bundle-cli-command-'));
   cpSync(fixtureRoot, root, { recursive: true });
   const packResult = run(root, [
@@ -43,6 +43,7 @@ test('the public CLI packages an iOS release and rejects Android packaging', () 
     '--runtime-version',
     'expo-57',
   ]);
-  assert.notEqual(androidResult.status, 0);
-  assert.match(androidResult.stderr, /supports iOS only/);
+  assert.equal(androidResult.status, 0, androidResult.stderr);
+  const androidRelease = JSON.parse(readFileSync(resolve(root, 'dist/lynx-releases/shopping/shopping-2026.08.29.2/release.json'), 'utf8'));
+  assert.equal(androidRelease.platform, 'android');
 });

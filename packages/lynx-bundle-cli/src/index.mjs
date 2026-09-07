@@ -119,10 +119,11 @@ export function checkEmbedded(config, runtimeVersion) {
   return verifyEmbeddedTree(config.embeddedOutputDir, config, runtimeVersion, selectFeatures(config));
 }
 
-export async function createNativeRuntimeVersion(projectRoot) {
-  const runtimeVersion = await createProjectHashAsync(projectRoot);
+export async function createNativeRuntimeVersion(projectRoot, platform = 'ios') {
+  assertPlatform(platform);
+  const runtimeVersion = await createProjectHashAsync(projectRoot, { platforms: [platform], silent: true });
   assertVersion(runtimeVersion, 'Expo native runtime fingerprint');
-  return runtimeVersion;
+  return `${platform}:${runtimeVersion}`;
 }
 
 export function readEmbeddedRuntimeVersion(config) {
@@ -142,7 +143,7 @@ export function packRelease(config, options) {
   const feature = getFeature(config, featureId);
   assertReleaseId(releaseId);
   assertDisplayVersion(version);
-  if (platform !== 'ios') throw new Error('Release packaging currently supports iOS only.');
+  assertPlatform(platform);
   if (runtimeVersion !== undefined) assertVersion(runtimeVersion, 'runtimeVersion');
 
   const build = buildFeature(config, feature.id);
@@ -161,6 +162,7 @@ export function packRelease(config, options) {
           feature: feature.id,
           releaseId,
           version,
+          platform,
           archiveSha256: archiveHash,
           archiveBytes: archive.byteLength,
         }
@@ -170,6 +172,7 @@ export function packRelease(config, options) {
           feature: feature.id,
           releaseId,
           version,
+          platform,
           runtimeVersion,
           archiveSha256: archiveHash,
           archiveBytes: archive.byteLength,
@@ -228,12 +231,12 @@ export async function loadMiniAppConfigAsync({ configPath, cwd = process.cwd() }
   return normalizeMiniAppConfig(raw, path);
 }
 
-export function packMiniAppRelease(config, { releaseId, version }) {
+export function packMiniAppRelease(config, { releaseId, version, platform }) {
   return packRelease(config, {
     featureId: config.feature,
     releaseId,
     version,
-    platform: 'ios',
+    platform,
     outputWithFeature: false,
   });
 }
@@ -323,6 +326,12 @@ function normalizeMiniAppConfig(raw, configPath) {
     features: { [raw.feature]: feature },
     releaseOutputDir: resolveContained(configDirectory, raw.releaseOutputDir ?? './dist/lynx-releases'),
   };
+}
+
+function assertPlatform(value) {
+  if (value !== 'ios' && value !== 'android') {
+    throw new Error('platform must be ios or android.');
+  }
 }
 
 function normalizeBuild(raw, configDirectory, featureId) {

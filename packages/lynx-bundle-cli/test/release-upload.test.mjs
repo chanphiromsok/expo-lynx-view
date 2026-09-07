@@ -14,6 +14,7 @@ const release = {
   feature: 'delivery',
   releaseId: 'delivery-20260901T011848990Z-ac8c0e',
   version: '2026.09.01',
+  platform: 'ios',
   runtimeVersion: 'expo-57',
   archiveSha256,
   archiveBytes: archive.byteLength,
@@ -25,6 +26,7 @@ const miniAppRelease = {
   feature: 'merchant-home',
   releaseId: 'merchant-home-20260905T120000Z-a1b2c3',
   version: '2026.09.05',
+  platform: 'ios',
   archiveSha256,
   archiveBytes: archive.byteLength,
 };
@@ -63,7 +65,7 @@ test('v2 upload leaves runtime ownership with the Worker and checks the target b
     },
     r2: { accountId: 'account', bucketName: 'bundles', accessKeyId: 'key', secretAccessKey: 'secret' },
     r2FetchImpl: async (input) => {
-      assert.equal(String(input), `https://account.r2.cloudflarestorage.com/bundles/bs-one/merchant-home/releases/${miniAppRelease.releaseId}/release.zip`);
+      assert.equal(String(input), `https://account.r2.cloudflarestorage.com/bundles/bs-one/merchant-home/ios/releases/${miniAppRelease.releaseId}/release.zip`);
       return new Response(null, { status: 200 });
     },
   });
@@ -123,7 +125,7 @@ test('registers, sends the ZIP directly to R2, and completes the release', async
     r2FetchImpl: async (input, init = {}) => {
       const url = String(input);
       calls.push({ url, init });
-      assert.equal(url, `https://account.r2.cloudflarestorage.com/bundles/default/delivery/releases/${release.releaseId}/release.zip`);
+      assert.equal(url, `https://account.r2.cloudflarestorage.com/bundles/default/delivery/ios/releases/${release.releaseId}/release.zip`);
       assert.equal(init.method, 'PUT');
       assert.deepEqual(init.headers, {
         'content-type': 'application/zip',
@@ -143,7 +145,7 @@ test('registers, sends the ZIP directly to R2, and completes the release', async
   });
   assert.deepEqual(calls.map(({ url }) => url), [
     'https://delivery.example/api/uploads',
-    `https://account.r2.cloudflarestorage.com/bundles/default/delivery/releases/${release.releaseId}/release.zip`,
+    `https://account.r2.cloudflarestorage.com/bundles/default/delivery/ios/releases/${release.releaseId}/release.zip`,
     `https://delivery.example/api/uploads/${release.releaseId}/complete`,
   ]);
 });

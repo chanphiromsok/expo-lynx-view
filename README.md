@@ -104,73 +104,102 @@ exact versions are free, fully checks both packages, then publishes
 `expo-lynx-view` followed by `expo-lynx-bundle-cli`. If npm asks for two-factor
 authentication, complete its prompt for each package.
 
-## Set up a mini-app feature
+## Set up separate host and mini-app repositories
 
-The consuming Expo app owns `lynx-bundle.config.ts` (or `.mjs`). Feature keys
-are canonical IDs: a `shopping` entry resolves to
-`<featuresDir>/shopping`, so the feature ID and its project root are not
-repeated in configuration.
+The host app and each Lynx mini app are independent repositories. The host
+declares only flat feature IDs; a mini app declares its own app/feature pair.
+
+In the Expo host, install `expo-lynx-view` plus the CLI, then configure the
+plugin in `app.json` or `app.config.ts`:
 
 ```ts
-import { defineConfig } from 'expo-lynx-bundle-cli';
-
-export default defineConfig({
-  appId: 'shop',
-  featuresDir: './features',
-  features: {
-    shopping: {},
-    orders: { entry: './src/main.tsx' },
+[
+  'expo-lynx-view',
+  {
+    embeddedBundlesPath: './generated/expo-lynx/embedded',
+    publicKeyPath: './keys/lynx/updates.public.pem',
+    deliveryEndpoints: {
+      'merchant-home': 'https://your-worker.workers.dev/v1/bs-one/merchant-home',
+    },
   },
-  // Kept outside Metro's imported asset graph so these resources are not
-  // duplicated in the React Native JavaScript bundle.
-  embeddedOutputDir: './generated/expo-lynx/embedded',
-  releaseOutputDir: './dist/lynx-releases',
+]
+```
+
+The host must also set `expo.version` and `expo.ios.buildNumber`. From the
+host root, generate or restore the trust key, build the embedded fallback from
+each mini-app repository, and check the configuration:
+
+```sh
+pnpm exec lynx keys generate
+pnpm exec lynx doctor
+pnpm exec lynx host embed ../merchant-home
+pnpm exec lynx host prepare
+```
+
+In the independent Lynx mini-app repository, install the CLI as a development
+dependency and add `lynx-miniapp.config.ts` beside `lynx.config.ts`:
+
+```sh
+pnpm add -D expo-lynx-bundle-cli
+```
+
+```ts
+import { defineMiniApp } from 'expo-lynx-bundle-cli';
+
+export default defineMiniApp({
+  appId: 'bs-one',
+  feature: 'merchant-home',
 });
 ```
 
-Unless a feature supplies an advanced `build` wrapper, it must contain
-`src/index.tsx` and `lynx.config.ts`. The CLI accepts only
-`main.lynx.bundle` plus its `static/**` sidecars from the feature build.
-
-Build static embedded resources for the app runtime, then validate the result:
+Then package an iOS release without contacting the Worker:
 
 ```sh
-pnpm lynx bundle delivery
+pnpm exec lynx doctor
+pnpm exec lynx release --platform ios --draft
 ```
 
-The lower-level `pnpm lynx-bundle build-embedded` and `check-embedded`
-commands remain available for CI and diagnostics.
+The mini app needs `src/index.tsx` and `lynx.config.ts`. Its draft contains
+only `release.json` and `release.zip`; the uploaded release is later enabled
+from the Console. Android remote installation is not implemented yet, so do
+not release an Android deployment.
 
-`generated/expo-lynx/embedded` is config-plugin input, not an Expo/Metro
-asset import. When it is configured as `embeddedBundlesPath`, prebuild also
-generates `generated/expo-lynx/lynx-features.d.ts` so `ExpoLynxView` source
-features autocomplete and TypeScript rejects unknown feature names.
+`generated/expo-lynx/embedded` is host build input, not a Metro asset. A host
+native-release pipeline must receive the matching initial mini-app baseline
+before prebuild. `lynx host embed <mini-app-directory>` builds one independent
+mini app and writes its `main.lynx.bundle`, `static/**`, `baseline.json`, and
+the registry entry into the host's configured `embeddedBundlesPath`. Run it
+once for every configured feature before `lynx host prepare`.
 
 ## Generate the signing PEM key pair
 
 Generate a local development key pair once for an app:
 
 ```sh
-pnpm lynx-bundle keys generate \
-  --output-dir apps/expo-lynx-example/.local-lynx-keys
+pnpm lynx keys generate
 ```
 
-This produces:
+Run it from the host-app root after configuring `expo-lynx-view` with
+`publicKeyPath`. It produces:
 
 | File | Format and purpose | Handling |
 | --- | --- | --- |
-| `updates.private.pem` | 3072-bit RSA PKCS#8 private signing key | Secret. Owner-only permissions (`0600`); never commit, upload to R2, or include in the mobile app. |
-| `updates.public.pem` | RSA SubjectPublicKeyInfo public verification key | Safe to embed in the app and distribute with its build configuration. |
+| `.local-lynx-keys/updates.private.pem` | 3072-bit RSA PKCS#8 private signing key | Secret. Owner-only permissions (`0600`); never commit, upload to R2, or include in the mobile app. |
+| configured `publicKeyPath` | RSA SubjectPublicKeyInfo public verification key | Safe to embed in the app and distribute with its build configuration. |
 
 The CLI refuses to overwrite an existing pair. The Worker holds the private key
 and signs its exact public deployment response with RSA-SHA256; the CLI never
 receives that key. The mobile app verifies the response with the embedded public
 key.
 
-For the example, copy or replace the development public key at
-`apps/expo-lynx-example/keys/lynx/updates.public.pem`, and keep the matching
-private key only under the ignored `.local-lynx-keys/` directory. Configure the
-public key and embedded resources in the Expo plugin:
+If the local private key already exists but the configured public-key file is
+missing, rerun `pnpm lynx keys generate`. It restores only the matching public
+PEM; it never replaces the private key.
+
+For a custom location, pass `--public-key-path` and `--private-key-path`.
+The lower-level `lynx-bundle keys generate --output-dir <directory>` remains
+available for a standalone pair. Configure the public key and embedded
+resources in the Expo plugin:
 
 ```json
 {
@@ -190,6 +219,19 @@ public key and embedded resources in the Expo plugin:
   }
 }
 ```
+
+### Setup errors that `lynx doctor` explains
+
+| Error | Fix |
+| --- | --- |
+| `Expo config must configure expo-lynx-view publicKeyPath` | Run the command in the Expo host root and add `publicKeyPath` to the plugin, or pass `--public-key-path`. |
+| Existing private key, missing public key | Run `lynx keys generate` again. It restores only the public PEM from that existing private key. |
+| `Cannot find package 'expo-lynx-bundle-cli'` in `lynx-miniapp.config.ts` | Run `pnpm add -D expo-lynx-bundle-cli` in the mini-app repository. |
+| pnpm reports an unexpected store location | Use the project’s pinned pnpm version (for example `corepack pnpm`) instead of changing the global store. |
+
+The public PEM must be available to the host build. Keep the private PEM and
+the Worker signing secret out of Git. If a host `.gitignore` ignores `*.pem`,
+add an exception for `keys/lynx/updates.public.pem` only.
 
 One app-wide public key is the normal starting point, including for multiple
 mini-apps. It gives one trust root for every configured feature. Rotate to a

@@ -9,6 +9,8 @@ export interface AuthEnv {
   INITIAL_ADMIN_API_KEY?: string;
   INITIAL_ADMIN_PASSWORD?: string;
   INITIAL_ADMIN_USERNAME?: string;
+  /** Passed only by the local development command. Never configure in production. */
+  LOCAL_CONSOLE_DEFAULTS?: string | boolean;
 }
 
 export type AuthUser = {
@@ -22,9 +24,10 @@ type SessionPayload = AuthUser & {
 };
 
 export async function ensureInitialAdmin(environment: AuthEnv): Promise<void> {
-  const username = environment.INITIAL_ADMIN_USERNAME?.trim();
-  const password = environment.INITIAL_ADMIN_PASSWORD;
-  const apiKey = environment.INITIAL_ADMIN_API_KEY?.trim();
+  const localDefaults = environment.LOCAL_CONSOLE_DEFAULTS === true || environment.LOCAL_CONSOLE_DEFAULTS === 'true';
+  const username = localDefaults ? 'admin' : environment.INITIAL_ADMIN_USERNAME?.trim();
+  const password = localDefaults ? '123456' : environment.INITIAL_ADMIN_PASSWORD;
+  const apiKey = localDefaults ? 'lynx_live_local_testing_only_1234567890' : environment.INITIAL_ADMIN_API_KEY?.trim();
   const database = createDeliveryDatabase(environment.DB);
   const [existing] = await database.select({ id: users.id }).from(users).limit(1);
   if (existing) return;
@@ -37,7 +40,7 @@ export async function ensureInitialAdmin(environment: AuthEnv): Promise<void> {
   if (!usernamePattern.test(username)) {
     throw new Error('INITIAL_ADMIN_USERNAME must contain 2-64 letters, numbers, dots, dashes, or underscores.');
   }
-  if (password.length < 12) throw new Error('INITIAL_ADMIN_PASSWORD must be at least 12 characters.');
+  if (!localDefaults && password.length < 12) throw new Error('INITIAL_ADMIN_PASSWORD must be at least 12 characters.');
   if (apiKey.length < 24) throw new Error('INITIAL_ADMIN_API_KEY must be at least 24 characters.');
 
   const id = crypto.randomUUID();

@@ -4,6 +4,10 @@ import { inspectDeliveryWorkspace } from '../doctor.mjs';
 
 export default class Doctor extends Command {
   static description = 'Check local delivery configuration without changing a host, Worker, or release.';
+  static examples = [
+    'lynx doctor',
+    'lynx doctor --remote',
+  ];
   static flags = { remote: Flags.boolean({ description: 'also check that the configured Worker is reachable' }), json: Flags.boolean({ description: 'print stable JSON' }) };
 
   async run() {

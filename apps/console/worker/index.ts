@@ -83,8 +83,8 @@ export const app = new Elysia({ adapter: CloudflareAdapter })
     { params: BundleParametersSchema },
   )
   .put(
-    '/__local-r2/:appId/:feature/releases/:bundleId/release.zip',
-    ({ request, params }) => handleLocalUpload(bindings, request, params.appId, params.feature, params.bundleId),
+    '/__local-r2/:appId/:feature/:platform/releases/:bundleId/release.zip',
+    ({ request, params }) => handleLocalUpload(bindings, request, params.appId, params.feature, params.platform, params.bundleId),
     { params: AppLocalUploadParametersSchema },
   )
   .all('*', ({ request }) => handlePublicDeliveryRequest(bindings, request))

@@ -24,6 +24,7 @@ const deliveryConsolePackage = '@expo-lynx/delivery-console';
 const bundleConfigPath = resolve(exampleRoot, 'lynx-bundle.config.mjs');
 const operationalCli = resolve(repositoryRoot, 'packages/lynx-bundle-cli/bin/lynx.mjs');
 const localDeliveryEnvPath = resolve(repositoryRoot, 'apps/console/.dev.vars');
+const localDeliveryApiKey = 'lynx_live_local_testing_only_1234567890';
 const FEATURE_ID = /^[a-z][a-z0-9-]{0,63}$/;
 
 function help() {
@@ -259,11 +260,9 @@ async function buildEmbedded(feature) {
 
 function configureLocalDeliveryUpload() {
   process.env.LYNX_DELIVERY_SERVER = 'http://127.0.0.1:8787';
+  process.env.LYNX_DELIVERY_API_KEY ??= localDeliveryApiKey;
   if (existsSync(localDeliveryEnvPath)) {
     loadEnvFile(localDeliveryEnvPath);
-    if (!process.env.LYNX_DELIVERY_API_KEY && process.env.INITIAL_ADMIN_API_KEY) {
-      process.env.LYNX_DELIVERY_API_KEY = process.env.INITIAL_ADMIN_API_KEY;
-    }
   }
 }
 

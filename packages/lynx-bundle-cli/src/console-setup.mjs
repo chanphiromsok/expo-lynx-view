@@ -35,16 +35,18 @@ function readWorkerConfig(consoleRoot) {
   return { workerName, bucketName, databaseId };
 }
 
-function createSigningKey(repositoryRoot, consoleRoot) {
+function createSigningKey(repositoryRoot, consoleRoot, signingPrivateKeyPath) {
   const localEnvironment = resolve(consoleRoot, '.dev.vars');
   if (existsSync(localEnvironment)) loadEnvFile(localEnvironment);
-  const privateKey = process.env.DELIVERY_SIGNING_PRIVATE_KEY;
+  const privateKey = signingPrivateKeyPath
+    ? readFileSync(resolve(repositoryRoot, signingPrivateKeyPath), 'utf8')
+    : process.env.DELIVERY_SIGNING_PRIVATE_KEY;
   const publicKeyPath = resolve(repositoryRoot, 'apps/expo-lynx-example/keys/lynx/updates.public.pem');
   if (!privateKey) {
     if (existsSync(publicKeyPath)) {
       throw new Error(`A public key already exists at ${publicKeyPath}, but no matching DELIVERY_SIGNING_PRIVATE_KEY was found in ${localEnvironment}. Refusing to replace the mobile trust key.`);
     }
-    const generated = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const generated = generateKeyPairSync('rsa', { modulusLength: 3072, publicExponent: 65_537 });
     mkdirSync(dirname(publicKeyPath), { recursive: true, mode: 0o700 });
     writeFileSync(publicKeyPath, generated.publicKey.export({ type: 'spki', format: 'pem' }), { mode: 0o644 });
     return generated.privateKey.export({ type: 'pkcs8', format: 'pem' });
@@ -116,13 +118,14 @@ export function setupConsole({
   accountId = process.env.CLOUDFLARE_ACCOUNT_ID,
   r2AccessKeyId = process.env.R2_ACCESS_KEY_ID,
   r2SecretAccessKey = process.env.R2_SECRET_ACCESS_KEY,
+  signingPrivateKeyPath,
 }) {
   if (!usernamePattern.test(username ?? '')) throw new Error('console:setup requires --username with 2-64 letters, numbers, dots, dashes, or underscores.');
   const repositoryRoot = findRepositoryRoot(cwd);
   const consoleRoot = resolve(repositoryRoot, 'apps/console');
   const environmentPath = resolve(repositoryRoot, '.env.lynx');
   if (existsSync(environmentPath)) throw new Error('.env.lynx already exists. This setup command does not replace an existing remote environment.');
-  const signingKey = createSigningKey(repositoryRoot, consoleRoot);
+  const signingKey = createSigningKey(repositoryRoot, consoleRoot, signingPrivateKeyPath);
   const credentials = createCredentials(username);
   const before = readWorkerConfig(consoleRoot);
   if (dryRun) {

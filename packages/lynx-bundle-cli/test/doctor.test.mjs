@@ -22,3 +22,17 @@ test('doctor identifies an independent mini app without mutating it', async () =
     if (originalKey === undefined) delete process.env.LYNX_DELIVERY_API_KEY; else process.env.LYNX_DELIVERY_API_KEY = originalKey;
   }
 });
+
+test('doctor names missing host trust-key and build metadata', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'lynx-doctor-host-test-'));
+  writeFileSync(resolve(root, 'app.json'), JSON.stringify({ expo: {
+    version: '1.0.0',
+    plugins: [['expo-lynx-view', { deliveryEndpoints: { 'merchant-home': 'https://delivery.example/v1/bs-one/merchant-home' } }]],
+  } }));
+  const result = await inspectDeliveryWorkspace({ cwd: root });
+  assert.deepEqual(result.checks.slice(0, 3), [
+    { name: 'host-config', ok: true, detail: 'expo-lynx-view delivery endpoints found' },
+    { name: 'public-key', ok: false, detail: 'Configure expo-lynx-view publicKeyPath, then run lynx keys generate.' },
+    { name: 'host-build', ok: false, detail: 'Set expo.version and expo.ios.buildNumber before lynx host prepare.' },
+  ]);
+});
