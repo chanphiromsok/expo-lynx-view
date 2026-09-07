@@ -33,7 +33,6 @@ dependencies {
   implementation "org.lynxsdk.lynx:lynx-service-http:4.0.0"
   implementation "com.squareup.okhttp3:okhttp:4.9.0"
 
-  // ponytail: skipping Coil image service registration. Demo bundles
-  // (static.lynx) don't reference images. Add Coil + an ILynxImageService
-  // impl when the Lynx page actually loads images.
+  // No Lynx image service: Fresco conflicts with host dependencies. Add a
+  // compatible ILynxImageService only when image support is deliberately scoped.
 }

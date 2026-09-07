@@ -18,10 +18,9 @@ class ExpoLynxModule : Module() {
     OnCreate {
       val application = appContext.reactContext?.applicationContext as? Application ?: return@OnCreate
 
-      // Image service (Coil or otherwise) is intentionally NOT registered —
-      // see android/build.gradle. Demo bundles don't reference images; pages
-      // that do will need a CoilLynxImageService.kt implementing
-      // ILynxImageService and registered here before LynxEnv.init.
+      // No image service is registered: see android/build.gradle. A compatible
+      // ILynxImageService must be deliberately chosen before image support is
+      // enabled.
 
       LynxServiceCenter.inst().registerService(LynxHttpService)
       LynxServiceCenter.inst().registerService(LynxLogService)

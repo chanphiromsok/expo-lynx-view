@@ -17,12 +17,12 @@ arbitrary URL in a WebView:
 
 The implementation is iOS-first. Android delivery is intentionally deferred.
 
-> **Current limitation — Lynx images are not supported.** `expo-lynx-view`
-> intentionally excludes Lynx's `LynxService/Image` because Lynx 4.0.x pins an
-> incompatible SDWebImage version for current Expo hosts. Do not use Lynx
-> `<image>` elements yet: embedded, remote, WebP, GIF, and animated images will
-> not render. The delivery ZIP still preserves `static/**` files for a future
-> compatible image service.
+> **Current limitation — Lynx images are not supported on iOS or Android.**
+> `expo-lynx-view` intentionally excludes the Lynx image services: iOS pins an
+> incompatible SDWebImage version and Android's Fresco integration conflicts
+> with host dependencies. Do not use Lynx `<image>` elements yet: embedded,
+> remote, WebP, GIF, and animated images will not render. The delivery ZIP still
+> preserves `static/**` files for a future compatible image service.
 
 ## Requirements
 
