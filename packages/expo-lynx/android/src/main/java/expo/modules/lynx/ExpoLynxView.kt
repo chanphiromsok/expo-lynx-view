@@ -10,10 +10,14 @@ import com.lynx.tasm.LynxError
 import com.lynx.tasm.LynxView
 import com.lynx.tasm.LynxViewBuilder
 import com.lynx.tasm.LynxViewClient
+import com.lynx.tasm.behavior.Behavior
+import com.lynx.tasm.behavior.LynxContext
+import com.lynx.tasm.behavior.ui.LynxUI
 import com.lynx.xelement.XElementBehaviors
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
+import expo.modules.lynx.fastimage.LynxFastImageUI
 
 @Suppress("ViewConstructor")
 class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
@@ -27,6 +31,14 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
   private val lynxView: LynxView = LynxViewBuilder()
     .setTemplateProvider(LynxTemplateProvider(context))
     .addBehaviors(XElementBehaviors().create())
+    .addBehaviors(
+      listOf(
+        // SDWebImage-parity image element backed by Glide (fastimage/).
+        object : Behavior("x-lynx-fast-image") {
+          override fun createUI(lynxContext: LynxContext): LynxUI<*> = LynxFastImageUI(lynxContext)
+        }
+      )
+    )
     .build(context)
 
   private var source = ""

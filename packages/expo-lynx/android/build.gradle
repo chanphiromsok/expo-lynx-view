@@ -35,4 +35,11 @@ dependencies {
 
   // No Lynx image service: Fresco conflicts with host dependencies. Add a
   // compatible ILynxImageService only when image support is deliberately scoped.
+
+  // <x-lynx-fast-image> renders through Glide (android/src/main/java/expo/
+  // modules/lynx/fastimage/). Same version Expo Image 57.x uses, so the host
+  // resolves one Glide and one memory/disk cache. We add NO @GlideModule:
+  // when expo-image is present its AppGlideModule + OkHttp integration cover
+  // us; the plain Glide.with() API is used so no generated GlideApp is needed.
+  implementation "com.github.bumptech.glide:glide:5.0.5"
 }
