@@ -1,0 +1,19 @@
+# package.json#files is the publish allowlist. Keep this denylist as a second
+# guard if that allowlist changes later.
+
+# Local credentials, generated output, and package archives must stay local.
+.env*
+.local-lynx-*/
+.wrangler/
+keys/
+*.pem
+*.key
+*.tgz
+dist/
+coverage/
+node_modules/
+
+# Development-only sources are not part of the CLI runtime.
+test/
+scripts/
+.DS_Store
