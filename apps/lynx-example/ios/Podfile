@@ -1,0 +1,62 @@
+# Bare native host for <x-lynx-fast-image> — no Expo, no React Native.
+# Same prebuilt Lynx 4.0.0 pods a production host resolves. Deliberately NO
+# LynxService/Image and NO Fresco: the element renders through SDWebImage
+# (the FastImage/ sources are compiled into the app target — see project.yml).
+
+platform :ios, '14.0'
+install! 'cocoapods', :deterministic_uuids => false
+
+target 'LynxExample' do
+  # No use_frameworks!: static libs, so the mixed Swift/ObjC FastImage sources
+  # in the app target see Lynx/SDWebImage via generated module maps.
+  devtool = ENV['LFI_DISABLE_DEVTOOL'] != '1'
+
+  pod 'Lynx', '4.0.0', :subspecs => ['Framework'], :modular_headers => true
+  pod 'PrimJS', '4.0.0', :subspecs => ['quickjs', 'napi']
+  pod 'LynxService', '4.0.0',
+      :subspecs => devtool ? ['Log', 'Http', 'Devtool'] : ['Log', 'Http']
+  pod 'SDWebImage', '~> 5.21', :modular_headers => true
+
+  if devtool
+    pod 'BaseDevtool', '4.0.0'
+    pod 'LynxDevtool', '4.0.0', :subspecs => ['Framework']
+    pod 'DebugRouter', '~> 5.0'
+    pod 'DebugRouter/MessageTransceiverEnable', '~> 5.0'
+  end
+end
+
+post_install do |installer|
+  # Lynx injects -Werror via OTHER_C(PLUSPLUS)FLAGS; its own sources fail
+  # against a newer SDK. Turn the error back to a warning for Lynx targets.
+  disabled = ['-Wno-error', '-Wno-deprecated-declarations', '-Wno-deprecated-implementations']
+  lynx_targets = %w[Lynx LynxBase LynxService LynxServiceAPI BaseDevtool
+                    LynxDevtool DebugRouter PrimJS]
+
+  installer.pods_project.targets.each do |t|
+    t.build_configurations.each do |c|
+      c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+      c.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'gnu++20'
+      next unless lynx_targets.include?(t.name)
+      c.build_settings['GCC_TREAT_WARNINGS_AS_ERRORS'] = 'NO'
+      %w[OTHER_CFLAGS OTHER_CPLUSPLUSFLAGS].each do |key|
+        flags = c.build_settings[key] || ['$(inherited)']
+        flags = [flags] unless flags.is_a?(Array)
+        c.build_settings[key] = (flags + disabled).uniq
+      end
+    end
+  end
+
+  # LynxDevToolService (@LynxServiceRegister) registers via a __LYNX__DATA
+  # section that -ObjC does not preserve in a static lib. Force-load only
+  # libLynxService.a; force-loading the devtool archives too causes duplicate
+  # lynx::devtool:: C++ symbols.
+  next if ENV['LFI_DISABLE_DEVTOOL'] == '1'
+  extra = %(-force_load "${PODS_CONFIGURATION_BUILD_DIR}/LynxService/libLynxService.a")
+  installer.aggregate_targets.each do |agg|
+    %w[debug release].each do |config|
+      path = agg.xcconfig_path(config.capitalize)
+      next unless File.exist?(path)
+      File.open(path, 'a') { |f| f.puts %(OTHER_LDFLAGS = $(inherited) #{extra}) }
+    end
+  end
+end

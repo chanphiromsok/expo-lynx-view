@@ -1,0 +1,39 @@
+name: LynxExample
+
+options:
+  bundleIdPrefix: com.lynxexample
+  deploymentTarget:
+    iOS: "14.0"
+  createIntermediateGroups: true
+
+targets:
+  LynxExample:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      # Compile the <x-lynx-fast-image> element straight from expo-lynx-view.
+      # The Swift/ObjC there is Expo-free (SDWebImage + Lynx + UIKit only), so
+      # a bare host builds it directly — no separate pod, no copy.
+      - path: ../../../packages/expo-lynx/ios/FastImage
+        name: FastImage
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lynxexample.app
+        MARKETING_VERSION: "0.0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        # LynxFastImageElement.m and the bridging header reach the FastImage
+        # ObjC headers by search path.
+        USER_HEADER_SEARCH_PATHS: "$(SRCROOT)/../../../packages/expo-lynx/ios/FastImage"
+        SWIFT_OBJC_BRIDGING_HEADER: App/LynxExample-Bridging-Header.h
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: LynxExample
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true

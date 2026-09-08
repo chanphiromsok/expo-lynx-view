@@ -20,3 +20,7 @@ ios/*.xcworkspace/xcuserdata/
 ios/*.xcodeproj/xcuserdata/
 ios/*.xcodeproj/project.xcworkspace/xcuserdata/
 ios/DerivedData/
+
+# xcodegen + CocoaPods generate these from project.yml + Podfile
+ios/LynxExample.xcodeproj/
+ios/LynxExample.xcworkspace/
