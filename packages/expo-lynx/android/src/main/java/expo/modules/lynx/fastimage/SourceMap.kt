@@ -37,7 +37,9 @@ data class SourceMap(
         val h = customHeaders()
         cacheKey?.let { GlideUrlWithCacheKey(raw, h, it) } ?: GlideUrl(raw, h)
       }
-      "data", "content", "file", "android.resource" -> parsed
+      // Glide's built-in DataUrlLoader is registered for String, not Uri.
+      "data" -> raw
+      "content", "file", "android.resource" -> parsed
       "res" -> Uri.parse(
         parsed.toString().replace("res:/", "android.resource://${context.packageName}/")
       )

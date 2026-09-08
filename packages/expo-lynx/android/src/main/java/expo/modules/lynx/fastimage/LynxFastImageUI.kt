@@ -251,7 +251,9 @@ class LynxFastImageUI(context: LynxContext) : LynxUI<ExpoImageView>(context) {
   }
 
   private fun emit(name: String, detail: Map<String, Any?>) {
-    val event = LynxCustomEvent(sign, name, detail)
+    // LynxCustomEvent.addDetail() mutates the map Lynx was handed (it appends a
+    // timestamp), so it must be mutable — `emptyMap()` / `mapOf()` throw.
+    val event = LynxCustomEvent(sign, name, HashMap(detail))
     lynxContext.eventEmitter.sendCustomEvent(event)
   }
 
@@ -260,8 +262,10 @@ class LynxFastImageUI(context: LynxContext) : LynxUI<ExpoImageView>(context) {
   private fun parseSource(raw: String): SourceMap? {
     val trimmed = raw.trim()
     if (trimmed.isEmpty()) return null
-    // The wrapper serializes an array of sources; also tolerate a bare URL
-    // passed straight to the raw <x-lynx-fast-image> tag.
+    // The <FastImage> wrapper runs the value through JSON.stringify, so a plain
+    // string source arrives quote-wrapped (`"https://…"`), an object as `{…}`,
+    // a list as `[…]`. A bare URL on the raw <x-lynx-fast-image> tag arrives
+    // unquoted. Parse as JSON first; fall back to treating the text as a URI.
     return try {
       when {
         trimmed.startsWith("[") -> {
@@ -269,10 +273,11 @@ class LynxFastImageUI(context: LynxContext) : LynxUI<ExpoImageView>(context) {
           if (arr.length() == 0) null else sourceFromJson(arr.get(0))
         }
         trimmed.startsWith("{") -> sourceFromJson(JSONObject(trimmed))
+        trimmed.startsWith("\"") -> sourceFromJson(org.json.JSONTokener(trimmed).nextValue())
         else -> SourceMap(uri = trimmed)
       }
     } catch (e: Exception) {
-      SourceMap(uri = trimmed)
+      SourceMap(uri = trimmed.trim('"'))
     }
   }
 

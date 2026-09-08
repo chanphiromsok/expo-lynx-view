@@ -23,7 +23,7 @@ const extra = (Constants.expoConfig?.extra ?? {}) as {
   lynxDevBundlePort?: number;
 };
 
-const devHost = "192.168.18.144";
+const devHost = "192.168.18.214";
 const devPort = extra.lynxDevBundlePort ?? 3000;
 const DEV_BUNDLE = `http://${devHost}:${devPort}/main.lynx.bundle`;
 
