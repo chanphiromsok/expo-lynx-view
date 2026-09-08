@@ -22,14 +22,13 @@ No background timer. No mid-session swap. No arbitrary production URL from React
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Understand the complete runtime and Cloudflare flow |
 | [HOT-UPDATER-ARCHIVE-REVIEW.md](./HOT-UPDATER-ARCHIVE-REVIEW.md) | Review the pinned Hot Updater iOS/Android extraction architecture and Lynx hardening decisions |
 | [TESTING.md](./TESTING.md) | Verify implementation and production failure cases |
-| [DEVELOPMENT.md](./DEVELOPMENT.md) | Run the current iOS static-server workflow and review implementation boundaries |
 | [ROADMAP.md](./ROADMAP.md) | See deliberately deferred work |
 | [V2 implementation specs](./specs/v2/README.md) | Assign one current mobile or server task to an implementation agent |
 | [V2 PR review checklist](./specs/v2/PR-REVIEW-CHECKLIST.md) | Review the code and verify the app after a PR is ready |
 
-Start with this README and `ARCHITECTURE.md`. Use `DEVELOPMENT.md` only for the
-currently implemented local prototype; use `specs/v2` for target implementation
-work.
+Start with this README and `ARCHITECTURE.md`; use `specs/v2` for implementation
+work. The current local implementation is the Console Worker, not the retired
+static-server prototype.
 
 ## Current implementation sequence
 

@@ -5,13 +5,11 @@
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "scripts": {
-    "build": "node internal/module_scripts/build.js",
-    "clean": "node internal/module_scripts/clean.js",
+    "build": "expo-module build",
     "lint": "eslint src/",
-    "test": "node internal/module_scripts/test.js && node --test app.plugin.test.js",
-    "prepare": "node internal/module_scripts/prepare.js",
-    "open:ios": "node internal/module_scripts/open-ios.js",
-    "open:android": "node internal/module_scripts/open-android.js"
+    "test": "jest --runInBand && node --test app.plugin.test.js",
+    "prepare": "pnpm run build",
+    "prepack": "pnpm run build"
   },
   "keywords": [
     "react-native",
@@ -43,7 +41,6 @@
     "ios/FastImage/*.h",
     "ios/FastImage/*.m"
   ],
-  "dependencies": {},
   "devDependencies": {
     "@babel/core": "^7.26.0",
     "@react-native/jest-preset": "0.86.3",
@@ -53,6 +50,7 @@
     "eslint": "~9.39.4",
     "eslint-config-universe": "^15.0.3",
     "expo": "57.0.15",
+    "expo-module-scripts": "^56.0.3",
     "jest": "^29.7.0",
     "jest-expo": "~57.0.5",
     "prettier": "^3.0.0",

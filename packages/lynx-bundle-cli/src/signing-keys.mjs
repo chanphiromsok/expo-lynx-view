@@ -42,7 +42,7 @@ export function generateSigningKeyPair({
   };
 }
 
-function configuredPublicKeyPath(root) {
+export function configuredPublicKeyPath(root) {
   const expo = loadExpoConfig(root);
   const plugin = Array.isArray(expo?.plugins)
     ? expo.plugins.find((item) => Array.isArray(item) && item[0] === 'expo-lynx-view')

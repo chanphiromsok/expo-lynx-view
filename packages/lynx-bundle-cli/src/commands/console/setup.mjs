@@ -1,7 +1,16 @@
 import { Command, Flags } from '@oclif/core';
+import { existsSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
 import { listCloudflareAccounts, setupConsole } from '../../console-setup.mjs';
+import { loadNearestDeliveryEnvironment } from '../../env.mjs';
+
+const environmentTemplate = `# Lynx managed delivery. Keep this file private and out of Git.\n\n# Optional: leave as a placeholder to choose a Cloudflare account in your browser.\nCLOUDFLARE_ACCOUNT_ID="<select-during-setup>"\n\n# Cloudflare resource names for this host application's one delivery Console.\nLYNX_DELIVERY_WORKER_NAME="<your-worker-name>"\nLYNX_DELIVERY_D1_NAME="<your-d1-database-name>"\nLYNX_DELIVERY_R2_BUCKET="<your-r2-bucket-name>"\n\n# First user who can sign in to the delivery Console.\nLYNX_CONSOLE_USERNAME="<your-console-username>"\nLYNX_CONSOLE_PASSWORD="<choose-a-strong-password>"\n\n# R2 S3 credentials used by the local release CLI for direct ZIP uploads.\n# Create an Object Read & Write token scoped to LYNX_DELIVERY_R2_BUCKET.\nR2_ACCESS_KEY_ID="<your-r2-access-key-id>"\nR2_SECRET_ACCESS_KEY="<your-r2-secret-access-key>"\n\n# Written by \`lynx console setup\`. Do not edit these generated values.\nLYNX_DELIVERY_D1_DATABASE_ID=""\nLYNX_DELIVERY_SERVER=""\nLYNX_DELIVERY_API_KEY=""\n`;
+
+function configured(value) {
+  return Boolean(value && !value.startsWith('<'));
+}
 
 async function prompt(question) {
   const terminal = createInterface({ input: process.stdin, output: process.stdout });
@@ -12,34 +21,12 @@ async function prompt(question) {
   }
 }
 
-async function promptSecret(question) {
-  if (!process.stdin.isTTY) throw new Error('Set R2_SECRET_ACCESS_KEY when console:setup is not running in a terminal.');
-  process.stdout.write(question);
-  return await new Promise((resolve, reject) => {
-    let value = '';
-    const cleanup = () => {
-      process.stdin.removeListener('data', onData);
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
-    };
-    const finish = () => {
-      cleanup();
-      process.stdout.write('\n');
-      resolve(value);
-    };
-    const onData = (chunk) => {
-      const key = chunk.toString();
-      if (key === '\u0003') {
-        cleanup();
-        reject(new Error('Setup cancelled.'));
-      } else if (key === '\r' || key === '\n') finish();
-      else if (key === '\u007f') value = value.slice(0, -1);
-      else value += key;
-    };
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.on('data', onData);
-  });
+function ensureEnvironmentFile() {
+  const existing = loadNearestDeliveryEnvironment();
+  if (existing) return existing;
+  const path = resolve(process.cwd(), '.env.lynx');
+  if (!existsSync(path)) writeFileSync(path, environmentTemplate, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  throw new Error(`Created ${path}. Fill its placeholders, then run \`lynx console setup\` again.`);
 }
 
 async function selectAccount() {
@@ -53,38 +40,33 @@ async function selectAccount() {
 }
 
 export async function runConsoleSetup(flags) {
-  if (flags['dry-run']) {
-    setupConsole({
-      username: flags.username,
-      dryRun: true,
-      signingPrivateKeyPath: flags['signing-private-key-path'],
-    });
-    return;
+  const environmentPath = ensureEnvironmentFile();
+  const missing = [
+    'LYNX_DELIVERY_WORKER_NAME',
+    'LYNX_DELIVERY_D1_NAME',
+    'LYNX_DELIVERY_R2_BUCKET',
+    'LYNX_CONSOLE_USERNAME',
+    'LYNX_CONSOLE_PASSWORD',
+    'R2_ACCESS_KEY_ID',
+    'R2_SECRET_ACCESS_KEY',
+  ].filter((name) => !configured(process.env[name]));
+  if (missing.length > 0) {
+    throw new Error(`Missing ${missing.join(', ')} in .env.lynx.`);
   }
-  const accountId = flags['account-id'] ?? await selectAccount();
-  process.stdout.write(`R2 S3 API Tokens: https://dash.cloudflare.com/${accountId}/r2/api-tokens\nRequired permission: Object Read & Write; target bucket: lynx-artifacts\n`);
-  const r2AccessKeyId = flags['r2-access-key-id'] ?? await prompt('R2 S3 Access Key ID: ');
-  const r2SecretAccessKey = flags['r2-secret-access-key'] ?? await promptSecret('R2 S3 Secret Access Key: ');
+  const accountId = configured(process.env.CLOUDFLARE_ACCOUNT_ID)
+    ? process.env.CLOUDFLARE_ACCOUNT_ID
+    : await selectAccount();
+  process.env.CLOUDFLARE_ACCOUNT_ID = accountId;
   setupConsole({
-    username: flags.username,
-    accountId,
-    r2AccessKeyId,
-    r2SecretAccessKey,
-    signingPrivateKeyPath: flags['signing-private-key-path'],
+    dryRun: flags['dry-run'],
+    environmentPath,
   });
 }
 
 export default class ConsoleSetup extends Command {
   static description = 'Provision D1, R2, Worker secrets, and a deployed delivery Console.';
 
-  static flags = {
-    'account-id': Flags.string({ description: 'Cloudflare account ID', env: 'CLOUDFLARE_ACCOUNT_ID' }),
-    'r2-access-key-id': Flags.string({ description: 'R2 S3 access key ID', env: 'R2_ACCESS_KEY_ID' }),
-    'r2-secret-access-key': Flags.string({ description: 'R2 S3 secret access key (prefer the hidden prompt)', env: 'R2_SECRET_ACCESS_KEY' }),
-    'signing-private-key-path': Flags.file({ description: 'PKCS#8 private PEM generated by lynx keys generate' }),
-    username: Flags.string({ description: 'first Console username', required: true }),
-    'dry-run': Flags.boolean({ description: 'validate local prerequisites without Cloudflare changes' }),
-  };
+  static flags = { 'dry-run': Flags.boolean({ description: 'validate .env.lynx without Cloudflare changes' }) };
 
   async run() {
     const { flags } = await this.parse(ConsoleSetup);

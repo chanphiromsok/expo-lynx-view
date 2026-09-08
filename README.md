@@ -266,8 +266,11 @@ After a native dependency, plugin, Pod, Swift, Kotlin, or embedded-baseline
 change, run `pnpm lynx bundle <feature>`, then deliberately prebuild and ship a
 new host binary before uploading releases for that runtime.
 
-For Cloudflare setup, release promotion, remote endpoint configuration, and
-recovery, follow the [Delivery Console guide](./apps/console/README.md).
+For Cloudflare setup, run `lynx keys generate` and `lynx console setup` from
+the Expo host app—not from this library repository. The CLI packages the
+Console UI, Worker, and migrations; its first run creates the host's ignored
+`.env.lynx` template. For release promotion, remote endpoint configuration,
+and recovery, follow the [Delivery Console guide](./apps/console/README.md).
 
 ## Cloudflare delivery console and Worker
 
@@ -326,4 +329,4 @@ another runtime's bundle.
 
 For detailed iOS local testing and the delivery architecture, see
 [`docs/ios-local-signed-lynx-testing.md`](./docs/ios-local-signed-lynx-testing.md)
-and the package-level [delivery development guide](./packages/expo-lynx/feature/delivery-bundle-update/DEVELOPMENT.md).
+and the [Delivery Console guide](./apps/console/README.md).

@@ -12,9 +12,13 @@ appId + feature + runtimeVersion → selected immutable bundle
 
 ## First-time Cloudflare setup
 
-One operator provisions this shared infrastructure. Host and mini-app teams do
-not create their own Worker, D1 database, or bucket. In the Console, create the
-identity hierarchy before either team releases:
+Run this from the **Expo host app repository**, not from the Expo Lynx source
+repository. The published CLI carries the Console UI, Worker, and D1 migrations
+with it; it does not add an `apps/console` directory to your app.
+
+One operator provisions one Worker, D1 database, and R2 bucket for the host
+organization. That Worker can serve many host apps and mini apps. In the
+Console, create the identity hierarchy before either team releases:
 
 ```text
 Apps → BS One → Merchant Home → Current host build → Bundles
@@ -23,26 +27,21 @@ Apps → BS One → Merchant Home → Current host build → Bundles
 App and mini-app IDs are immutable. Upload typos are rejected instead of
 silently becoming apps.
 
-### 1. Prepare the Worker signing key
+### 1. Configure the host and create its trust key
 
-The Worker signs public deployment responses with the private half of the
-public key compiled into the mobile app. Fresh setup generates the pair: it
-writes the public half to the mobile key path and sends the private half
-directly to Worker secrets. It never prints the private key or writes it to
-`.env.lynx`.
+Install `expo-lynx-view` and `expo-lynx-bundle-cli` in the host app. Configure
+the Expo plugin with a public-key path, then create the matching pair once:
 
-For an existing mobile trust key, put its matching private PEM in the ignored
-local file before setup:
-
-```dotenv title="apps/console/.dev.vars"
-DELIVERY_SIGNING_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
-...your PKCS#8 RSA private key...
------END PRIVATE KEY-----"
+```sh
+# Use your package manager: yarn lynx …, pnpm lynx …, or npx lynx …
+lynx keys generate
 ```
 
-The setup command derives its public key and stops if it does not match
-`apps/expo-lynx-example/keys/lynx/updates.public.pem`. Never put this private
-key in an Expo app, `.env.lynx`, a Git commit, or an R2 bucket.
+This creates the public key at the host plugin's `publicKeyPath` and the
+private key at `.local-lynx-keys/updates.private.pem`. The private key stays on
+the operator machine until setup sends it directly to the Worker secret store.
+It is never written to `.env.lynx`, R2, Git, a mini-app repository, or the
+mobile app. Setup stops if the two keys do not match.
 
 ### 2. Create the R2 S3 upload credential
 
@@ -52,36 +51,48 @@ printed by setup. Create an **R2 S3 API token** with:
 | Setting | Value |
 | --- | --- |
 | Permission | **Object Read & Write** |
-| Bucket | `lynx-artifacts`, or the bucket configured in `apps/console/wrangler.toml` |
+| Bucket | The value you choose for `LYNX_DELIVERY_R2_BUCKET` |
 | Use | CLI upload from developer machines |
 
 Keep its access-key ID and secret access key private. This is an S3 credential,
 not a general Cloudflare API token. The Worker does not receive it.
 
-### 3. Run setup and authorize Wrangler
+### 3. Create `.env.lynx`, then run setup
 
 ```sh
-pnpm lynx console setup --username your-console-name
+lynx console setup
 ```
 
-If Wrangler is not signed in, it opens a browser for Cloudflare OAuth and then
-lists your accounts. Choose the account, paste the R2 S3 access-key ID, then
-paste the secret at the hidden prompt. Wrangler OAuth needs account/user read,
-D1 write, and Workers write to create the shared infrastructure.
-
-Setup then creates or reuses D1 and R2, deploys the Worker, writes Worker
-secrets, applies D1 migrations, and writes the ignored root `.env.lynx`:
+The first run creates an ignored `.env.lynx` beside the host `package.json` and
+stops. Fill its placeholders, then run the same command again:
 
 ```dotenv title=".env.lynx"
-CLOUDFLARE_ACCOUNT_ID="..."
+# Leave this placeholder to choose an account in the Wrangler browser flow.
+CLOUDFLARE_ACCOUNT_ID="<select-during-setup>"
+
+LYNX_DELIVERY_WORKER_NAME="bs-one-lynx-delivery"
+LYNX_DELIVERY_D1_NAME="bs-one-lynx-delivery"
+LYNX_DELIVERY_R2_BUCKET="bs-one-lynx-artifacts"
+
+LYNX_CONSOLE_USERNAME="operator"
+LYNX_CONSOLE_PASSWORD="choose-a-strong-password"
+
+# An R2 S3 Object Read & Write credential scoped to the bucket above.
 R2_ACCESS_KEY_ID="..."
 R2_SECRET_ACCESS_KEY="..."
-LYNX_DELIVERY_SERVER="https://your-worker.workers.dev"
-LYNX_DELIVERY_API_KEY="lynx_live_..."
-LYNX_DELIVERY_USERNAME="your-console-name"
-LYNX_DELIVERY_PASSWORD="generated-password"
-LYNX_DELIVERY_R2_BUCKET="lynx-artifacts"
+
+# Leave these generated values empty.
+LYNX_DELIVERY_D1_DATABASE_ID=""
+LYNX_DELIVERY_SERVER=""
+LYNX_DELIVERY_API_KEY=""
 ```
+
+If Wrangler is not signed in, setup opens a browser for Cloudflare OAuth and
+lists available accounts. Setup creates or reuses D1 and R2 by name, deploys
+the bundled Worker and Console, sets Worker secrets, applies migrations, and
+writes the D1 ID, Worker URL, and CLI API key back to this same file. A retry
+after an interrupted D1 creation finds the existing database by name instead
+of creating another one.
 
 Do not commit `.env.lynx`. It is the private handoff file for future releases.
 
@@ -144,6 +155,7 @@ or signing secrets:
 pnpm lynx console deploy
 ```
 
-Use `console setup --dry-run --username your-console-name` to check local key
-prerequisites without changing Cloudflare. Setup intentionally refuses to
-overwrite an existing `.env.lynx`.
+Use `lynx console setup --dry-run` to check the host key and `.env.lynx`
+configuration without changing Cloudflare. Deploy later Console/Worker changes
+and pending migrations with `lynx console deploy`; it preserves D1 data and
+Worker secrets.

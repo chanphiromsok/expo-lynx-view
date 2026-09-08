@@ -1,7 +1,7 @@
 {
   "name": "expo-lynx-bundle-cli",
   "version": "0.3.2",
-  "description": "Lynx managed delivery.\n\nSTART HERE\n  Mini-app repository: lynx doctor, then lynx release --platform ios or --platform android\n  Expo host repository: lynx keys generate, lynx doctor, lynx host embed <mini-app> --platform <platform>, lynx host prepare --platform <platform>, then lynx host register --platform <platform>\n  Cloudflare owner: lynx console setup --username <name>\n\nRun lynx <command> --help for details.",
+  "description": "Lynx managed delivery.\n\nSTART HERE\n  Mini-app repository: lynx doctor, then lynx release --platform ios or --platform android\n  Expo host repository: lynx keys generate, lynx doctor, lynx host embed <mini-app> --platform <platform>, lynx host prepare --platform <platform>, then lynx host register --platform <platform>\n  Cloudflare owner: lynx console setup\n\nRun lynx <command> --help for details.",
   "type": "module",
   "bin": {
     "lynx-bundle": "./bin/lynx-bundle.mjs",
@@ -17,12 +17,16 @@
     "bin",
     "examples",
     "src",
+    "template",
     "index.d.ts"
   ],
   "scripts": {
     "build": "node ./scripts/check.mjs",
     "lint": "node ./scripts/check.mjs",
-    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "prepare-template": "node ./scripts/package-console-template.mjs",
+    "prepack": "pnpm run prepare-template",
+    "postpack": "node ./scripts/remove-console-template.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -40,6 +44,10 @@
   "dependencies": {
     "@expo/fingerprint": "0.20.10",
     "@oclif/core": "^4.14.0",
-    "aws4fetch": "^1.0.20"
+    "aws4fetch": "^1.0.20",
+    "wrangler": "^4.127.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }

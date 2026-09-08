@@ -14,6 +14,25 @@ The host owns `embeddedBundlesPath`, the public trust key, and the public
 delivery endpoint. A mini app owns only its `appId` and `feature`; it does not
 copy host runtime values into its source repository.
 
+## Deploy the Console from a host app
+
+The Console is deployed by the host app owner, not by this library repository.
+The published CLI includes the Worker, web Console, and D1 migrations.
+
+```sh
+# Run in the Expo host app.
+lynx keys generate
+lynx console setup
+```
+
+The first command creates an ignored `.env.lynx` template. Set the Worker, D1,
+and R2 names; a Console username/password; and an R2 S3 Object Read & Write
+credential. Run `lynx console setup` a second time to authorize Cloudflare in
+the browser and provision the infrastructure. It writes the Worker URL and
+release API key back to `.env.lynx`; never commit that file or copy the private
+key to a mini-app repository. Run `lynx console deploy` for later Worker/UI
+updates without replacing D1 data or Worker secrets.
+
 ```sh
 # Expo host repository
 lynx keys generate

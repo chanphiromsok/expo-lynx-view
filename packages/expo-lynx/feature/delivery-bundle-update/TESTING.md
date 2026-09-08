@@ -1,8 +1,8 @@
 # Testing
 
-For the current iOS implementation and physical-device static-server workflow,
-start with [DEVELOPMENT.md](./DEVELOPMENT.md). This file remains the broader
-cross-platform/production test matrix.
+For local Worker setup and a physical-device flow, use the
+[Delivery Console guide](../../../../apps/console/README.md). This file remains
+the broader cross-platform/production test matrix.
 
 ## Fast checks
 

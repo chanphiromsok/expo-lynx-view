@@ -35,10 +35,6 @@ export default defineConfig({
               slug: "managed-delivery/local-testing",
             },
             {
-              label: "Local delivery server",
-              slug: "managed-delivery/local-server",
-            },
-            {
               label: "Cloudflare Console setup",
               slug: "managed-delivery/cloudflare-worker",
             },

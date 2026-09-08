@@ -9,19 +9,22 @@ credentials, the CLI API key, or the RSA private key.
 
 ## One-shot Cloudflare setup
 
-Put the private key matching the mobile public key in
-`apps/console/.dev.vars` as `DELIVERY_SIGNING_PRIVATE_KEY`, then run:
+Deploy from the Expo **host app** repository. The CLI packages this Console,
+the Worker, and migrations, so an installed app does not need this monorepo.
 
 ```sh
-pnpm lynx console setup --username your-name
+lynx keys generate
+lynx console setup
 ```
 
-The command uses Wrangler login, asks for a Cloudflare account and an R2 S3
-access key with **Object Read & Write**, then creates or reuses D1/R2, deploys
-the Worker, stores secrets, applies migrations, and writes ignored `.env.lynx`.
-See [Cloudflare Worker setup](/managed-delivery/cloudflare-worker/#first-time-cloudflare-setup)
-for the required signing PEM, the exact R2 Dashboard token, and the generated
-environment values.
+The first setup command creates a commented `.env.lynx` and stops. Fill the
+resource names, Console username/password, and R2 S3 Object Read & Write
+credential, then run `lynx console setup` again. Wrangler opens browser login
+and account selection when `CLOUDFLARE_ACCOUNT_ID` remains a placeholder.
+Setup creates/reuses D1 and R2, deploys the Worker, stores secrets, applies
+migrations, and writes the deployment URL/API key into `.env.lynx`. See
+[Cloudflare Worker setup](/managed-delivery/cloudflare-worker/#first-time-cloudflare-setup)
+for the complete host configuration.
 
 ```sh
 # Host team: prepare, build native app, then register

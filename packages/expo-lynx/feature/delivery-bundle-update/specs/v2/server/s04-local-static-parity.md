@@ -19,8 +19,8 @@ is complete.
 
 ## Owned files
 
-- current `rebuild-lynx-remote.mjs` / `serve-local-lynx-release.mjs` migration
-- local static-server tests and fault-injection controls
+- Worker-backed local development and the public deployment route contract
+- local Worker tests and fault-injection controls
 - local/physical-device development documentation
 - internal Release build flag/configuration evidence
 

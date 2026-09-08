@@ -19,9 +19,10 @@
     "release:check": "node scripts/release.mjs check",
     "release:publish": "node scripts/release.mjs publish",
     "lynx-bundle": "node packages/lynx-bundle-cli/bin/lynx-bundle.mjs",
-    "lynx": "node scripts/lynx.mjs",
-    "lynx-delivery": "node scripts/local-lynx-delivery.mjs",
-    "test:lynx-delivery": "node scripts/test-local-lynx-delivery.mjs",
-    "serve:lynx-local": "node scripts/serve-local-lynx-release.mjs"
+    "lynx": "node scripts/lynx.mjs"
+  },
+  "dependencies": {
+    "expo-lynx-bundle-cli": "link:packages/lynx-bundle-cli",
+    "expo-lynx-view": "link:packages/expo-lynx"
   }
 }

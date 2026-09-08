@@ -102,38 +102,43 @@ in the mobile app. The CLI does not receive this key. In production the CLI
 holds the R2 S3 credential locally, signs its own archive PUT, and never sends
 its delivery API key to R2.
 
-For `pnpm lynx console setup`, place that PEM in the ignored
-`apps/console/.dev.vars` file as `DELIVERY_SIGNING_PRIVATE_KEY`. Keep the PEM
-header, body, and footer intact; setup reads it locally, verifies it matches
-the mobile public key, and sends it directly to the Worker secret store.
+The host-project setup flow does not use `apps/console/.dev.vars`. It reads the
+matching local private key from `.local-lynx-keys/updates.private.pem`, which
+`lynx keys generate` creates beside the host app's configured public key.
 
 ## First remote deployment
 
-This is the complete one-time setup for a new Cloudflare account.
+This is the complete one-time setup for a new Cloudflare account. Run it in the
+**Expo host app**, not in this repository. The published CLI packages this
+Console, its Worker, and all D1 migrations.
 
-1. Ensure `apps/console/.dev.vars` contains `DELIVERY_SIGNING_PRIVATE_KEY`.
-   Its public half must already be the file configured by the Expo plugin (the
-   example uses `apps/expo-lynx-example/keys/lynx/updates.public.pem`). Setup
-   refuses a mismatched pair.
-2. Create an R2 S3 API credential with **Object Read & Write**. If
-   `lynx-artifacts` already exists, scope it to that bucket. Setup stores this
-   credential only in your ignored local `.env.lynx`; the Worker does not use it.
-3. Run setup:
+1. Configure `expo-lynx-view` with its `publicKeyPath`, then create the pair:
 
 ```sh
-pnpm lynx console setup --username <your-console-username>
+lynx keys generate
 ```
 
-Setup follows Hot Updater's Cloudflare flow: it uses the existing Wrangler OAuth
-login to show an account list (and opens `wrangler login` when needed), then
-asks for the R2 access-key ID and secret. OAuth requests account/user read plus
-D1/Workers write. Setup creates or reuses configured D1/R2 resources, deploys
-the Worker, sets Worker secrets, migrates D1, and writes ignored root
-`.env.lynx`.
+This leaves the private half only at
+`.local-lynx-keys/updates.private.pem`. Setup verifies it against the host's
+configured public key before it sets the Worker secret.
 
-4. Keep `.env.lynx` private. It contains the generated Console password, CLI
-   API key, R2 credential, Worker URL, and Cloudflare account ID. It is ignored
-   by Git and is the only file needed for later CLI releases.
+2. Create an R2 S3 API credential with **Object Read & Write**, scoped to your
+   delivery bucket. The Worker never receives this credential.
+3. Run setup once to create the ignored configuration template:
+
+```sh
+lynx console setup
+```
+
+Fill the resource names, Console username/password, and R2 credential in the
+new `.env.lynx`, then run the same command again. Wrangler opens browser login
+and account selection when needed. Setup creates or reuses D1/R2 by name,
+deploys the Worker, stores secrets, applies migrations, and writes the D1 ID,
+Worker URL, and CLI API key back to `.env.lynx`.
+
+4. Keep `.env.lynx` private. It contains the Console password, CLI API key, R2
+   credential, Worker URL, and Cloudflare account ID. It is ignored by Git and
+   is the only file needed for later CLI releases.
 5. Point the native Expo plugin at the deployed public route:
 
 ```json
@@ -176,10 +181,10 @@ Pre-runtime-header app versions are accepted only while their app/feature has
 one unambiguous deployment. Once two runtime rows exist, the Worker returns
 `legacy-runtime-ambiguous` rather than risk an incompatible remote bundle.
 
-Review local prerequisites without changing Cloudflare or local files:
+Review the host key and `.env.lynx` without changing Cloudflare:
 
 ```sh
-pnpm lynx console setup --username phirom --dry-run
+lynx console setup --dry-run
 ```
 
 ## First remote release

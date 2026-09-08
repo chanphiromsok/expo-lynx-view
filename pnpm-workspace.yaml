@@ -6,3 +6,6 @@ allowBuilds:
   esbuild: true
   sharp: true
   workerd: true
+overrides:
+  expo-lynx-bundle-cli: link:packages/lynx-bundle-cli
+  expo-lynx-view: link:packages/expo-lynx

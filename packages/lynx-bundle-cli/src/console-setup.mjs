@@ -1,179 +1,240 @@
-import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createPrivateKey, createPublicKey, randomBytes } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { loadEnvFile } from 'node:process';
+import { fileURLToPath } from 'node:url';
 
+import { configuredPublicKeyPath } from './signing-keys.mjs';
+
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const require = createRequire(import.meta.url);
 const placeholderDatabaseId = '00000000-0000-0000-0000-000000000000';
-const usernamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
 
-function run(command, argumentsList, cwd, input) {
-  const result = spawnSync(command, argumentsList, { cwd, encoding: 'utf8', input });
+function run(command, args, cwd, { env, input } = {}) {
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8', env, input });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${command} ${argumentsList.join(' ')} failed.`);
-  return result.stdout ?? '';
+  if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed.`);
+  return `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
 }
 
-function findRepositoryRoot(cwd) {
-  let current = resolve(cwd);
-  while (true) {
-    if (existsSync(resolve(current, 'apps/console/wrangler.toml'))) return current;
-    const parent = dirname(current);
-    if (parent === current) throw new Error('console setup must run from this Expo Lynx repository or one of its subdirectories.');
-    current = parent;
-  }
+function wranglerPath() {
+  const manifestPath = require.resolve('wrangler/package.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.wrangler;
+  if (!bin) throw new Error('The packaged Wrangler executable could not be found. Reinstall expo-lynx-bundle-cli.');
+  return resolve(dirname(manifestPath), bin);
 }
 
-function readWorkerConfig(consoleRoot) {
-  const config = readFileSync(resolve(consoleRoot, 'wrangler.toml'), 'utf8');
-  const workerName = config.match(/^name\s*=\s*"([^"]+)"/m)?.[1];
-  const bucketName = config.match(/^bucket_name\s*=\s*"([^"]+)"/m)?.[1];
-  const databaseId = config.match(/^database_id\s*=\s*"([^"]+)"/m)?.[1];
-  if (!workerName || !bucketName || !databaseId) throw new Error('apps/console/wrangler.toml is missing the Worker, R2, or D1 configuration.');
-  return { workerName, bucketName, databaseId };
+function runWrangler(args, cwd, options) {
+  return run(process.execPath, [wranglerPath(), ...args], cwd, options);
 }
 
-function createSigningKey(repositoryRoot, consoleRoot, signingPrivateKeyPath) {
-  const localEnvironment = resolve(consoleRoot, '.dev.vars');
-  if (existsSync(localEnvironment)) loadEnvFile(localEnvironment);
-  const privateKey = signingPrivateKeyPath
-    ? readFileSync(resolve(repositoryRoot, signingPrivateKeyPath), 'utf8')
-    : process.env.DELIVERY_SIGNING_PRIVATE_KEY;
-  const publicKeyPath = resolve(repositoryRoot, 'apps/expo-lynx-example/keys/lynx/updates.public.pem');
-  if (!privateKey) {
-    if (existsSync(publicKeyPath)) {
-      throw new Error(`A public key already exists at ${publicKeyPath}, but no matching DELIVERY_SIGNING_PRIVATE_KEY was found in ${localEnvironment}. Refusing to replace the mobile trust key.`);
-    }
-    const generated = generateKeyPairSync('rsa', { modulusLength: 3072, publicExponent: 65_537 });
-    mkdirSync(dirname(publicKeyPath), { recursive: true, mode: 0o700 });
-    writeFileSync(publicKeyPath, generated.publicKey.export({ type: 'spki', format: 'pem' }), { mode: 0o644 });
-    return generated.privateKey.export({ type: 'pkcs8', format: 'pem' });
-  }
-  if (!existsSync(publicKeyPath)) throw new Error(`Missing mobile public key: ${publicKeyPath}.`);
-  const derived = createPublicKey(createPrivateKey(privateKey)).export({ type: 'spki', format: 'der' });
-  const embedded = createPublicKey(readFileSync(publicKeyPath, 'utf8')).export({ type: 'spki', format: 'der' });
-  if (!derived.equals(embedded)) throw new Error('DELIVERY_SIGNING_PRIVATE_KEY does not match the public key embedded by the mobile app.');
-  return privateKey;
+function configured(value) {
+  return Boolean(value && !value.startsWith('<'));
 }
 
-function createCredentials(username) {
+function required(value, name) {
+  if (!configured(value)) throw new Error(`Missing ${name} in .env.lynx.`);
+  return value;
+}
+
+function resource(value, name) {
+  const result = required(value, name);
+  if (/["\r\n]/.test(result)) throw new Error(`${name} has an extra quote or line break in .env.lynx. Use ${name}="your-name".`);
+  return result;
+}
+
+function credentials(username, password) {
   return {
-    username,
-    password: randomBytes(18).toString('base64url'),
+    username: required(username, 'LYNX_CONSOLE_USERNAME'),
+    password: required(password, 'LYNX_CONSOLE_PASSWORD'),
     apiKey: `lynx_live_${randomBytes(24).toString('base64url')}`,
     sessionSecret: randomBytes(32).toString('base64url'),
   };
 }
 
-export function listCloudflareAccounts(cwd = process.cwd()) {
-  const repositoryRoot = findRepositoryRoot(cwd);
-  const consoleRoot = resolve(repositoryRoot, 'apps/console');
+function signingKey(cwd) {
+  const publicPath = resolve(cwd, configuredPublicKeyPath(cwd));
+  const privatePath = resolve(cwd, '.local-lynx-keys/updates.private.pem');
+  if (!existsSync(publicPath)) throw new Error(`Missing mobile public key: ${publicPath}. Run \`lynx keys generate\` first.`);
+  if (!existsSync(privatePath)) throw new Error(`Missing Worker private key: ${privatePath}. Run \`lynx keys generate\` first.`);
+  const privatePem = readFileSync(privatePath, 'utf8');
+  const privateKey = createPrivateKey(privatePem);
+  if (privateKey.asymmetricKeyType !== 'rsa' || privateKey.asymmetricKeyDetails?.modulusLength !== 3072) {
+    throw new Error('The Worker private key must be RSA-3072. Run `lynx keys generate` to create a compatible pair.');
+  }
+  const derived = createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
+  const embedded = createPublicKey(readFileSync(publicPath, 'utf8')).export({ type: 'spki', format: 'der' });
+  if (!derived.equals(embedded)) throw new Error('The local Worker private key does not match the public key embedded by the host app.');
+  return privatePem;
+}
+
+function template() {
+  const packaged = resolve(packageRoot, 'template');
+  if (existsSync(resolve(packaged, 'worker.mjs'))) return packaged;
+  const source = resolve(packageRoot, '../../apps/console');
+  if (existsSync(resolve(source, 'worker/index.ts'))) {
+    run('pnpm', ['--filter', 'expo-lynx-bundle-cli', 'prepare-template'], resolve(packageRoot, '../..'));
+    return packaged;
+  }
+  throw new Error('The delivery Console template is missing. Reinstall expo-lynx-bundle-cli.');
+}
+
+function toml({ workerName, databaseName, databaseId, bucketName, templateRoot }) {
+  return [
+    `name = "${workerName}"`,
+    `main = "${resolve(templateRoot, 'worker.mjs')}"`,
+    'compatibility_date = "2026-08-28"',
+    'workers_dev = true',
+    '',
+    '[assets]',
+    `directory = "${resolve(templateRoot, 'assets')}"`,
+    'not_found_handling = "single-page-application"',
+    'run_worker_first = ["/__local-r2", "/__local-r2/*", "/api", "/api/*", "/health", "/v1", "/v1/*"]',
+    '',
+    '[[r2_buckets]]',
+    `bucket_name = "${bucketName}"`,
+    'binding = "ARTIFACTS"',
+    '',
+    '[[d1_databases]]',
+    'binding = "DB"',
+    `database_name = "${databaseName}"`,
+    `database_id = "${databaseId}"`,
+    `migrations_dir = "${resolve(templateRoot, 'migrations')}"`,
+    '',
+  ].join('\n');
+}
+
+function makeTemporaryConfig(values) {
+  const directory = mkdtempSync(resolve(tmpdir(), 'lynx-delivery-'));
+  const path = resolve(directory, 'wrangler.toml');
+  writeFileSync(path, toml(values), { mode: 0o600 });
+  return { directory, path };
+}
+
+function d1Id(path) {
+  return readFileSync(path, 'utf8').match(/^database_id\s*=\s*"([^"]+)"/m)?.[1];
+}
+
+function existingD1Id(name, cwd, options) {
+  const output = runWrangler(['d1', 'list', '--json'], cwd, options);
+  const result = JSON.parse(output.slice(output.indexOf('['), output.lastIndexOf(']') + 1));
+  const databases = Array.isArray(result) ? result : result.databases ?? result.result ?? [];
+  const database = databases.find((entry) => entry.name === name);
+  return database?.uuid ?? database?.id;
+}
+
+function deploymentUrl(output) {
+  return output.match(/https:\/\/[^\s]+\.workers\.dev/)?.[0];
+}
+
+function upsertEnvironment(path, values) {
+  const original = readFileSync(path, 'utf8');
+  let output = original.endsWith('\n') ? original : `${original}\n`;
+  for (const [name, value] of Object.entries(values)) {
+    const line = `${name}="${value.replaceAll('"', '\\"')}"`;
+    const expression = new RegExp(`^${name}=.*$`, 'm');
+    output = expression.test(output) ? output.replace(expression, line) : `${output}${line}\n`;
+  }
+  writeFileSync(path, output, { mode: 0o600 });
+}
+
+function temporaryEnvironment() {
   const environment = { ...process.env };
   delete environment.CLOUDFLARE_API_TOKEN;
-  const wrangler = resolve(consoleRoot, 'node_modules/.bin/wrangler');
-  const options = {
-    cwd: consoleRoot,
-    encoding: 'utf8',
-    env: environment,
-  };
-  let result = spawnSync(wrangler, ['whoami', '--json'], options);
+  return environment;
+}
+
+export function listCloudflareAccounts(cwd = process.cwd()) {
+  const environment = temporaryEnvironment();
+  let result = spawnSync(process.execPath, [wranglerPath(), 'whoami', '--json'], { cwd, encoding: 'utf8', env: environment });
   if (result.error || result.status !== 0) {
-    run(wrangler, ['login', '--scopes', 'account:read', 'user:read', 'd1:write', 'workers:write', 'workers_scripts:write'], consoleRoot);
-    result = spawnSync(wrangler, ['whoami', '--json'], options);
+    runWrangler(['login', '--scopes', 'account:read', 'user:read', 'd1:write', 'workers:write', 'workers_scripts:write'], cwd, { env: environment });
+    result = spawnSync(process.execPath, [wranglerPath(), 'whoami', '--json'], { cwd, encoding: 'utf8', env: environment });
   }
-  if (result.error || result.status !== 0) {
-    throw new Error('Could not list Cloudflare accounts from Wrangler login. Run `wrangler login` and try again.');
-  }
+  if (result.error || result.status !== 0) throw new Error('Could not list Cloudflare accounts from Wrangler login. Run `wrangler login` and try again.');
   const accounts = JSON.parse(result.stdout).accounts;
   const available = Array.isArray(accounts) ? accounts.map(({ id, name }) => ({ id, name })).filter(({ id, name }) => id && name) : [];
   if (available.length === 0) throw new Error('Your Wrangler login has no Cloudflare accounts.');
   return available;
 }
 
-function writeEnvironment(path, {
-  url, workerName, bucketName, databaseId, credentials, accountId, r2AccessKeyId, r2SecretAccessKey,
-}) {
-  writeFileSync(path, [
-    '# Generated by lynx console:setup. Never commit this file.',
-    `CLOUDFLARE_ACCOUNT_ID="${accountId}"`,
-    `R2_ACCESS_KEY_ID="${r2AccessKeyId}"`,
-    `R2_SECRET_ACCESS_KEY="${r2SecretAccessKey}"`,
-    `LYNX_DELIVERY_SERVER="${url}"`,
-    `LYNX_DELIVERY_API_KEY="${credentials.apiKey}"`,
-    `LYNX_DELIVERY_USERNAME="${credentials.username}"`,
-    `LYNX_DELIVERY_PASSWORD="${credentials.password}"`,
-    `LYNX_DELIVERY_WORKER_NAME="${workerName}"`,
-    `LYNX_DELIVERY_R2_BUCKET="${bucketName}"`,
-    `LYNX_DELIVERY_D1_DATABASE_ID="${databaseId}"`,
-    '',
-  ].join('\n'), 'utf8');
+function valuesFromEnvironment(environment) {
+  return {
+    workerName: resource(environment.LYNX_DELIVERY_WORKER_NAME, 'LYNX_DELIVERY_WORKER_NAME'),
+    databaseName: resource(environment.LYNX_DELIVERY_D1_NAME, 'LYNX_DELIVERY_D1_NAME'),
+    bucketName: resource(environment.LYNX_DELIVERY_R2_BUCKET, 'LYNX_DELIVERY_R2_BUCKET'),
+    accountId: required(environment.CLOUDFLARE_ACCOUNT_ID, 'CLOUDFLARE_ACCOUNT_ID'),
+    databaseId: configured(environment.LYNX_DELIVERY_D1_DATABASE_ID) ? environment.LYNX_DELIVERY_D1_DATABASE_ID : placeholderDatabaseId,
+  };
 }
 
-export function setupConsole({
-  username,
-  dryRun = false,
-  cwd = process.cwd(),
-  accountId = process.env.CLOUDFLARE_ACCOUNT_ID,
-  r2AccessKeyId = process.env.R2_ACCESS_KEY_ID,
-  r2SecretAccessKey = process.env.R2_SECRET_ACCESS_KEY,
-  signingPrivateKeyPath,
-}) {
-  if (!usernamePattern.test(username ?? '')) throw new Error('console:setup requires --username with 2-64 letters, numbers, dots, dashes, or underscores.');
-  const repositoryRoot = findRepositoryRoot(cwd);
-  const consoleRoot = resolve(repositoryRoot, 'apps/console');
-  const environmentPath = resolve(repositoryRoot, '.env.lynx');
-  if (existsSync(environmentPath)) throw new Error('.env.lynx already exists. This setup command does not replace an existing remote environment.');
-  const signingKey = createSigningKey(repositoryRoot, consoleRoot, signingPrivateKeyPath);
-  const credentials = createCredentials(username);
-  const before = readWorkerConfig(consoleRoot);
+export function setupConsole({ cwd = process.cwd(), environmentPath, dryRun = false } = {}) {
+  const environment = process.env;
+  const values = valuesFromEnvironment(environment);
+  const key = signingKey(cwd);
+  const admin = credentials(environment.LYNX_CONSOLE_USERNAME, environment.LYNX_CONSOLE_PASSWORD);
+  required(environment.R2_ACCESS_KEY_ID, 'R2_ACCESS_KEY_ID');
+  required(environment.R2_SECRET_ACCESS_KEY, 'R2_SECRET_ACCESS_KEY');
+  if (!environmentPath) throw new Error('Missing .env.lynx. Run `lynx console setup` once to create it.');
   if (dryRun) {
-    process.stdout.write(`Would create D1 ${before.workerName}, R2 ${before.bucketName}, deploy ${before.workerName}, and write .env.lynx for ${username}.\n`);
+    process.stdout.write(`Configuration is valid. Would create or reuse D1 ${values.databaseName}, R2 ${values.bucketName}, and deploy ${values.workerName}.\n`);
     return;
   }
-  if (!accountId || !r2AccessKeyId || !r2SecretAccessKey) {
-    throw new Error('Cloudflare account and R2 S3 access-key credentials are required before running console:setup.');
-  }
-  delete process.env.CLOUDFLARE_API_TOKEN;
 
-  const wrangler = resolve(consoleRoot, 'node_modules/.bin/wrangler');
-  if (before.databaseId === placeholderDatabaseId) {
-    run(wrangler, ['d1', 'create', before.workerName, '--update-config', '--binding', 'DB'], consoleRoot);
-  } else {
-    process.stdout.write(`Using D1 ${before.workerName} (${before.databaseId}).\n`);
+  const templateRoot = template();
+  const temporary = makeTemporaryConfig({ ...values, templateRoot });
+  const runOptions = { env: temporaryEnvironment() };
+  try {
+    if (values.databaseId === placeholderDatabaseId) {
+      values.databaseId = existingD1Id(values.databaseName, cwd, runOptions);
+      if (values.databaseId) process.stdout.write(`Using D1 ${values.databaseName} (${values.databaseId}).\n`);
+      else {
+        const output = runWrangler(['d1', 'create', values.databaseName, '--update-config', '--binding', 'DB', '--config', temporary.path], cwd, runOptions);
+        values.databaseId = d1Id(temporary.path) ?? output.match(/database_id\s*=\s*"([^"]+)"/)?.[1];
+      }
+      if (!values.databaseId || values.databaseId === placeholderDatabaseId) throw new Error('Wrangler created D1 but did not return its database ID.');
+      writeFileSync(temporary.path, toml({ ...values, templateRoot }), { mode: 0o600 });
+    }
+    const bucket = spawnSync(process.execPath, [wranglerPath(), 'r2', 'bucket', 'info', values.bucketName, '--config', temporary.path], { cwd, encoding: 'utf8', env: runOptions.env });
+    if (bucket.status !== 0) runWrangler(['r2', 'bucket', 'create', values.bucketName, '--config', temporary.path], cwd, runOptions);
+    const output = runWrangler(['deploy', '--config', temporary.path], cwd, runOptions);
+    const url = deploymentUrl(output);
+    if (!url) throw new Error('Worker deployed but Wrangler did not print a workers.dev URL.');
+    for (const [name, value] of Object.entries({
+      INITIAL_ADMIN_USERNAME: admin.username,
+      INITIAL_ADMIN_PASSWORD: admin.password,
+      INITIAL_ADMIN_API_KEY: admin.apiKey,
+      AUTH_SESSION_SECRET: admin.sessionSecret,
+      DELIVERY_SIGNING_PRIVATE_KEY: key,
+    })) runWrangler(['secret', 'put', name, '--config', temporary.path], cwd, { ...runOptions, input: value });
+    runWrangler(['d1', 'migrations', 'apply', 'DB', '--remote', '--config', temporary.path], cwd, runOptions);
+    upsertEnvironment(environmentPath, {
+      CLOUDFLARE_ACCOUNT_ID: values.accountId,
+      LYNX_DELIVERY_D1_DATABASE_ID: values.databaseId,
+      LYNX_DELIVERY_SERVER: url,
+      LYNX_DELIVERY_API_KEY: admin.apiKey,
+    });
+    process.stdout.write(`Cloudflare delivery is ready: ${url}\nSource .env.lynx before \`lynx release upload\`.\n`);
+  } finally {
+    rmSync(temporary.directory, { recursive: true, force: true });
   }
-  const bucket = spawnSync(wrangler, ['r2', 'bucket', 'info', before.bucketName], { cwd: consoleRoot, encoding: 'utf8' });
-  if (bucket.status === 0) {
-    process.stdout.write(`Using R2 ${before.bucketName}.\n`);
-  } else {
-    run(wrangler, ['r2', 'bucket', 'create', before.bucketName], consoleRoot);
-  }
-  const configured = readWorkerConfig(consoleRoot);
-  if (configured.databaseId === placeholderDatabaseId) throw new Error('Wrangler created D1 but did not update apps/console/wrangler.toml.');
-  run('pnpm', ['--filter', '@expo-lynx/delivery-console', 'build'], repositoryRoot);
-  const deployOutput = run(wrangler, ['deploy'], consoleRoot);
-  const url = deployOutput.match(/https:\/\/[^\s]+\.workers\.dev/)?.[0];
-  if (!url) throw new Error('Worker deployed but Wrangler did not print a workers.dev URL.');
-  for (const [name, value] of Object.entries({
-    INITIAL_ADMIN_USERNAME: credentials.username,
-    INITIAL_ADMIN_PASSWORD: credentials.password,
-    INITIAL_ADMIN_API_KEY: credentials.apiKey,
-    AUTH_SESSION_SECRET: credentials.sessionSecret,
-    DELIVERY_SIGNING_PRIVATE_KEY: signingKey,
-  })) run(wrangler, ['secret', 'put', name], consoleRoot, value);
-  run(wrangler, ['d1', 'migrations', 'apply', 'DB', '--remote'], consoleRoot);
-  writeEnvironment(environmentPath, {
-    url, ...configured, credentials, accountId, r2AccessKeyId, r2SecretAccessKey,
-  });
-  process.stdout.write(`Cloudflare delivery is ready: ${url}\nSource .env.lynx before lynx release upload.\n`);
 }
 
-export function deployConsole({ cwd = process.cwd() } = {}) {
-  const repositoryRoot = findRepositoryRoot(cwd);
-  const consoleRoot = resolve(repositoryRoot, 'apps/console');
-  const wrangler = resolve(consoleRoot, 'node_modules/.bin/wrangler');
-  run('pnpm', ['--filter', '@expo-lynx/delivery-console', 'build'], repositoryRoot);
-  run(wrangler, ['deploy'], consoleRoot);
-  run(wrangler, ['d1', 'migrations', 'apply', 'DB', '--remote'], consoleRoot);
+export function deployConsole({ cwd = process.cwd(), environmentPath } = {}) {
+  const values = valuesFromEnvironment(process.env);
+  if (values.databaseId === placeholderDatabaseId) throw new Error('Missing LYNX_DELIVERY_D1_DATABASE_ID in .env.lynx. Run `lynx console setup` first.');
+  if (!environmentPath) throw new Error('Missing .env.lynx. Run `lynx console setup` first.');
+  const temporary = makeTemporaryConfig({ ...values, templateRoot: template() });
+  const runOptions = { env: temporaryEnvironment() };
+  try {
+    runWrangler(['deploy', '--config', temporary.path], cwd, runOptions);
+    runWrangler(['d1', 'migrations', 'apply', 'DB', '--remote', '--config', temporary.path], cwd, runOptions);
+  } finally {
+    rmSync(temporary.directory, { recursive: true, force: true });
+  }
 }

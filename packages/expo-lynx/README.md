@@ -88,9 +88,8 @@ library consumers are not blocked.
 
 ## Local managed-bundle test on iOS
 
-For the end-to-end iOS architecture, callback expectations, Release opt-in,
-failure matrix, and R2 transition, see
-[`feature/delivery-bundle-update/DEVELOPMENT.md`](./feature/delivery-bundle-update/DEVELOPMENT.md).
+For the end-to-end Worker setup and local delivery workflow, see the
+[Delivery Console guide](../../apps/console/README.md).
 
 The example's ReactLynx source now lives at
 `apps/expo-lynx-example/features/delivery`. Start the local Console/Worker,

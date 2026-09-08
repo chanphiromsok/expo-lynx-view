@@ -287,7 +287,7 @@ age never controls replay protection.
 ```bash
 pnpm --filter expo-lynx exec jest --runInBand --no-watchman
 node --test packages/expo-lynx/app.plugin.test.js
-pnpm test:lynx-delivery
+pnpm --filter @expo-lynx/delivery-console test
 git diff --check
 ```
 

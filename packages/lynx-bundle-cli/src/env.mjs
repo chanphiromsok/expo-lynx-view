@@ -10,7 +10,11 @@ export function loadNearestDeliveryEnvironment(cwd = process.cwd()) {
       for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
         const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|'([^']*)'|([^#\s]*))\s*(?:#.*)?$/);
         if (!match || process.env[match[1]] !== undefined) continue;
-        process.env[match[1]] = match[2] ?? match[3] ?? match[4] ?? '';
+        const value = match[2] ?? match[3] ?? match[4] ?? '';
+        process.env[match[1]] = (value.startsWith('"') && value.endsWith('"'))
+          || (value.startsWith("'") && value.endsWith("'"))
+          ? value.slice(1, -1)
+          : value;
       }
       return file;
     }
