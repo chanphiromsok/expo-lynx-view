@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { loadExpoConfig } from './expo-config.mjs';
 import { loadMiniAppConfigAsync } from './index.mjs';
 
-export async function inspectDeliveryWorkspace({ cwd = process.cwd(), remote = false, fetchImpl = fetch } = {}) {
+export async function inspectDeliveryWorkspace({ cwd = process.cwd(), remote = false, platform = 'ios', fetchImpl = fetch } = {}) {
   const checks = [];
   const miniAppPath = ['lynx-miniapp.config.ts', 'lynx-miniapp.config.mjs', 'lynx-miniapp.config.js']
     .map((name) => resolve(cwd, name))
@@ -26,9 +26,11 @@ export async function inspectDeliveryWorkspace({ cwd = process.cwd(), remote = f
       checks.push(publicKeyPath && existsSync(publicKeyPath)
         ? pass('public-key', options.publicKeyPath)
         : fail('public-key', 'Configure expo-lynx-view publicKeyPath, then run lynx keys generate.'));
-      checks.push(typeof expo?.version === 'string' && typeof expo?.ios?.buildNumber === 'string'
-        ? pass('host-build', `${expo.version} (${expo.ios.buildNumber})`)
-        : fail('host-build', 'Set expo.version and expo.ios.buildNumber before lynx host prepare.'));
+      const buildNumber = platform === 'android' ? expo?.android?.versionCode : expo?.ios?.buildNumber;
+      const validBuild = typeof buildNumber === 'string' || typeof buildNumber === 'number';
+      checks.push(typeof expo?.version === 'string' && validBuild
+        ? pass('host-build', `${expo.version} (${platform} ${buildNumber})`)
+        : fail('host-build', `Set expo.version and expo.${platform === 'android' ? 'android.versionCode' : 'ios.buildNumber'} before lynx host prepare --platform ${platform}.`));
     } catch (error) {
       checks.push(fail('workspace', error instanceof Error ? error.message : 'Expo config could not be read.'));
     }

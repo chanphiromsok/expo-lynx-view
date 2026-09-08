@@ -61,7 +61,7 @@ type ExpoLynxViewBaseProps = Omit<ViewProps, 'children'> & {
 };
 
 type ExpoLynxManagedSourceProps = {
-  /** Declarative source. Managed delivery is currently implemented on iOS. */
+  /** Declarative source. Managed delivery is implemented on iOS and Android. */
   source: LynxSource;
   url?: never;
 };

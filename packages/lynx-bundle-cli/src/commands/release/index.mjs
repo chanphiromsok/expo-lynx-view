@@ -27,7 +27,7 @@ async function confirmTarget(target) {
 }
 
 export default class Release extends Command {
-  static description = 'Mini-app command: build, package, upload, and register an immutable iOS release.';
+  static description = 'Mini-app command: build, package, upload, and register an immutable platform-specific release.';
 
   static examples = [
     'lynx doctor',

@@ -18,19 +18,15 @@ const NativeView = requireNativeView<NativeExpoLynxViewProps>('ExpoLynx') as Com
 const ExpoLynxView = forwardRef<ExpoLynxViewRef, ExpoLynxViewProps>(
   ({ initialData, source, url, ...props }, ref) => {
     const initialDataJSON = initialData === undefined ? undefined : JSON.stringify(initialData);
-    let nativeURL = url;
+    const nativeURL = url;
     let sourceJSON: string | undefined;
 
     if (source) {
-      if (Platform.OS === 'ios') {
+      if (Platform.OS === 'ios' || Platform.OS === 'android') {
         sourceJSON = JSON.stringify(source);
-      } else if (source.kind === 'development') {
-        nativeURL = source.url;
-      } else if (source.kind === 'embedded') {
-        nativeURL = 'static.lynx';
       } else {
         throw new Error(
-          'expo-lynx-view: managed bundle delivery is currently implemented on iOS only.'
+          'expo-lynx-view: native Lynx sources are available only on iOS and Android.'
         );
       }
     }

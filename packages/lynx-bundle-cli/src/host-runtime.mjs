@@ -1,4 +1,4 @@
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { createNativeRuntimeVersion } from './index.mjs';
@@ -6,9 +6,10 @@ import { loadExpoConfig } from './expo-config.mjs';
 
 export async function prepareHostRuntime({ cwd = process.cwd(), platform = 'ios', runtimeFactory = createNativeRuntimeVersion } = {}) {
   assertManagedPlatform(platform);
-  const host = readHost(cwd);
+  const host = readHost(cwd, platform);
   const runtimeVersion = await runtimeFactory(host.root, platform);
-  const registryPath = resolve(host.root, host.embeddedBundlesPath, 'registry.json');
+  const registryPath = embeddedRegistryPath(host, platform);
+  assertPlatformBaseline(registryPath, platform);
   const registry = readJson(registryPath, 'Embedded registry');
   assertRegistry(registry, host.features);
   registry.runtimeVersion = runtimeVersion;
@@ -25,8 +26,9 @@ export async function prepareHostRuntime({ cwd = process.cwd(), platform = 'ios'
 
 export async function registerPreparedHostRuntime({ cwd = process.cwd(), platform = 'ios', server = process.env.LYNX_DELIVERY_SERVER, apiKey = process.env.LYNX_DELIVERY_API_KEY, fetchImpl = fetch, runtimeFactory = createNativeRuntimeVersion } = {}) {
   assertManagedPlatform(platform);
-  const host = readHost(cwd);
-  const registryPath = resolve(host.root, host.embeddedBundlesPath, 'registry.json');
+  const host = readHost(cwd, platform);
+  const registryPath = embeddedRegistryPath(host, platform);
+  assertPlatformBaseline(registryPath, platform);
   const registry = readJson(registryPath, 'Embedded registry');
   assertRegistry(registry, host.features);
   const actualRuntime = await runtimeFactory(host.root, platform);
@@ -58,12 +60,11 @@ export async function registerPreparedHostRuntime({ cwd = process.cwd(), platfor
 }
 
 function assertManagedPlatform(platform) {
-  if (platform === 'ios') return;
-  if (platform === 'android') throw new Error('Android managed delivery is not implemented in expo-lynx-view yet. Do not register an Android runtime.');
-  throw new Error('platform must be ios or android.');
+  if (platform !== 'ios' && platform !== 'android') throw new Error('platform must be ios or android.');
 }
 
-export function readHost(cwd = process.cwd()) {
+export function readHost(cwd = process.cwd(), platform = 'ios') {
+  assertManagedPlatform(platform);
   const root = resolve(cwd);
   const app = loadExpoConfig(root);
   if (!app || typeof app !== 'object') throw new Error('Expo configuration must contain an object.');
@@ -74,8 +75,9 @@ export function readHost(cwd = process.cwd()) {
   if (!options || typeof options !== 'object' || typeof options.embeddedBundlesPath !== 'string' || !options.deliveryEndpoints || typeof options.deliveryEndpoints !== 'object') {
     throw new Error('Expo config must configure expo-lynx-view with embeddedBundlesPath and deliveryEndpoints.');
   }
-  if (typeof app.version !== 'string' || app.version.length === 0 || typeof app.ios?.buildNumber !== 'string' || app.ios.buildNumber.length === 0) {
-    throw new Error('Expo config must declare expo.version and expo.ios.buildNumber before host preparation.');
+  const buildNumber = platform === 'ios' ? app.ios?.buildNumber : app.android?.versionCode;
+  if (typeof app.version !== 'string' || app.version.length === 0 || (typeof buildNumber !== 'string' && typeof buildNumber !== 'number') || String(buildNumber).length === 0) {
+    throw new Error(`Expo config must declare expo.version and expo.${platform === 'ios' ? 'ios.buildNumber' : 'android.versionCode'} before host preparation.`);
   }
   const entries = Object.entries(options.deliveryEndpoints);
   if (entries.length === 0 || entries.some(([feature, value]) => typeof feature !== 'string' || typeof value !== 'string')) {
@@ -91,7 +93,7 @@ export function readHost(cwd = process.cwd()) {
     root,
     appId: appIds[0],
     appVersion: app.version,
-    buildNumber: app.ios.buildNumber,
+    buildNumber: String(buildNumber),
     embeddedBundlesPath: options.embeddedBundlesPath,
     features: parsed.map(({ feature }) => feature).sort(),
     workerOrigin: origins[0],
@@ -117,6 +119,24 @@ function assertRegistry(registry, features) {
   for (const feature of features) {
     const entry = registry.features[feature];
     if (!entry || entry.baseline !== `${feature}/baseline.json`) throw new Error(`Embedded registry entry is invalid for ${feature}.`);
+  }
+}
+
+export function embeddedRootForPlatform(host, platform) {
+  const root = resolve(host.root, host.embeddedBundlesPath);
+  const platformRoot = resolve(root, platform);
+  // Keep existing iOS projects working. Android is always isolated because
+  // its native runtime fingerprint must never overwrite iOS metadata.
+  return platform === 'ios' && !existsSync(resolve(platformRoot, 'registry.json')) ? root : platformRoot;
+}
+
+function embeddedRegistryPath(host, platform) {
+  return resolve(embeddedRootForPlatform(host, platform), 'registry.json');
+}
+
+function assertPlatformBaseline(registryPath, platform) {
+  if (!existsSync(registryPath)) {
+    throw new Error(`No embedded ${platform} baseline exists. Run lynx host embed <mini-app-directory> --platform ${platform} first.`);
   }
 }
 

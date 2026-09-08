@@ -1,5 +1,4 @@
 import './App.css';
-import { useGlobalProps } from '@lynx-js/react';
 import { useNavigate } from 'react-router';
 import GameEvents from './components/GameEvents';
 import GameCategory from './components/GameCategory';
@@ -52,23 +51,11 @@ const gameCategories = [
 
 export function App() {
   const nav = useNavigate();
-  const safeArea = useGlobalProps() as {
-    safeAreaTop?: number;
-    safeAreaBottom?: number;
-    safeAreaLeft?: number;
-    safeAreaRight?: number;
-  };
 
   return (
     <scroll-view
       scroll-orientation="vertical"
       className="scroll-container"
-      style={{
-        paddingTop: `${safeArea.safeAreaTop ?? 0}px`,
-        paddingBottom: `${safeArea.safeAreaBottom ?? 0}px`,
-        paddingLeft: `${safeArea.safeAreaLeft ?? 0}px`,
-        paddingRight: `${safeArea.safeAreaRight ?? 0}px`,
-      }}
     >
       <view class="scroll-content">
         <Header />

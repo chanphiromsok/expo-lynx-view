@@ -3,6 +3,8 @@ package expo.modules.lynx
 import android.content.Context
 import com.lynx.tasm.provider.AbsTemplateProvider
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
 import java.io.IOException
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -15,12 +17,36 @@ import okhttp3.Request
 class LynxTemplateProvider(context: Context) : AbsTemplateProvider() {
   private val appContext = context.applicationContext
   private val httpClient = OkHttpClient()
+  @Volatile private var localResourceRoot: File? = null
+  @Volatile private var assetResourceRoot: String? = null
+
+  fun setLocalResourceRoot(root: File?) {
+    localResourceRoot = root
+    assetResourceRoot = null
+  }
+
+  fun setAssetResourceRoot(root: String?) {
+    assetResourceRoot = root?.trimEnd('/')
+    localResourceRoot = null
+  }
 
   override fun loadTemplate(uri: String, callback: Callback) {
     if (uri.startsWith("http://") || uri.startsWith("https://")) {
       loadFromNetwork(uri, callback)
+    } else if (uri.startsWith("file://")) {
+      loadFromFile(File(java.net.URI(uri)), callback)
     } else {
-      loadFromAssets(uri, callback)
+      localResourceRoot?.let { root ->
+        val file = File(root, uri)
+        if (file.isFile) {
+          loadFromFile(file, callback)
+          return
+        }
+      }
+      val asset = assetResourceRoot?.let { root ->
+        if (uri == root || uri.startsWith("$root/")) uri else "$root/$uri"
+      } ?: uri
+      loadFromAssets(asset, callback)
     }
   }
 
@@ -52,6 +78,21 @@ class LynxTemplateProvider(context: Context) : AbsTemplateProvider() {
             while (input.read(buffer).also { length = it } != -1) {
               output.write(buffer, 0, length)
             }
+            callback.onSuccess(output.toByteArray())
+          }
+        }
+      } catch (e: IOException) {
+        callback.onFailed(e.message)
+      }
+    }.start()
+  }
+
+  private fun loadFromFile(file: File, callback: Callback) {
+    Thread {
+      try {
+        FileInputStream(file).use { input ->
+          ByteArrayOutputStream().use { output ->
+            input.copyTo(output)
             callback.onSuccess(output.toByteArray())
           }
         }

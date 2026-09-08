@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
@@ -11,7 +11,7 @@ function temporaryHost() {
   const embedded = resolve(root, 'generated/expo-lynx/embedded/delivery');
   mkdirSync(embedded, { recursive: true });
   writeFileSync(resolve(root, 'app.json'), JSON.stringify({ expo: {
-    version: '1.2.0', ios: { buildNumber: '42' }, plugins: [['expo-lynx-view', {
+    version: '1.2.0', ios: { buildNumber: '42' }, android: { versionCode: 7 }, plugins: [['expo-lynx-view', {
       embeddedBundlesPath: './generated/expo-lynx/embedded',
       deliveryEndpoints: { delivery: 'https://delivery.example/v1/bs-one/delivery' },
     }]],
@@ -43,11 +43,30 @@ test('prepares then registers the exact runtime held by the embedded registry', 
   });
 });
 
-test('does not pretend Android managed delivery is available', async () => {
-  await assert.rejects(
-    prepareHostRuntime({ cwd: temporaryHost(), platform: 'android' }),
-    /Android managed delivery is not implemented/,
-  );
+test('prepares Android with its own native build number', async () => {
+  const root = temporaryHost();
+  const embedded = resolve(root, 'generated/expo-lynx/embedded');
+  const android = resolve(embedded, 'android');
+  mkdirSync(android);
+  cpSync(resolve(embedded, 'delivery'), resolve(android, 'delivery'), { recursive: true });
+  copyFileSync(resolve(embedded, 'registry.json'), resolve(android, 'registry.json'));
+  const result = await prepareHostRuntime({ cwd: root, platform: 'android', runtimeFactory: async () => 'android-runtime-a' });
+  assert.equal(result.buildNumber, '7');
+  assert.equal(result.runtimeVersion, 'android-runtime-a');
+  let request;
+  await registerPreparedHostRuntime({
+    cwd: root,
+    platform: 'android',
+    apiKey: 'lynx_live_test',
+    runtimeFactory: async () => 'android-runtime-a',
+    fetchImpl: async (_url, init) => {
+      request = init;
+      return Response.json({ ok: true });
+    },
+  });
+  assert.deepEqual(JSON.parse(request.body), {
+    schemaVersion: 1, platform: 'android', runtimeVersion: 'android-runtime-a', appVersion: '1.2.0', buildNumber: '7', features: ['delivery'],
+  });
 });
 
 test('refuses to register a host project changed since preparation', async () => {

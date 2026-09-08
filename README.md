@@ -1,6 +1,6 @@
 # Expo Lynx monorepo
 
-This repository contains the iOS Expo module that embeds Lynx mini-apps, the
+This repository contains the Expo module that embeds Lynx mini-apps on iOS and Android, the
 release CLI, an example Expo application, and the Cloudflare delivery console.
 
 The intended production model is deliberately different from loading an
@@ -15,7 +15,8 @@ arbitrary URL in a WebView:
    signs the exact deployment response. The native app verifies that response
    with its embedded public key before installation.
 
-The implementation is iOS-first. Android delivery is intentionally deferred.
+Managed delivery is implemented on iOS and Android. Each platform has its own
+embedded baseline and native runtime fingerprint.
 
 > **Current limitation — Lynx images are not supported on iOS or Android.**
 > `expo-lynx-view` intentionally excludes the Lynx image services: iOS pins an
@@ -125,15 +126,19 @@ plugin in `app.json` or `app.config.ts`:
 ]
 ```
 
-The host must also set `expo.version` and `expo.ios.buildNumber`. From the
+The host must also set `expo.version`, `expo.ios.buildNumber`, and
+`expo.android.versionCode`. From the
 host root, generate or restore the trust key, build the embedded fallback from
 each mini-app repository, and check the configuration:
 
 ```sh
 pnpm exec lynx keys generate
-pnpm exec lynx doctor
-pnpm exec lynx host embed ../merchant-home
-pnpm exec lynx host prepare
+pnpm exec lynx doctor --platform ios
+pnpm exec lynx host embed ../merchant-home --platform ios
+pnpm exec lynx host prepare --platform ios
+pnpm exec lynx doctor --platform android
+pnpm exec lynx host embed ../merchant-home --platform android
+pnpm exec lynx host prepare --platform android
 ```
 
 In the independent Lynx mini-app repository, install the CLI as a development
@@ -152,19 +157,21 @@ export default defineMiniApp({
 });
 ```
 
-Then package an iOS release without contacting the Worker:
+Then package a platform-specific release without contacting the Worker:
 
 ```sh
 pnpm exec lynx doctor
 pnpm exec lynx release --platform ios --draft
+pnpm exec lynx release --platform android --draft
 ```
 
 The mini app needs `src/index.tsx` and `lynx.config.ts`. Its draft contains
 only `release.json` and `release.zip`; the uploaded release is later enabled
-from the Console. Android remote installation is not implemented yet, so do
-not release an Android deployment.
+from the Console.
 
-`generated/expo-lynx/embedded` is host build input, not a Metro asset. A host
+`generated/expo-lynx/embedded` is host build input, not a Metro asset. Android
+uses `generated/expo-lynx/embedded/android`; iOS uses its existing root
+baseline until `generated/expo-lynx/embedded/ios` exists. A host
 native-release pipeline must receive the matching initial mini-app baseline
 before prebuild. `lynx host embed <mini-app-directory>` builds one independent
 mini app and writes its `main.lynx.bundle`, `static/**`, `baseline.json`, and
@@ -271,9 +278,9 @@ its API key, and mobile reads only the public signed deployment route. See the
 one-time Cloudflare deployment, mobile endpoint configuration, release upload,
 promotion, rollback, and recovery.
 
-## When an iOS prebuild is required
+## When a native prebuild is required
 
-Run Expo prebuild and make a new native iOS build only when the native app
+Run Expo prebuild and make a new native iOS or Android build only when the native app
 inputs change, for example:
 
 - adding or removing an embedded feature;
@@ -287,7 +294,7 @@ native or embedded-baseline change so the app and its remote releases keep the
 same runtime identity.
 
 Creating, signing, uploading, or switching to a new remote release does **not**
-need prebuild or a new iOS binary. The app verifies the new signed release at
+need prebuild or a new native binary. The app verifies the new signed release at
 installation time and opens it on the next mini-app launch.
 
 ## First real-device remote test

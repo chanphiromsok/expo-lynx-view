@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameS
 import { dirname, resolve } from 'node:path';
 
 import { buildFeature, createNativeRuntimeVersion, loadMiniAppConfigAsync } from './index.mjs';
-import { readHost } from './host-runtime.mjs';
+import { embeddedRootForPlatform, readHost } from './host-runtime.mjs';
 
 const ENTRY = 'main.lynx.bundle';
 
@@ -13,14 +13,12 @@ export async function embedMiniApp({
   runtimeFactory = createNativeRuntimeVersion,
   buildFactory = buildFeature,
 } = {}) {
-  if (platform !== 'ios') {
-    throw new Error('Android managed delivery is not implemented in expo-lynx-view. Do not embed an Android baseline.');
-  }
+  if (platform !== 'ios' && platform !== 'android') throw new Error('platform must be ios or android.');
   if (typeof miniAppDirectory !== 'string' || miniAppDirectory.length === 0) {
     throw new Error('A mini-app directory is required. Use lynx host embed <mini-app-directory>.');
   }
 
-  const host = readHost(cwd);
+  const host = readHost(cwd, platform);
   const miniApp = await loadMiniAppConfigAsync({ cwd: resolve(host.root, miniAppDirectory) });
   if (miniApp.appId !== host.appId) {
     throw new Error(`Mini app ${miniApp.appId}/${miniApp.feature} does not belong to host app ${host.appId}.`);
@@ -31,7 +29,7 @@ export async function embedMiniApp({
 
   const runtimeVersion = await runtimeFactory(host.root, platform);
   const build = buildFactory(miniApp, miniApp.feature);
-  const embeddedRoot = resolve(host.root, host.embeddedBundlesPath);
+  const embeddedRoot = embeddedRootForPlatform(host, platform);
   const destination = resolve(embeddedRoot, miniApp.feature);
   try {
     mkdirSync(embeddedRoot, { recursive: true, mode: 0o700 });

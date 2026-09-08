@@ -1,7 +1,7 @@
 {
   "name": "expo-lynx-view",
   "version": "0.3.2",
-  "description": "Embed Lynx views in Expo and React Native apps on iOS",
+  "description": "Embed Lynx views in Expo and React Native apps on iOS and Android",
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "scripts": {

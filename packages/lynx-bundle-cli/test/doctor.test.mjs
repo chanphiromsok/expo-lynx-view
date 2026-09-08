@@ -33,6 +33,6 @@ test('doctor names missing host trust-key and build metadata', async () => {
   assert.deepEqual(result.checks.slice(0, 3), [
     { name: 'host-config', ok: true, detail: 'expo-lynx-view delivery endpoints found' },
     { name: 'public-key', ok: false, detail: 'Configure expo-lynx-view publicKeyPath, then run lynx keys generate.' },
-    { name: 'host-build', ok: false, detail: 'Set expo.version and expo.ios.buildNumber before lynx host prepare.' },
+    { name: 'host-build', ok: false, detail: 'Set expo.version and expo.ios.buildNumber before lynx host prepare --platform ios.' },
   ]);
 });

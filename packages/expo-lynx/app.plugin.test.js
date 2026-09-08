@@ -255,6 +255,38 @@ test('materializes one iOS-only baseline namespace and emits trust configuration
   });
 });
 
+test('materializes the same V2 runtime, endpoints, and public key into Android assets', () => {
+  const { root, embedded } = makeTemporaryEmbeddedTree();
+  const androidEmbedded = path.join(embedded, 'android');
+  fs.mkdirSync(androidEmbedded);
+  fs.cpSync(path.join(embedded, 'shopping'), path.join(androidEmbedded, 'shopping'), { recursive: true });
+  fs.copyFileSync(path.join(embedded, 'registry.json'), path.join(androidEmbedded, 'registry.json'));
+  const keyDirectory = path.join(root, 'keys');
+  fs.mkdirSync(keyDirectory);
+  fs.copyFileSync(
+    path.join(fixtureRoot, 'crypto-development/updates.public.pem'),
+    path.join(keyDirectory, 'release.public.pem')
+  );
+  const result = _internal.materializeV2AndroidResources({
+    projectRoot: root,
+    options: {
+      embeddedBundlesPath: './generated/expo-lynx/embedded',
+      publicKeyPath: './keys/release.public.pem',
+      deliveryEndpoints: { shopping: 'https://delivery.example.com/v1/shop/shopping' },
+    },
+  });
+  assert.equal(
+    fs.readFileSync(path.join(result.embeddedDestination, 'shopping/main.lynx.bundle'), 'utf8'),
+    'mini-app'
+  );
+  assert.deepEqual(JSON.parse(fs.readFileSync(result.configurationPath, 'utf8')), {
+    schemaVersion: 1,
+    runtimeVersion: 'expo-57',
+    deliveryEndpoints: { shopping: 'https://delivery.example.com/v1/shop/shopping' },
+    publicKey: _internal.normalizePublicKey(path.join(keyDirectory, 'release.public.pem')).pem,
+  });
+});
+
 test('reuses the existing Xcode folder reference on repeated prebuilds', () => {
   const xcodePath = `Example/${_internal.EMBEDDED_DIRECTORY}`;
   const reference = {

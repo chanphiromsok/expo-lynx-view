@@ -13,7 +13,7 @@ test('builds an independent mini app into the host embedded fallback tree', asyn
   mkdirSync(resolve(mini, 'src'), { recursive: true });
   mkdirSync(resolve(output, 'static'), { recursive: true });
   writeFileSync(resolve(root, 'app.json'), JSON.stringify({ expo: {
-    version: '1.0.0', ios: { buildNumber: '1' }, plugins: [['expo-lynx-view', {
+    version: '1.0.0', ios: { buildNumber: '1' }, android: { versionCode: 1 }, plugins: [['expo-lynx-view', {
       embeddedBundlesPath: './generated/expo-lynx/embedded',
       deliveryEndpoints: { 'merchant-home': 'https://delivery.example/v1/bs-one/merchant-home' },
     }]],

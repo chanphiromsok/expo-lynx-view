@@ -17,10 +17,14 @@ copy host runtime values into its source repository.
 ```sh
 # Expo host repository
 lynx keys generate
-lynx doctor
-lynx host embed ../mart
-lynx host prepare
-lynx host register
+lynx doctor --platform ios
+lynx host embed ../mart --platform ios
+lynx host prepare --platform ios
+lynx host register --platform ios
+lynx doctor --platform android
+lynx host embed ../mart --platform android
+lynx host prepare --platform android
+lynx host register --platform android
 
 # independent mini-app repository
 lynx doctor
@@ -87,8 +91,9 @@ independent mini-app repository:
 
 ```sh
 # Run from the Expo host repository.
-lynx host embed ../mart
-lynx host prepare
+lynx host embed ../mart --platform ios
+lynx host prepare --platform ios
+# Repeat both commands with --platform android before an Android native build.
 ```
 
 `host embed` reads the mini app's `lynx-miniapp.config.ts`, confirms that its
@@ -123,8 +128,9 @@ export default defineMiniApp({
 
 The accepted runtime output is exactly `main.lynx.bundle` plus `static/**`
 sidecars. The packer rejects unsafe paths, links, unexpected files, and ZIPs
-over the mobile archive limits before any upload is attempted. Current release
-packaging targets iOS; Android is deferred.
+over the mobile archive limits before any upload is attempted. Release
+packaging and managed delivery support both `ios` and `android`; register each
+platform separately because their native runtime fingerprints differ.
 
 See the [delivery console guide](../../apps/console/README.md) for Cloudflare
 setup, credentials, local D1/R2 testing, and console promotion.

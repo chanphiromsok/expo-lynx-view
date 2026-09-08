@@ -1,4 +1,4 @@
-import { useGlobalProps, useMemo, useState } from '@lynx-js/react';
+import { useMemo, useState } from '@lynx-js/react';
 import { useNavigate, useParams } from 'react-router';
 
 import BackButton from '../components/BackButton';
@@ -83,12 +83,6 @@ const BatchTrackingScreen = ({
 }: { embeddedShipment?: BatchDetail } = {}) => {
   const params = useParams<{ id?: string }>();
   const nav = useNavigate();
-  const safeArea = useGlobalProps() as {
-    safeAreaTop?: number;
-    safeAreaBottom?: number;
-    safeAreaLeft?: number;
-    safeAreaRight?: number;
-  };
 
   // Stub data — real impl would fetch via useQuery against the API.
   const batch: BatchDetail = embeddedShipment ?? {
@@ -154,12 +148,6 @@ const BatchTrackingScreen = ({
       scroll-orientation="vertical"
       className="bt-scroll"
       bindscroll={onScroll}
-      style={{
-        paddingTop: `${safeArea.safeAreaTop ?? 0}px`,
-        paddingBottom: `${safeArea.safeAreaBottom ?? 0}px`,
-        paddingLeft: `${safeArea.safeAreaLeft ?? 0}px`,
-        paddingRight: `${safeArea.safeAreaRight ?? 0}px`,
-      }}
     >
       {/* <view className="bt-appbar">
         <BackButton />

@@ -43,6 +43,9 @@ android {
   sourceSets["main"].java.srcDir(
     "../../../../packages/expo-lynx/android/src/main/java/expo/modules/lynx/fastimage"
   )
+  // `pnpm --dir apps/lynx-example build` writes the static Lynx release here.
+  // Package it directly so release mode can load `main.lynx.bundle` from assets.
+  sourceSets["main"].assets.srcDir("../../dist")
 
   packaging {
     resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"

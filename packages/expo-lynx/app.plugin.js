@@ -19,6 +19,8 @@ const INFO_PLIST_PUBLIC_KEY = 'ExpoLynxPublicKey';
 const INFO_PLIST_PUBLIC_KEY_FINGERPRINT = 'ExpoLynxPublicKeyFingerprint';
 const INFO_PLIST_DELIVERY_ENDPOINTS = 'ExpoLynxDeliveryEndpoints';
 const INFO_PLIST_RUNTIME_VERSION = 'ExpoLynxRuntimeVersion';
+const ANDROID_EMBEDDED_DIRECTORY = 'expo-lynx-embedded';
+const ANDROID_DELIVERY_CONFIGURATION = 'expo-lynx-delivery.json';
 const FEATURE_ID = /^[a-z][a-z0-9-]{0,63}$/;
 const SHA_256 = /^[a-f0-9]{64}$/;
 const MAX_PUBLIC_KEY_BYTES = 16 * 1024;
@@ -500,11 +502,10 @@ function validateV2Options(options) {
 }
 
 function materializeV2Resources({ projectRoot, platformProjectRoot, nativeProjectName, options }) {
-  const sourcePath = resolveProjectPath(
+  const sourcePath = resolvePlatformEmbeddedBundles(
     projectRoot,
     options.embeddedBundlesPath,
-    'embeddedBundlesPath',
-    'directory'
+    'ios'
   );
   const publicKeyPath = resolveProjectPath(
     projectRoot,
@@ -586,6 +587,60 @@ function withV2TrustConfiguration(config, v2Options) {
   });
 }
 
+function materializeV2AndroidResources({ projectRoot, options }) {
+  const sourcePath = resolvePlatformEmbeddedBundles(
+    projectRoot,
+    options.embeddedBundlesPath,
+    'android'
+  );
+  const embedded = validateEmbeddedBundles(sourcePath);
+  const publicKeyPath = resolveProjectPath(
+    projectRoot,
+    options.publicKeyPath,
+    'publicKeyPath',
+    'file'
+  );
+  const publicKey = normalizePublicKey(publicKeyPath);
+  const assetsDirectory = path.join(projectRoot, 'android', 'app', 'src', 'main', 'assets');
+  const embeddedDestination = path.join(assetsDirectory, ANDROID_EMBEDDED_DIRECTORY);
+  fs.rmSync(embeddedDestination, { recursive: true, force: true });
+  fs.mkdirSync(assetsDirectory, { recursive: true });
+  copyBundledResource(sourcePath, embeddedDestination);
+  fs.writeFileSync(
+    path.join(assetsDirectory, ANDROID_DELIVERY_CONFIGURATION),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      runtimeVersion: embedded.runtimeVersion,
+      deliveryEndpoints: normalizeDeliveryEndpoints(options.deliveryEndpoints, embedded.features),
+      publicKey: publicKey.pem,
+    })}\n`,
+    { encoding: 'utf8', mode: 0o644 }
+  );
+  return { embeddedDestination, configurationPath: path.join(assetsDirectory, ANDROID_DELIVERY_CONFIGURATION) };
+}
+
+function resolvePlatformEmbeddedBundles(projectRoot, embeddedBundlesPath, platform) {
+  const root = resolveProjectPath(projectRoot, embeddedBundlesPath, 'embeddedBundlesPath', 'directory');
+  const platformDirectory = path.join(root, platform);
+  if (fs.existsSync(path.join(platformDirectory, 'registry.json'))) return platformDirectory;
+  if (platform === 'ios' && fs.existsSync(path.join(root, 'registry.json'))) return root;
+  throw new Error(`expo-lynx-view needs an embedded ${platform} baseline. Run lynx host embed <mini-app-directory> --platform ${platform}.`);
+}
+
+function withV2AndroidResources(config, v2Options) {
+  if (!v2Options) return config;
+  return withDangerousMod(config, [
+    'android',
+    (androidConfig) => {
+      materializeV2AndroidResources({
+        projectRoot: androidConfig.modRequest.projectRoot,
+        options: v2Options,
+      });
+      return androidConfig;
+    },
+  ]);
+}
+
 function withBundledResources(config, bundledResources) {
   if (!bundledResources.length) return config;
   config = withXcodeProject(config, (projectConfig) => {
@@ -638,6 +693,7 @@ const withExpoLynx = (config, options = {}) => {
   });
   config = withV2EmbeddedResources(config, v2Options);
   config = withV2TrustConfiguration(config, v2Options);
+  config = withV2AndroidResources(config, v2Options);
   return withBundledResources(config, bundledResources);
 };
 
@@ -649,10 +705,14 @@ module.exports._internal = {
   INFO_PLIST_PUBLIC_KEY_FINGERPRINT,
   INFO_PLIST_DELIVERY_ENDPOINTS,
   INFO_PLIST_RUNTIME_VERSION,
+  ANDROID_DELIVERY_CONFIGURATION,
+  ANDROID_EMBEDDED_DIRECTORY,
   addExpoLynxPostInstall,
   addResource,
   applyV2InfoPlist,
   materializeV2Resources,
+  materializeV2AndroidResources,
+  resolvePlatformEmbeddedBundles,
   normalizePublicKey,
   normalizeDeliveryEndpoints,
   resolveProjectPath,

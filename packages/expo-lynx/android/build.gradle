@@ -33,6 +33,10 @@ dependencies {
   implementation "org.lynxsdk.lynx:lynx-service-http:4.0.0"
   implementation "com.squareup.okhttp3:okhttp:4.9.0"
 
+  // Managed delivery reads one tiny synchronous launch-state blob before the
+  // first Lynx render. Keep ARMv7 support until the host drops that ABI.
+  implementation "com.tencent:mmkv:1.3.17"
+
   // No Lynx image service: Fresco conflicts with host dependencies. Add a
   // compatible ILynxImageService only when image support is deliberately scoped.
 

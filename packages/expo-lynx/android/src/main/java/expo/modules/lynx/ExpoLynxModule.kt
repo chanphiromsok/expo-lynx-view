@@ -9,6 +9,8 @@ import com.lynx.tasm.LynxEnv
 import com.lynx.tasm.service.LynxServiceCenter
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import expo.modules.kotlin.Promise
+import expo.modules.lynx.delivery.ManagedDeliveryCoordinator
 
 class ExpoLynxModule : Module() {
   @RequiresApi(Build.VERSION_CODES.P)
@@ -29,10 +31,14 @@ class ExpoLynxModule : Module() {
     }
 
     View(ExpoLynxView::class) {
-      Events("onLoadStart", "onLoad", "onError")
+      Events("onLoadStart", "onLoad", "onError", "onUpdate")
 
       Prop("url") { view: ExpoLynxView, url: String ->
         view.setSource(url)
+      }
+
+      Prop("sourceJSON") { view: ExpoLynxView, sourceJSON: String? ->
+        view.setSourceJSON(sourceJSON)
       }
 
       Prop("initialDataJSON") { view: ExpoLynxView, initialDataJSON: String? ->
@@ -41,6 +47,20 @@ class ExpoLynxModule : Module() {
 
       AsyncFunction("reload") { view: ExpoLynxView ->
         view.reload()
+      }
+
+      AsyncFunction("checkForUpdate") { feature: String, promise: Promise ->
+        val application = appContext.reactContext?.applicationContext
+        if (application == null) {
+          promise.reject("ERR_LYNX_DELIVERY", "Managed Lynx delivery is unavailable.", null)
+          return@AsyncFunction
+        }
+        ManagedDeliveryCoordinator.checkForUpdate(
+          application,
+          feature,
+          onResult = { promise.resolve(it.modulePayload()) },
+          onError = { promise.reject(it.code, it.message, it) },
+        )
       }
 
       OnViewDestroys { view: ExpoLynxView ->
