@@ -1,12 +1,15 @@
 import { type FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import {
+  AppWindow,
   Box,
   Check,
   FileArchive,
   LoaderCircle,
+  LogOut,
+  Plus,
   RefreshCw,
-  Terminal,
   X,
 } from 'lucide-react';
 
@@ -52,12 +55,12 @@ const identifier = /^[a-z][a-z0-9-]{0,63}$/;
 
 function initialScope() {
   const params = new URLSearchParams(window.location.search);
-  const appId = params.get('app') ?? 'default';
+  const appId = params.get('app') ?? '';
   const feature = params.get('feature') ?? 'delivery';
   const platform = params.get('platform') ?? 'ios';
   const runtimeVersion = params.get('runtime') ?? '';
   return {
-    appId: identifier.test(appId) ? appId : 'default',
+    appId: identifier.test(appId) ? appId : '',
     feature: identifier.test(feature) ? feature : 'delivery',
     platform: platform === 'android' ? 'android' : 'ios',
     runtimeVersion,
@@ -196,65 +199,297 @@ function FailureScreen({
   );
 }
 
+function CreateHostAppDialog({
+  open,
+  onCreate,
+  onOpenChange,
+}: {
+  open: boolean;
+  onCreate: (input: { id: string; name: string }) => Promise<unknown>;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [id, setId] = useState('');
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      await onCreate({ id, name });
+      setId('');
+      setName('');
+      onOpenChange(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not create the host app.');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>New host app</DialogTitle>
+          <DialogDescription>Register the Expo host that owns its Lynx mini apps.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit}>
+          <div className="grid gap-3">
+            <label className="grid gap-1.5 text-sm font-medium">Host app ID<input className="h-10 rounded-lg border bg-background px-3" onChange={(event) => setId(event.target.value)} placeholder="bs-one" value={id} /></label>
+            <label className="grid gap-1.5 text-sm font-medium">Display name<input className="h-10 rounded-lg border bg-background px-3" onChange={(event) => setName(event.target.value)} placeholder="BS One" value={name} /></label>
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          </div>
+          <DialogFooter className="mt-5">
+            <Button disabled={!identifier.test(id) || !name.trim() || pending} type="submit">{pending ? <LoaderCircle className="animate-spin" /> : null}Create host app</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CreateMiniAppDialog({
+  app,
+  open,
+  onCreate,
+  onOpenChange,
+}: {
+  app: RegisteredApp;
+  open: boolean;
+  onCreate: (input: { id: string; name: string }) => Promise<unknown>;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [id, setId] = useState('');
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      await onCreate({ id, name });
+      setId('');
+      setName('');
+      onOpenChange(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not create the mini app.');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>New mini app</DialogTitle>
+          <DialogDescription>Add a mini app to {app.name}.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit}>
+          <div className="grid gap-3">
+            <label className="grid gap-1.5 text-sm font-medium">Mini-app ID<input className="h-10 rounded-lg border bg-background px-3" onChange={(event) => setId(event.target.value)} placeholder="merchant-home" value={id} /></label>
+            <label className="grid gap-1.5 text-sm font-medium">Display name<input className="h-10 rounded-lg border bg-background px-3" onChange={(event) => setName(event.target.value)} placeholder="Merchant Home" value={name} /></label>
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          </div>
+          <DialogFooter className="mt-5">
+            <Button disabled={!identifier.test(id) || !name.trim() || pending} type="submit">{pending ? <LoaderCircle className="animate-spin" /> : null}Create mini app</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AppRegistrationScreen({
   apps,
   onCreateApp,
-  onCreateMiniApp,
+  onSelectApp,
   onSignOut,
   username,
 }: {
   apps: RegisteredApp[];
-  onCreateApp: (input: { id: string; name: string }) => void;
-  onCreateMiniApp: (appId: string, input: { id: string; name: string }) => void;
+  onCreateApp: (input: { id: string; name: string }) => Promise<unknown>;
+  onSelectApp: (appId: string) => void;
   onSignOut: () => void;
   username: string;
 }) {
-  const [appId, setAppId] = useState('');
-  const [appName, setAppName] = useState('');
-  const [miniAppId, setMiniAppId] = useState('');
-  const [miniAppName, setMiniAppName] = useState('');
-  const [parentAppId, setParentAppId] = useState('');
-  const selectedParentAppId = parentAppId || apps[0]?.id || '';
-  const hasApps = apps.length > 0;
+  const [appFilter, setAppFilter] = useState('');
+  const [createHostOpen, setCreateHostOpen] = useState(false);
+  const filteredApps = apps.filter((app) =>
+    `${app.name} ${app.id}`.toLowerCase().includes(appFilter.trim().toLowerCase()),
+  );
+
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_82%_-20%,rgb(59_130_246_/_20%),transparent_28rem)] bg-background text-foreground">
+    <main className="min-h-screen bg-muted/35 text-foreground">
       <ConsoleHeader onRefresh={() => window.location.reload()} onSignOut={onSignOut} username={username} />
-      <section className="mx-auto max-w-5xl px-4 py-12 sm:px-7 sm:py-16">
-        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="rounded-2xl border bg-card p-6 shadow-xl shadow-slate-950/[0.04] sm:p-8">
-          <div className="grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-blue-500/20">
-            <Terminal className="size-5" aria-hidden="true" />
+      <div className="lg:grid lg:min-h-[calc(100vh-4rem)] lg:grid-cols-[16rem_minmax(0,1fr)]">
+        <DeliverySidebar onManageApps={() => undefined} showAppsAsActive />
+        <section className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-7">
+          <div className="mb-7 flex items-end justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-primary">Delivery</p>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">Apps</h1>
+            </div>
+            <Button onClick={() => setCreateHostOpen(true)} type="button"><Plus aria-hidden="true" /> New host app</Button>
           </div>
-          <p className="mt-6 text-sm font-medium text-primary">Apps</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
-            Register identities before releases.
-          </h1>
-          <p className="mt-2 max-w-xl text-base leading-6 text-muted-foreground">
-            This is the allow-list for host apps and independent mini apps. A typo
-            from the CLI is rejected instead of creating a production identity.
-          </p>
-          <div className="mt-6 space-y-3">
-            {apps.map((app) => <div className="rounded-xl border p-4" key={app.id}>
-              <p className="font-medium">{app.name} <span className="font-mono text-xs text-muted-foreground">{app.id}</span></p>
-              <p className="mt-1 text-sm text-muted-foreground">{app.miniApps.length ? app.miniApps.map((item) => item.name).join(', ') : 'No mini apps registered'}</p>
-            </div>)}
-          </div>
-          </div>
-          {!hasApps ? <form className="rounded-2xl border bg-card p-6 shadow-sm space-y-3" onSubmit={(event) => { event.preventDefault(); onCreateApp({ id: appId, name: appName }); }}>
-            <p className="font-semibold">Create app</p>
-            <label className="grid gap-1.5 text-sm font-medium">App ID<input className="h-9 rounded-lg border bg-background px-3" onChange={(event) => setAppId(event.target.value)} placeholder="bs-one" value={appId} /></label>
-            <label className="grid gap-1.5 text-sm font-medium">Display name<input className="h-9 rounded-lg border bg-background px-3" onChange={(event) => setAppName(event.target.value)} placeholder="BS One" value={appName} /></label>
-            <Button className="w-full" disabled={!identifier.test(appId) || !appName.trim()} type="submit">Create app</Button>
-          </form> : <form className="rounded-2xl border bg-card p-6 shadow-sm space-y-3" onSubmit={(event) => { event.preventDefault(); onCreateMiniApp(selectedParentAppId, { id: miniAppId, name: miniAppName }); }}>
-            <p className="font-semibold">Add mini app</p>
-            <label className="grid gap-1.5 text-sm font-medium">Host app<select className="h-9 rounded-lg border bg-background px-3" onChange={(event) => setParentAppId(event.target.value)} value={selectedParentAppId}>{apps.map((app) => <option key={app.id} value={app.id}>{app.name}</option>)}</select></label>
-            <label className="grid gap-1.5 text-sm font-medium">Mini-app ID<input className="h-9 rounded-lg border bg-background px-3" onChange={(event) => setMiniAppId(event.target.value)} placeholder="merchant-home" value={miniAppId} /></label>
-            <label className="grid gap-1.5 text-sm font-medium">Display name<input className="h-9 rounded-lg border bg-background px-3" onChange={(event) => setMiniAppName(event.target.value)} placeholder="Merchant Home" value={miniAppName} /></label>
-            <Button className="w-full" disabled={!identifier.test(miniAppId) || !miniAppName.trim() || !selectedParentAppId} type="submit">Add mini app</Button>
-            <p className="text-xs leading-5 text-muted-foreground">Next, the host team prepares and registers the native build before the mini-app team uploads.</p>
-          </form>}
+          <Card className="shadow-sm">
+            <CardHeader className="border-b max-sm:flex max-sm:flex-col max-sm:gap-3">
+              <div>
+                <CardTitle>Host apps</CardTitle>
+                <CardDescription>Open an app to manage its mini apps and bundles.</CardDescription>
+              </div>
+              <CardAction className="max-sm:static max-sm:w-full max-sm:self-auto max-sm:justify-self-auto">
+                <input aria-label="Filter host apps" className="h-9 w-full rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:w-44" onChange={(event) => setAppFilter(event.target.value)} placeholder="Filter apps" value={appFilter} />
+              </CardAction>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader><TableRow><TableHead>Host app</TableHead><TableHead className="hidden text-right sm:table-cell">Mini apps</TableHead><TableHead className="w-20 text-right">Open</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {apps.length === 0 ? <TableRow><TableCell className="h-28 text-center text-muted-foreground" colSpan={3}>Create your first host app to get started.</TableCell></TableRow> : null}
+                  {apps.length > 0 && filteredApps.length === 0 ? <TableRow><TableCell className="h-28 text-center text-muted-foreground" colSpan={3}>No host apps match “{appFilter}”.</TableCell></TableRow> : null}
+                  {filteredApps.map((app) => <TableRow key={app.id}><TableCell><p className="font-medium">{app.name}</p><p className="mt-0.5 font-mono text-xs text-muted-foreground">{app.id}</p><p className="mt-1 text-xs text-muted-foreground sm:hidden">{app.miniApps.length ? `${app.miniApps.length} mini apps` : 'No mini apps'}</p></TableCell><TableCell className="hidden text-right text-sm text-muted-foreground sm:table-cell">{app.miniApps.length || '—'}</TableCell><TableCell className="text-right"><Button onClick={() => onSelectApp(app.id)} size="sm" type="button" variant="outline">Open</Button></TableCell></TableRow>)}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </section>
+      </div>
+      <CreateHostAppDialog onCreate={onCreateApp} onOpenChange={setCreateHostOpen} open={createHostOpen} />
+    </main>
+  );
+}
+
+function DeliverySidebar({
+  onManageApps,
+  showAppsAsActive = false,
+}: {
+  onManageApps: () => void;
+  showAppsAsActive?: boolean;
+}) {
+  return (
+    <aside className="border-b bg-card lg:sticky lg:top-16 lg:h-[calc(100vh-4rem)] lg:border-r lg:border-b-0">
+      <div className="flex h-full flex-col p-3">
+        <Button
+          className="justify-start"
+          onClick={onManageApps}
+          type="button"
+          variant={showAppsAsActive ? 'secondary' : 'ghost'}
+        >
+          <AppWindow aria-hidden="true" /> Apps
+        </Button>
+        <div className="mt-auto hidden border-t px-2 pt-4 text-xs leading-5 text-muted-foreground lg:block">
+          Find and open a host app from the Apps directory.
         </div>
-      </section>
+      </div>
+    </aside>
+  );
+}
+
+function AppDetailsScreen({
+  app,
+  onCreateMiniApp,
+  onManageApps,
+  onOpenMiniApp,
+  onSignOut,
+  scopes,
+  username,
+}: {
+  app: RegisteredApp;
+  onCreateMiniApp: (input: { id: string; name: string }) => Promise<unknown>;
+  onManageApps: () => void;
+  onOpenMiniApp: (miniAppId: string) => void;
+  onSignOut: () => void;
+  scopes: DeliveryScope[];
+  username: string;
+}) {
+  const [createMiniOpen, setCreateMiniOpen] = useState(false);
+  return (
+    <main className="min-h-screen bg-muted/35 text-foreground">
+      <ConsoleHeader
+        onRefresh={() => window.location.reload()}
+        onSignOut={onSignOut}
+        username={username}
+      />
+      <div className="lg:grid lg:min-h-[calc(100vh-4rem)] lg:grid-cols-[16rem_minmax(0,1fr)]">
+        <DeliverySidebar
+          onManageApps={onManageApps}
+        />
+        <section className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-7">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-primary">Host app</p>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">{app.name}</h1>
+              <p className="mt-2 font-mono text-xs text-muted-foreground">{app.id}</p>
+            </div>
+            <Button onClick={() => setCreateMiniOpen(true)} type="button"><Plus aria-hidden="true" /> New mini app</Button>
+          </div>
+          <Card className="mt-7 shadow-sm">
+            <CardHeader className="border-b">
+              <div>
+                <CardTitle>Mini apps</CardTitle>
+                <CardDescription>Open a mini app to view and promote its bundles.</CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader><TableRow><TableHead>Mini app</TableHead><TableHead className="hidden text-right sm:table-cell">Host build</TableHead><TableHead className="w-20 text-right">Open</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {app.miniApps.length === 0 ? <TableRow><TableCell className="h-28 text-center text-muted-foreground" colSpan={3}>Add a mini app before the host team prepares a native build.</TableCell></TableRow> : null}
+                  {app.miniApps.map((miniApp) => {
+                    const hasScope = scopes.some((scope) => scope.appId === app.id && scope.feature === miniApp.id);
+                    return <TableRow key={miniApp.id}><TableCell><p className="font-medium">{miniApp.name}</p><p className="mt-0.5 font-mono text-xs text-muted-foreground">{miniApp.id}</p><p className="mt-1 text-xs text-muted-foreground sm:hidden">{hasScope ? 'Host build ready' : 'Waiting for host build'}</p></TableCell><TableCell className="hidden text-right text-sm text-muted-foreground sm:table-cell">{hasScope ? 'Ready' : 'Waiting'}</TableCell><TableCell className="text-right"><Button onClick={() => onOpenMiniApp(miniApp.id)} size="sm" type="button" variant="outline">Open</Button></TableCell></TableRow>;
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </section>
+      </div>
+      <CreateMiniAppDialog app={app} onCreate={onCreateMiniApp} onOpenChange={setCreateMiniOpen} open={createMiniOpen} />
+    </main>
+  );
+}
+
+function EmptyMiniAppBundlesScreen({
+  app,
+  miniApp,
+  onManageApps,
+  onOpenApp,
+  onSignOut,
+  username,
+}: {
+  app: RegisteredApp;
+  miniApp: RegisteredApp['miniApps'][number];
+  onManageApps: () => void;
+  onOpenApp: () => void;
+  onSignOut: () => void;
+  username: string;
+}) {
+  return (
+    <main className="min-h-screen bg-muted/35 text-foreground">
+      <ConsoleHeader onRefresh={() => window.location.reload()} onSignOut={onSignOut} username={username} />
+      <div className="lg:grid lg:min-h-[calc(100vh-4rem)] lg:grid-cols-[16rem_minmax(0,1fr)]">
+        <DeliverySidebar onManageApps={onManageApps} />
+        <section className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-7">
+          <button className="text-sm font-medium text-primary" onClick={onOpenApp} type="button">{app.name}</button>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">{miniApp.name}</h1>
+          <p className="mt-2 font-mono text-xs text-muted-foreground">{miniApp.id}</p>
+          <Card className="mt-7 max-w-2xl shadow-sm">
+            <CardHeader>
+              <CardTitle>No bundles yet</CardTitle>
+              <CardDescription>
+                This mini app has no registered host build, so compatible bundles cannot be uploaded yet.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        </section>
+      </div>
     </main>
   );
 }
@@ -269,25 +504,25 @@ function ConsoleHeader({
   username: string;
 }) {
   return (
-    <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-xl sm:px-6">
-      <div className="flex items-center gap-3">
-        <div className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-blue-500/20">
+    <header className="sticky top-0 z-20 flex min-h-16 items-center justify-between gap-2 border-b bg-background/85 px-3 py-2 backdrop-blur-xl sm:h-16 sm:px-6 sm:py-0">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-black/10">
           <Box className="size-5" aria-hidden="true" />
         </div>
         <div>
           <p className="text-sm font-semibold tracking-tight">Expo Lynx</p>
-          <p className="text-xs text-muted-foreground">Delivery Console</p>
+          <p className="hidden text-xs text-muted-foreground sm:block">Delivery Console</p>
         </div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
         <span className="hidden text-sm text-muted-foreground sm:inline">
           {username}
         </span>
-        <Button onClick={onRefresh} size="sm" variant="outline">
-          <RefreshCw aria-hidden="true" /> Refresh
+        <Button aria-label="Refresh" className="px-2 sm:px-3" onClick={onRefresh} size="sm" variant="outline">
+          <RefreshCw aria-hidden="true" /> <span className="hidden sm:inline">Refresh</span>
         </Button>
-        <Button onClick={onSignOut} size="sm" variant="outline">
-          Sign out
+        <Button aria-label="Sign out" className="px-2 sm:px-3" onClick={onSignOut} size="sm" variant="outline">
+          <LogOut className="sm:hidden" aria-hidden="true" /><span className="hidden sm:inline">Sign out</span>
         </Button>
       </div>
     </header>
@@ -303,76 +538,20 @@ function ScopePicker({
   selectedScope: DeliveryScope;
   onChange: (scope: DeliveryScope) => void;
 }) {
-  const appIds = [...new Set(scopes.map((scope) => scope.appId))];
-  const appScopes = scopes.filter(
-    (scope) => scope.appId === selectedScope.appId,
-  );
-  const featureIds = [...new Set(appScopes.map((scope) => scope.feature))];
-  const featureScopes = appScopes.filter(
-    (scope) => scope.feature === selectedScope.feature,
-  );
-  const platforms = [...new Set(featureScopes.map((scope) => scope.platform))];
-  const platformScopes = featureScopes.filter(
+  const platforms = [...new Set(scopes.map((scope) => scope.platform))];
+  const platformScopes = scopes.filter(
     (scope) => scope.platform === selectedScope.platform,
   );
 
   return (
     <section className="mx-auto max-w-7xl px-4 pt-5 sm:px-7">
-      <div className="grid gap-4 rounded-xl border bg-card p-4 shadow-sm lg:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(8rem,auto)_minmax(14rem,1fr)]">
-        <div>
-          <p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
-            App
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {appIds.map((appId) => {
-              const appScope = scopes.find((scope) => scope.appId === appId);
-              if (!appScope) return null;
-              return (
-                <Button
-                  key={appId}
-                  onClick={() => onChange(appScope)}
-                  size="sm"
-                  variant={
-                    appId === selectedScope.appId ? 'default' : 'outline'
-                  }
-                >
-                  {appId}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
-        <div>
-          <p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
-            Mini app
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {featureIds.map((feature) => {
-              const featureScope = appScopes.find(
-                (scope) => scope.feature === feature,
-              );
-              if (!featureScope) return null;
-              return (
-                <Button
-                  key={feature}
-                  onClick={() => onChange(featureScope)}
-                  size="sm"
-                  variant={
-                    feature === selectedScope.feature ? 'default' : 'outline'
-                  }
-                >
-                  {feature}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
+      <div className="grid gap-4 rounded-xl border bg-card p-4 shadow-sm sm:grid-cols-2">
         <label className="grid content-start gap-2 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
           Platform
           <select
             aria-label="Choose platform"
             className="h-9 rounded-lg border bg-background px-3 text-sm font-normal normal-case tracking-normal text-foreground"
-            onChange={(event) => onChange(featureScopes.find((scope) => scope.platform === event.target.value) ?? selectedScope)}
+            onChange={(event) => onChange(scopes.find((scope) => scope.platform === event.target.value) ?? selectedScope)}
             value={selectedScope.platform}
           >
             {platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
@@ -708,9 +887,17 @@ function ConsoleContent({
   );
 }
 
-export function DeliveryConsoleDashboard() {
+export function DeliveryConsoleDashboard({
+  appId: routeAppId,
+  miniAppId: routeMiniAppId,
+}: {
+  appId?: string;
+  miniAppId?: string;
+}) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [scope, setScope] = useState(initialScope);
+  const selectedAppId = routeAppId ?? scope.appId;
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [sessionRevision, setSessionRevision] = useState(0);
@@ -735,19 +922,25 @@ export function DeliveryConsoleDashboard() {
     retry: false,
   });
   const scopes = scopesQuery.data ?? [];
+  const apps = appsQuery.data ?? [];
+  const selectedApp = apps.find((app) => app.id === selectedAppId);
+  const selectedMiniApp = selectedApp?.miniApps.find((miniApp) => miniApp.id === routeMiniAppId);
+  const selectedMiniScopes = routeMiniAppId
+    ? scopes.filter((item) => item.appId === selectedAppId && item.feature === routeMiniAppId)
+    : [];
   const selectedScope =
-    scopes.find(
+    selectedMiniScopes.find(
       (item) =>
-        item.appId === scope.appId &&
-        item.feature === scope.feature &&
         item.platform === scope.platform &&
         item.runtimeVersion === scope.runtimeVersion,
     ) ??
-    scopes.find(
-      (item) => item.appId === scope.appId && item.feature === scope.feature && item.platform === scope.platform,
-    ) ??
-    scopes[0] ??
-    scope;
+    selectedMiniScopes.find((item) => item.platform === scope.platform) ??
+    selectedMiniScopes[0] ?? {
+      appId: selectedAppId,
+      feature: routeMiniAppId ?? '',
+      platform: scope.platform,
+      runtimeVersion: '',
+    };
   const queryKey = deliveryQueryKeys.overview(
     selectedScope.appId,
     selectedScope.feature,
@@ -764,7 +957,7 @@ export function DeliveryConsoleDashboard() {
         selectedScope.platform,
         selectedScope.runtimeVersion,
       ),
-    enabled: Boolean(sessionQuery.data && selectedScope.runtimeVersion),
+    enabled: Boolean(sessionQuery.data && selectedMiniApp && selectedScope.runtimeVersion),
     retry: false,
   });
   const loginMutation = useMutation({
@@ -822,6 +1015,24 @@ export function DeliveryConsoleDashboard() {
     setScope({ appId, feature, platform, runtimeVersion });
     setNotice(null);
     setSelectedBundle(null);
+  }
+
+  function openApp(appId: string) {
+    setNotice(null);
+    setSelectedBundle(null);
+    void navigate({ to: '/apps/$appId', params: { appId } });
+  }
+
+  function openMiniApp(appId: string, miniAppId: string) {
+    const firstScope = scopes.find((item) => item.appId === appId && item.feature === miniAppId);
+    setNotice(null);
+    setSelectedBundle(null);
+    if (firstScope) setScope(firstScope);
+    void navigate({ to: '/apps/$appId/$miniAppId', params: { appId, miniAppId } });
+  }
+
+  function openApps() {
+    void navigate({ to: '/apps' });
   }
 
   function signIn() {
@@ -887,12 +1098,35 @@ export function DeliveryConsoleDashboard() {
         onRetry={() => void appsQuery.refetch()}
       />
     );
-  if (scopes.length === 0)
+  if (!routeAppId || !selectedApp)
     return (
       <AppRegistrationScreen
-        apps={appsQuery.data ?? []}
-        onCreateApp={(input) => createAppMutation.mutate(input)}
-        onCreateMiniApp={(appId, input) => createMiniAppMutation.mutate({ appId, input })}
+        apps={apps}
+        onCreateApp={(input) => createAppMutation.mutateAsync(input)}
+        onSelectApp={openApp}
+        onSignOut={() => logoutMutation.mutate()}
+        username={sessionQuery.data.user.username}
+      />
+    );
+  if (!routeMiniAppId || !selectedMiniApp)
+    return (
+      <AppDetailsScreen
+        app={selectedApp}
+        onCreateMiniApp={(input) => createMiniAppMutation.mutateAsync({ appId: selectedApp.id, input })}
+        onManageApps={openApps}
+        onOpenMiniApp={(miniAppId) => openMiniApp(selectedApp.id, miniAppId)}
+        onSignOut={() => logoutMutation.mutate()}
+        scopes={scopes}
+        username={sessionQuery.data.user.username}
+      />
+    );
+  if (selectedMiniScopes.length === 0)
+    return (
+      <EmptyMiniAppBundlesScreen
+        app={selectedApp}
+        miniApp={selectedMiniApp}
+        onManageApps={openApps}
+        onOpenApp={() => openApp(selectedApp.id)}
         onSignOut={() => logoutMutation.mutate()}
         username={sessionQuery.data.user.username}
       />
@@ -916,51 +1150,69 @@ export function DeliveryConsoleDashboard() {
   const overview = overviewQuery.data;
   const currentScope: DeliveryScope = selectedScope;
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_82%_-20%,rgb(59_130_246_/_20%),transparent_28rem)] bg-background text-foreground">
+    <main className="min-h-screen bg-muted/35 text-foreground">
       <ConsoleHeader
         onRefresh={refresh}
         onSignOut={() => logoutMutation.mutate()}
         username={sessionQuery.data.user.username}
       />
-      {notice && (
-        <output className="mx-auto mt-6 flex max-w-6xl items-start justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50/70 px-4 py-3 text-sm text-blue-950 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-100">
-          <span>{notice}</span>
-          <button
-            aria-label="Dismiss notice"
-            onClick={() => setNotice(null)}
-            type="button"
-          >
-            <X className="size-4" aria-hidden="true" />
-          </button>
-        </output>
-      )}
-      <ScopePicker
-        onChange={(nextScope) =>
-          changeScope(
-            nextScope.appId,
-            nextScope.feature,
-            nextScope.platform,
-            nextScope.runtimeVersion,
-          )
-        }
-        scopes={scopes}
-        selectedScope={currentScope}
-      />
-      <ConsoleContent
-        appId={selectedScope.appId}
-        feature={selectedScope.feature}
-        onSelect={(bundle) => setSelectedBundle(bundle)}
-        onToggle={() =>
-          apply(
-            { enabled: !overview.deployment.enabled },
-            overview.deployment.enabled
-              ? 'Remote delivery disabled. Existing installed bundles stay on devices.'
-              : 'Remote delivery enabled for the selected bundle.',
-          )
-        }
-        overview={overview}
-        pending={updateDeployment.isPending}
-      />
+      <div className="lg:grid lg:min-h-[calc(100vh-4rem)] lg:grid-cols-[16rem_minmax(0,1fr)]">
+        <DeliverySidebar
+          onManageApps={openApps}
+        />
+        <div className="min-w-0">
+          <section className="mx-auto flex max-w-7xl items-end justify-between gap-3 px-4 pt-7 sm:px-7">
+            <div>
+              <button className="text-sm font-medium text-primary" onClick={() => openApp(selectedApp.id)} type="button">{selectedApp.name}</button>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
+                {selectedMiniApp.name}
+              </h1>
+              <p className="mt-2 font-mono text-xs text-muted-foreground">
+                {selectedMiniApp.id} · Bundles
+              </p>
+            </div>
+          </section>
+          {notice && (
+            <output className="mx-auto mt-6 flex max-w-7xl items-start justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-foreground">
+              <span>{notice}</span>
+              <button
+                aria-label="Dismiss notice"
+                onClick={() => setNotice(null)}
+                type="button"
+              >
+                <X className="size-4" aria-hidden="true" />
+              </button>
+            </output>
+          )}
+          <ScopePicker
+            onChange={(nextScope) =>
+              changeScope(
+                nextScope.appId,
+                nextScope.feature,
+                nextScope.platform,
+                nextScope.runtimeVersion,
+              )
+            }
+            scopes={selectedMiniScopes}
+            selectedScope={currentScope}
+          />
+          <ConsoleContent
+            appId={selectedScope.appId}
+            feature={selectedScope.feature}
+            onSelect={(bundle) => setSelectedBundle(bundle)}
+            onToggle={() =>
+              apply(
+                { enabled: !overview.deployment.enabled },
+                overview.deployment.enabled
+                  ? 'Remote delivery disabled. Existing installed bundles stay on devices.'
+                  : 'Remote delivery enabled for the selected bundle.',
+              )
+            }
+            overview={overview}
+            pending={updateDeployment.isPending}
+          />
+        </div>
+      </div>
       <SelectionDialog
         bundle={selectedBundle}
         key={selectedBundle?.id ?? 'empty'}

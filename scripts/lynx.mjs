@@ -247,10 +247,15 @@ async function initProject(options) {
 }
 
 function startConsole() {
-  process.stdout.write('Starting the Expo Lynx Delivery Console and LAN-accessible local Worker.\n');
-  const child = spawn('pnpm', ['--filter', deliveryConsolePackage, 'dev:device'], { cwd: repositoryRoot, stdio: 'inherit' });
-  child.once('error', (error) => { throw error; });
-  child.once('exit', (code) => { process.exitCode = code ?? 1; });
+  process.stdout.write('Starting the Expo Lynx Delivery Console and local Worker.\n');
+  return new Promise((resolve, reject) => {
+    const child = spawn('pnpm', ['--filter', deliveryConsolePackage, 'dev'], { cwd: repositoryRoot, stdio: 'inherit' });
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Console stopped with ${signal ? `signal ${signal}` : `exit code ${code ?? 1}`}.`));
+    });
+  });
 }
 
 async function buildEmbedded(feature) {
@@ -313,7 +318,7 @@ async function main() {
       return;
     }
     if (argumentsList.length > 0) throw new Error('pnpm lynx console does not accept arguments.');
-    startConsole();
+    await startConsole();
     return;
   }
   const [command, ...rest] = argumentsList;

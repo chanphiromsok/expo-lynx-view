@@ -23,9 +23,6 @@ INSERT OR IGNORE INTO apps (id, name, created_at)
 SELECT DISTINCT app_id, CASE WHEN app_id = 'default' THEN 'Default' ELSE app_id END, CURRENT_TIMESTAMP
 FROM deployments;
 
-INSERT OR IGNORE INTO apps (id, name, created_at)
-VALUES ('default', 'Default', CURRENT_TIMESTAMP);
-
 INSERT INTO mini_apps (app_id, id, name, created_at)
 SELECT app_id, feature_id, feature_id, CURRENT_TIMESTAMP
 FROM (

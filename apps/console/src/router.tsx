@@ -6,7 +6,9 @@ import {
   createRouter,
 } from '@tanstack/react-router';
 
-import { DeliveryConsoleDashboard } from './features/delivery/DeliveryConsoleDashboard';
+import { AppsRoute } from './routes/apps';
+import { HostAppRoute } from './routes/host-app';
+import { MiniAppRoute } from './routes/mini-app';
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,10 +31,28 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  component: DeliveryConsoleDashboard,
+  component: AppsRoute,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute]);
+const appsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/apps',
+  component: AppsRoute,
+});
+
+const appRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/apps/$appId',
+  component: HostAppRoute,
+});
+
+const miniAppRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/apps/$appId/$miniAppId',
+  component: MiniAppRoute,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, appsRoute, appRoute, miniAppRoute]);
 
 export const router = createRouter({
   routeTree,
