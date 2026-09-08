@@ -1,15 +1,17 @@
 {
   "name": "expo-lynx-view",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Embed Lynx views in Expo and React Native apps on iOS and Android",
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "scripts": {
-    "build": "expo-module tsc",
+    "build": "EXPO_NONINTERACTIVE=1 expo-module build",
+    "clean": "expo-module clean",
     "lint": "eslint src/",
     "test": "jest --runInBand && node --test app.plugin.test.js",
-    "prepare": "expo-module tsc",
-    "prepack": "expo-module tsc"
+    "prepare": "expo-module prepare",
+    "prepublishOnly": "expo-module prepublishOnly",
+    "expo-module": "expo-module"
   },
   "keywords": [
     "react-native",

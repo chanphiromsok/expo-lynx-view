@@ -20,9 +20,10 @@ test('expo-lynx-view publish allow-list excludes the delivery Console', () => {
     || entry.startsWith('android/')
     || entry.startsWith('ios/'),
   ));
-  assert.equal(nativePackage.manifest.scripts.build, 'expo-module tsc');
-  assert.equal(nativePackage.manifest.scripts.prepare, 'expo-module tsc');
-  assert.equal(nativePackage.manifest.scripts.prepack, 'expo-module tsc');
+  assert.equal(nativePackage.manifest.scripts.build, 'EXPO_NONINTERACTIVE=1 expo-module build');
+  assert.equal(nativePackage.manifest.scripts.clean, 'expo-module clean');
+  assert.equal(nativePackage.manifest.scripts.prepare, 'expo-module prepare');
+  assert.equal(nativePackage.manifest.scripts.prepublishOnly, 'expo-module prepublishOnly');
 });
 
 test('release version rejects non-semver input', () => {
