@@ -64,3 +64,23 @@ Publishing an ordinary remote release does not need a native rebuild.
 The first launch renders the embedded baseline. Later launches synchronously
 render a compatible verified cache when one exists, then check the Worker in
 the background.
+
+See the [ExpoLynxView reference](/reference/expo-lynx-view/) for props and
+events.
+
+## 5. Warm the runtime before the first mount
+
+The first `ExpoLynxView` mount starts a background JS engine. Do that work
+early, once the app is interactive:
+
+```tsx
+import { InteractionManager } from 'react-native';
+import ExpoLynx from 'expo-lynx-view';
+
+InteractionManager.runAfterInteractions(() => {
+  ExpoLynx.prewarmRuntime();
+});
+```
+
+Calling it when the user opens the screen that contains the Lynx view is even
+better. See [First-render performance](/managed-delivery/performance/).

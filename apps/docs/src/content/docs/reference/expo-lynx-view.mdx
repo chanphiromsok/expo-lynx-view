@@ -1,0 +1,146 @@
+---
+title: ExpoLynxView
+description: React component and module API for rendering a Lynx bundle inside an Expo host.
+---
+
+`ExpoLynxView` renders a compiled Lynx page as a native view. The default module
+export exposes delivery and runtime helpers. Both are available on iOS and
+Android; the web entry throws for native sources.
+
+## `<ExpoLynxView>`
+
+```tsx
+import { ExpoLynxView } from 'expo-lynx-view';
+
+<ExpoLynxView source={{ kind: 'managed', feature: 'delivery' }} style={{ flex: 1 }} />
+```
+
+The component extends `ViewProps` (except `children`). Layout is driven by the
+parent — give it a real size, usually `flex: 1`.
+
+### `source`
+
+Exactly one of `source` or the deprecated `url` prop must be set.
+
+| `source`                                 | Meaning                                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `{ kind: 'managed', feature }`           | Verified local cache when present, otherwise the embedded baseline; checks the Worker after first render. See [lifecycle](/managed-delivery/lifecycle/). |
+| `{ kind: 'embedded', feature }`          | Always the embedded baseline for that feature. No remote check.                          |
+| `{ kind: 'development', url }`           | Loads directly from a dev-server URL. Debug builds only.                                 |
+
+`feature` is typed as `LynxFeatureName`. After the first `expo prebuild`, the
+config plugin narrows it to the union of configured feature IDs.
+
+:::caution[`url` prop]
+
+The bare `url` string prop is deprecated and accepted only by Debug iOS builds.
+Use `source={{ kind: 'development', url }}` instead.
+
+:::
+
+### Props
+
+| Prop          | Type                        | Notes                                                            |
+| ------------- | --------------------------- | --------------------------------------------------------------- |
+| `source`      | `LynxSource`                | Declarative source (above).                                     |
+| `initialData` | `Record<string, unknown>`   | Serialized once and exposed to the page through `useInitData()`. Changing it after mount does not reload. |
+| `style`       | `ViewProps['style']`        | Standard RN style. The view has no intrinsic size.              |
+| `onLoadStart` | `(e) => void`               | Immediately before Lynx starts loading the selected bundle.     |
+| `onLoad`      | `(e) => void`               | After Lynx finishes the first-screen layout.                    |
+| `onError`     | `(e) => void`               | Delivery, verification, resource, or Lynx render failure.       |
+| `onUpdate`    | `(e) => void`               | Managed-delivery check / stage / verified force-reload.         |
+
+### Events
+
+All handlers receive a `NativeSyntheticEvent`; read `event.nativeEvent`.
+
+**`onLoadStart` / `onLoad`** — `LynxLoadEventPayload`
+
+```ts
+{
+  url: string;
+  feature: string;
+  version: string;
+  source: 'embedded' | 'cache' | 'download' | 'development';
+  durationMs: number; // load-start to first screen
+}
+```
+
+**`onError`** — `LynxErrorEventPayload`
+
+```ts
+{
+  url: string;
+  feature: string;
+  stage:
+    | 'manifest' | 'signature' | 'compatibility' | 'download'
+    | 'checksum' | 'resource' | 'archive' | 'lynx';
+  code: string;
+  message: string;
+  version?: string;
+  source?: 'embedded' | 'cache' | 'download' | 'development';
+  durationMs?: number;
+}
+```
+
+A managed source keeps the last good render on screen when a background update
+fails; `onError` still fires so the host can log it.
+
+**`onUpdate`** — `LynxUpdateEventPayload`. Privacy-safe: no URLs, headers, paths,
+or bundle contents.
+
+```ts
+{
+  feature: string;
+  phase:
+    | 'checking' | 'disabled' | 'no-update' | 'downloaded'
+    | 'staged' | 'reloading' | 'reloaded' | 'error';
+  releaseId?: string;
+  version?: string;
+  revision?: number;
+  code?: string;
+  message?: string;
+  durationMs?: number;
+}
+```
+
+### Ref
+
+```tsx
+const ref = useRef<ExpoLynxViewRef>(null);
+// ...
+await ref.current?.reload();
+```
+
+`reload()` re-runs source selection and reloads the current bundle.
+
+## `ExpoLynx` module
+
+```ts
+import ExpoLynx from 'expo-lynx-view';
+```
+
+### `checkForUpdate(options)`
+
+```ts
+ExpoLynx.checkForUpdate({ feature: 'delivery' }): Promise<LynxBundleUpdateResult>
+```
+
+Forces a managed-delivery check for one feature outside the automatic
+post-render check. Resolves with `status: 'disabled' | 'no-update' | 'pending' |
+'reloaded'` and, when a release is involved, `revision`, `releaseId`, and
+`version`.
+
+### `prewarmRuntime()`
+
+```ts
+ExpoLynx.prewarmRuntime(): Promise<void>
+```
+
+Builds the background JS runtime (engine + `lynx_core.js`) before the first
+`ExpoLynxView` mount, so the mount attaches to a live runtime instead of paying
+that cost while the user waits. Runs off the main thread; a second call while
+one is already building is a no-op; on web it resolves silently.
+
+Call it once the app is interactive, and ideally when the user is heading
+toward the Lynx screen. See [Performance](/managed-delivery/performance/).

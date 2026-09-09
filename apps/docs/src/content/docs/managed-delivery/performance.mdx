@@ -1,0 +1,101 @@
+---
+title: First-render performance
+description: What the first ExpoLynxView mount costs and how to keep it off the user's critical path.
+---
+
+Mounting an `ExpoLynxView` for the first time in a process is the expensive
+moment. Everything after — re-entering the screen, background updates — is cheap.
+This page explains the cost and the one lever that matters: **warm the runtime
+before the mount**.
+
+## What the first mount costs
+
+On the first mount the native `LynxView`:
+
+1. Starts a background JS engine and evaluates `lynx_core.js` (the Lynx
+   framework runtime).
+2. Decodes the template binary.
+3. Builds the element tree, runs layout and text measurement.
+4. Creates the native views and paints.
+
+Steps 2–4 are per-render and unavoidable. **Step 1 is a one-time process cost**
+that the first mount otherwise pays synchronously with the user waiting on a
+blank screen.
+
+## Warm the runtime ahead of the mount
+
+`ExpoLynx.prewarmRuntime()` does step 1 early, on a background thread. The first
+`ExpoLynxView` then attaches to the already-live runtime. If the warm has not
+finished when the view mounts, the view falls back to starting its own runtime —
+no error, just the un-warmed cost that one time.
+
+The warm itself is real work. Run it in the dead time **between "the first
+screen is interactive" and "the user opens the Lynx screen"** — never during app
+launch, where it competes with startup.
+
+### Where to call it
+
+Best: when the user signals they are heading toward the Lynx screen — the tab or
+menu that contains it becoming visible, or the button's `onPressIn`.
+
+```tsx
+// The control that navigates to the Lynx screen
+<Pressable onPressIn={() => ExpoLynx.prewarmRuntime()} onPress={goToLynxScreen}>
+  {/* ... */}
+</Pressable>
+```
+
+Acceptable: after the splash hides and the first screen has settled.
+
+```tsx
+import { InteractionManager } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
+import ExpoLynx from 'expo-lynx-view';
+
+await SplashScreen.hideAsync();
+InteractionManager.runAfterInteractions(() => {
+  ExpoLynx.prewarmRuntime();
+});
+```
+
+:::caution[Do not call it from module scope or an early effect]
+
+Calling `prewarmRuntime()` synchronously during startup puts the engine
+initialization back on the launch critical path — the problem it exists to
+avoid. Gate it behind an interaction or a navigation intent.
+
+:::
+
+### When the Lynx screen is the first route
+
+If the very first screen is a Lynx screen, there is no gap to warm in and
+`prewarmRuntime()` cannot help — the mount pays the full cost. Prefer a
+lightweight first screen and let the Lynx screen be a navigation target.
+
+## Template decode already runs off the main thread
+
+`ExpoLynxView` decodes the template binary on a background queue and caches the
+decoded result for reuse across mounts of the same bundle. This is automatic and
+needs no configuration.
+
+## Measure on a physical device
+
+iOS Simulator numbers overstate the JS cost. In the Simulator the background
+engine JIT-compiles; on a real device the same engine runs interpreter-only, so
+the cost profile is different. Always confirm the first-mount time on hardware
+before deciding whether `prewarmRuntime()` is worth wiring — the device number
+may already be acceptable.
+
+## Not recommended
+
+- **Switching the iOS background engine to PrimJS/QuickJS.** The option exists in
+  the SDK but is undocumented for production on iOS, is framed as a debugging
+  aid, and the build path has known breakage
+  ([lynx-family/lynx#892](https://github.com/lynx-family/lynx/issues/892)).
+- **Shipping ahead-of-time bytecode in the app binary.** Bytecode caching in
+  Lynx is QuickJS-only, so it depends on the change above. Not a clean path on
+  iOS today.
+- **Async render (`.mostOnTASM` thread strategy).** Moves layout and text
+  measurement off the UI thread for a further small gain, but runs custom UI
+  elements' measure code on Lynx's layout thread — only safe once every
+  registered element is verified thread-safe. Not enabled by default.

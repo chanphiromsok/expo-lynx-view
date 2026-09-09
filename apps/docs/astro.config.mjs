@@ -51,11 +51,16 @@ export default defineConfig({
               label: "Worker and Console",
               slug: "managed-delivery/local-console",
             },
+            {
+              label: "First-render performance",
+              slug: "managed-delivery/performance",
+            },
           ],
         },
         {
           label: "Reference",
           items: [
+            { label: "ExpoLynxView", slug: "reference/expo-lynx-view" },
             { label: "Lynx CLI", slug: "reference/cli" },
             { label: "Mobile CLI", slug: "reference/mobile-cli" },
             {
