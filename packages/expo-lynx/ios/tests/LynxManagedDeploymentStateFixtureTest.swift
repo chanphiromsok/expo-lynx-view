@@ -5,15 +5,10 @@ import Foundation
 @MainActor
 struct LynxManagedDeploymentStateFixtureTest {
   static func main() {
-    let suite = "expo.lynx.state-fixture.\(UUID().uuidString)"
     let storeID = "expo.lynx.state-fixture.\(UUID().uuidString)"
     let storeRoot = FileManager.default.temporaryDirectory
       .appendingPathComponent("expo-lynx-state-fixture-\(UUID().uuidString)", isDirectory: true)
-    guard let defaults = UserDefaults(suiteName: suite) else {
-      fatalError("Expected an isolated UserDefaults suite")
-    }
     defer {
-      defaults.removePersistentDomain(forName: suite)
       try? FileManager.default.removeItem(at: storeRoot)
     }
 
@@ -24,8 +19,7 @@ struct LynxManagedDeploymentStateFixtureTest {
 
     let beforeTermination = LynxManagedDeploymentState(
       storeID: storeID,
-      storeRoot: storeRoot,
-      legacyDefaults: defaults
+      storeRoot: storeRoot
     )
     beforeTermination.beginAttempt(
       releaseID: stable,
@@ -52,8 +46,7 @@ struct LynxManagedDeploymentStateFixtureTest {
     // while the broken candidate was rendering.
     let afterTermination = LynxManagedDeploymentState(
       storeID: storeID,
-      storeRoot: storeRoot,
-      legacyDefaults: defaults
+      storeRoot: storeRoot
     )
     let recovered = afterTermination.recover(feature: feature, runtimeVersion: runtime)
     guard recovered.activeReleaseID == stable,
@@ -84,40 +77,14 @@ struct LynxManagedDeploymentStateFixtureTest {
       fatalError("Expected recovery state to remain isolated by runtime")
     }
 
-    let legacyRuntime = "runtime-legacy"
-    let legacyScope = stateKey(feature: feature, runtimeVersion: legacyRuntime)
-    let legacyState = LynxManagedState(
-      activeReleaseID: stable,
-      previousReleaseID: nil,
-      pendingReleaseID: nil,
-      attemptingReleaseID: nil,
-      failedReleaseIDs: [],
-      lastETag: "legacy-etag",
-      lastRevision: 7
-    )
-    guard let legacyData = try? JSONEncoder().encode(legacyState) else {
-      fatalError("Expected legacy state to encode")
-    }
-    defaults.set(legacyData, forKey: legacyScope)
-
-    let migrated = LynxManagedDeploymentState(
+    let reopened = LynxManagedDeploymentState(
       storeID: storeID,
-      storeRoot: storeRoot,
-      legacyDefaults: defaults
-    ).recover(feature: feature, runtimeVersion: legacyRuntime)
-    guard migrated.activeReleaseID == stable,
-      migrated.lastETag == "legacy-etag",
-      migrated.lastRevision == 7,
-      defaults.data(forKey: legacyScope) == nil
+      storeRoot: storeRoot
+    ).recover(feature: feature, runtimeVersion: runtime)
+    guard reopened.activeReleaseID == stable,
+      reopened.failedReleaseIDs == [broken]
     else {
-      fatalError("Expected legacy UserDefaults state to migrate atomically into MMKV")
+      fatalError("Expected MMKV state to persist across store instances")
     }
-  }
-
-  private static func stateKey(feature: String, runtimeVersion: String) -> String {
-    let runtimeScope = SHA256.hash(data: Data(runtimeVersion.utf8))
-      .map { String(format: "%02x", $0) }
-      .joined()
-    return "expo.lynx.managed.v3.\(runtimeScope).\(feature)"
   }
 }

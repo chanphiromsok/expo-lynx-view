@@ -35,6 +35,7 @@
     "app.plugin.js",
     "build",
     "expo-module.config.json",
+    "ios/ExpoLynx.h",
     "ios/*.podspec",
     "ios/Module/*.swift",
     "ios/View/*.swift",

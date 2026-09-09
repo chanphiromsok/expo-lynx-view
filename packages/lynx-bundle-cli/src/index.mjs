@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
@@ -64,7 +64,6 @@ export function buildFeature(config, featureId) {
       feature: featureId,
       outputDirectory,
       files: inspectRuntimeFiles(outputDirectory),
-      inputFingerprint: featureInputFingerprint(config, feature),
     };
   } catch (error) {
     rmSync(outputDirectory, { recursive: true, force: true });
@@ -72,13 +71,12 @@ export function buildFeature(config, featureId) {
   }
 }
 
-export function buildEmbedded(config, featureIds, runtimeVersion) {
-  assertVersion(runtimeVersion, 'runtimeVersion');
+export function buildEmbedded(config, featureIds) {
   const selected = selectFeatures(config, featureIds);
   const destination = config.embeddedOutputDir;
   const temporary = createSiblingTemporaryDirectory(destination);
   try {
-    const registry = { schemaVersion: 1, runtimeVersion, features: {} };
+    const registry = { schemaVersion: 2, features: {}, runtimes: {} };
     for (const featureId of selected) {
       const build = buildFeature(config, featureId);
       try {
@@ -87,17 +85,14 @@ export function buildEmbedded(config, featureIds, runtimeVersion) {
         copyRuntimeFiles(build.outputDirectory, featureDirectory, build.files);
         const files = fileMetadata(featureDirectory);
         const baseline = {
-          schemaVersion: 1,
+          schemaVersion: 2,
           feature: featureId,
-          runtimeVersion,
           entry: ENTRY,
-          inputFingerprint: build.inputFingerprint,
           files,
         };
         writeJson(resolve(featureDirectory, 'baseline.json'), baseline);
         registry.features[featureId] = {
           baseline: `${featureId}/baseline.json`,
-          entry: `${featureId}/${ENTRY}`,
         };
       } finally {
         rmSync(build.outputDirectory, { recursive: true, force: true });
@@ -105,7 +100,7 @@ export function buildEmbedded(config, featureIds, runtimeVersion) {
     }
     registry.features = sortObject(registry.features);
     writeJson(resolve(temporary, 'registry.json'), registry);
-    verifyEmbeddedTree(temporary, config, runtimeVersion, selected);
+    verifyEmbeddedTree(temporary, config, selected);
     atomicReplaceDirectory(temporary, destination);
     return { outputDirectory: destination, registry };
   } catch (error) {
@@ -114,9 +109,8 @@ export function buildEmbedded(config, featureIds, runtimeVersion) {
   }
 }
 
-export function checkEmbedded(config, runtimeVersion) {
-  assertVersion(runtimeVersion, 'runtimeVersion');
-  return verifyEmbeddedTree(config.embeddedOutputDir, config, runtimeVersion, selectFeatures(config));
+export function checkEmbedded(config) {
+  return verifyEmbeddedTree(config.embeddedOutputDir, config, selectFeatures(config));
 }
 
 export async function createNativeRuntimeVersion(projectRoot, platform = 'ios') {
@@ -126,25 +120,26 @@ export async function createNativeRuntimeVersion(projectRoot, platform = 'ios') 
   return `${platform}:${runtimeVersion}`;
 }
 
-export function readEmbeddedRuntimeVersion(config) {
+export function readEmbeddedRuntimeVersion(config, platform = 'ios') {
+  assertPlatform(platform);
   const registry = parseJson(
     readFileSync(resolve(config.embeddedOutputDir, 'registry.json')),
     'Embedded registry'
   );
-  if (!isObject(registry) || registry.schemaVersion !== 1 || !isObject(registry.features)) {
+  if (!isObject(registry) || registry.schemaVersion !== 2 || !isObject(registry.features) || !isObject(registry.runtimes)) {
     throw new Error('Embedded registry is malformed. Build the embedded baseline for the intended native app first.');
   }
-  assertVersion(registry.runtimeVersion, 'Embedded registry runtimeVersion');
-  return registry.runtimeVersion;
+  const runtime = registry.runtimes[platform];
+  if (!isObject(runtime)) throw new Error(`Embedded registry has no prepared ${platform} runtime.`);
+  assertVersion(runtime.runtimeVersion, `Embedded registry ${platform} runtimeVersion`);
+  return runtime.runtimeVersion;
 }
 
 export function packRelease(config, options) {
-  const { featureId, releaseId, version, platform, runtimeVersion } = options;
+  const { featureId, releaseId, version } = options;
   const feature = getFeature(config, featureId);
   assertReleaseId(releaseId);
   assertDisplayVersion(version);
-  assertPlatform(platform);
-  if (runtimeVersion !== undefined) assertVersion(runtimeVersion, 'runtimeVersion');
 
   const build = buildFeature(config, feature.id);
   const releaseDirectory = options.outputWithFeature === false
@@ -155,28 +150,15 @@ export function packRelease(config, options) {
     const files = inspectRuntimeFiles(build.outputDirectory);
     const archive = createDeterministicZip(build.outputDirectory, files);
     const archiveHash = sha256(archive);
-    const release = runtimeVersion === undefined
-      ? {
-          schemaVersion: 2,
-          appId: config.appId,
-          feature: feature.id,
-          releaseId,
-          version,
-          platform,
-          archiveSha256: archiveHash,
-          archiveBytes: archive.byteLength,
-        }
-      : {
-          schemaVersion: 1,
-          appId: config.appId,
-          feature: feature.id,
-          releaseId,
-          version,
-          platform,
-          runtimeVersion,
-          archiveSha256: archiveHash,
-          archiveBytes: archive.byteLength,
-        };
+    const release = {
+      schemaVersion: 3,
+      appId: config.appId,
+      feature: feature.id,
+      releaseId,
+      version,
+      archiveSha256: archiveHash,
+      archiveBytes: archive.byteLength,
+    };
     writeFileSync(resolve(temporary, 'release.zip'), archive, { mode: 0o600 });
     writeJson(resolve(temporary, 'release.json'), release);
     atomicReplaceDirectory(temporary, releaseDirectory);
@@ -231,12 +213,11 @@ export async function loadMiniAppConfigAsync({ configPath, cwd = process.cwd() }
   return normalizeMiniAppConfig(raw, path);
 }
 
-export function packMiniAppRelease(config, { releaseId, version, platform }) {
+export function packMiniAppRelease(config, { releaseId, version }) {
   return packRelease(config, {
     featureId: config.feature,
     releaseId,
     version,
-    platform,
     outputWithFeature: false,
   });
 }
@@ -540,25 +521,22 @@ function createDeterministicZip(root, files) {
   return archive;
 }
 
-function verifyEmbeddedTree(directory, config, runtimeVersion, expectedFeatures) {
+function verifyEmbeddedTree(directory, config, expectedFeatures) {
   const registry = parseJson(readFileSync(resolve(directory, 'registry.json')), 'Embedded registry');
-  if (!isObject(registry) || registry.schemaVersion !== 1 || registry.runtimeVersion !== runtimeVersion || !isObject(registry.features)) {
-    throw new Error('Embedded registry is malformed or has the wrong runtime version.');
+  if (!isObject(registry) || registry.schemaVersion !== 2 || !isObject(registry.features) || !isObject(registry.runtimes)) {
+    throw new Error('Embedded registry is malformed.');
   }
   const actualFeatures = Object.keys(registry.features).sort();
   if (JSON.stringify(actualFeatures) !== JSON.stringify([...expectedFeatures].sort())) throw new Error('Embedded registry feature set is stale.');
   for (const featureId of actualFeatures) {
     const entry = registry.features[featureId];
-    if (!isObject(entry) || entry.baseline !== `${featureId}/baseline.json` || entry.entry !== `${featureId}/${ENTRY}`) {
+    if (!isObject(entry) || entry.baseline !== `${featureId}/baseline.json` || Object.keys(entry).length !== 1) {
       throw new Error(`Embedded registry entry is invalid for ${featureId}.`);
     }
     const baselinePath = resolveContained(directory, entry.baseline);
     const baseline = parseJson(readFileSync(baselinePath), `Embedded baseline ${featureId}`);
-    if (!isObject(baseline) || baseline.schemaVersion !== 1 || baseline.feature !== featureId || baseline.runtimeVersion !== runtimeVersion || baseline.entry !== ENTRY || !Array.isArray(baseline.files)) {
+    if (!isObject(baseline) || baseline.schemaVersion !== 2 || baseline.feature !== featureId || baseline.entry !== ENTRY || !Array.isArray(baseline.files)) {
       throw new Error(`Embedded baseline is malformed for ${featureId}.`);
-    }
-    if (baseline.inputFingerprint !== featureInputFingerprint(config, getFeature(config, featureId))) {
-      throw new Error(`Embedded baseline is stale for ${featureId}.`);
     }
     const featureDirectory = resolve(directory, featureId);
     const actual = fileMetadata(featureDirectory);
@@ -567,26 +545,6 @@ function verifyEmbeddedTree(directory, config, runtimeVersion, expectedFeatures)
     if (!existsSync(resolveContained(featureDirectory, ENTRY))) throw new Error(`Embedded baseline is missing ${ENTRY} for ${featureId}.`);
   }
   return registry;
-}
-
-function featureInputFingerprint(config, feature) {
-  const files = sourceFiles(feature.root, feature.root).map((file) => ({ path: file.path, sha256: file.sha256 }));
-  return sha256(Buffer.from(JSON.stringify({ feature: feature.id, entry: relative(feature.root, feature.entry), lynxConfig: relative(feature.root, feature.lynxConfig), files }), 'utf8'));
-}
-
-function sourceFiles(directory, root) {
-  return readdirSync(directory, { withFileTypes: true })
-    .sort((left, right) => left.name.localeCompare(right.name))
-    .flatMap((entry) => {
-      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.git') return [];
-      const path = resolve(directory, entry.name);
-      if (entry.isSymbolicLink()) throw new Error(`Symlinks are forbidden in feature source: ${path}`);
-      if (entry.isDirectory()) return sourceFiles(path, root);
-      if (!entry.isFile()) return [];
-      const pathFromRoot = relative(root, path).split(sep).join('/');
-      assertSafePath(pathFromRoot);
-      return [{ path: pathFromRoot, sha256: sha256(readFileSync(path)) }];
-    });
 }
 
 

@@ -1,12 +1,8 @@
 # C02 — Generate the native runtime fingerprint
 
-**Status:** planned; required before a public mobile release
+**Status:** implemented
 
 **Spec:** `feature/delivery-bundle-update/specs/v2/cli/c02-native-runtime-fingerprint.md`
-
-> **Planned successor:** I01 moves runtime binding to Worker upload
-> registration so independent mini-app repositories do not handle this value.
-> This document describes the pre-I01 host-owned workspace flow.
 
 ## Goal
 
@@ -34,68 +30,75 @@ on the Lynx first-render path.
 
 ### Native build
 
-When building an embedded baseline, the CLI calculates the Expo project hash
-and writes it as:
+`host embed` builds one platform-neutral baseline and does not calculate a
+native fingerprint. `host prepare` calculates and stores both Expo project
+hashes; `--platform <platform>` limits it to one platform:
 
 ```json
 {
-  "schemaVersion": 1,
-  "runtimeVersion": "<expo-project-hash>",
-  "features": {}
+  "schemaVersion": 2,
+  "features": {
+    "mart": { "baseline": "mart/baseline.json" }
+  },
+  "runtimes": {
+    "ios": {
+      "runtimeVersion": "ios:<expo-project-hash>",
+      "appVersion": "1.0.0",
+      "buildNumber": "30"
+    }
+  }
 }
 ```
 
-The Expo plugin continues validating that registry and embeds the exact value
-as `ExpoLynxRuntimeVersion`. Expo Lynx reads that key as its runtime authority;
-it must not silently switch to a different `EXUpdatesRuntimeVersion` value.
+The Expo plugin selects the current native platform's prepared record and
+embeds its exact value as `ExpoLynxRuntimeVersion` on iOS or the Android
+delivery configuration runtime. Expo Lynx reads that value as its runtime
+authority.
 
 Pin one compatible `@expo/fingerprint` version in the CLI so native builds and
 release tooling do not resolve different algorithms.
 
 ### Remote release
 
-`release` and `pack` read `runtimeVersion` from the last generated embedded
-registry. They do not recalculate it from a possibly changed working tree and
-do not accept the old repository-wide `expo-57` constant.
-
-This makes a release target the native build represented by the checked-in or
-otherwise retained embedded registry:
+Independent mini-app `release` and `pack` commands do not read, calculate, or
+upload a native runtime. One verified release can be selected independently
+for compatible iOS and Android deployment scopes:
 
 ```text
-native inputs -> Expo fingerprint -> embedded registry
-                                      -> Info.plist
-                                      -> release.json
-                                      -> bundles.runtime_version
-```
+native inputs -> Expo fingerprint -> registry.runtimes[platform]
+                                      -> native configuration
+                                      -> host register
+                                      -> deployments.runtime_version
 
-The existing `inputFingerprint` remains a stale-source check for each Lynx
-feature. It must not be used as the native runtime fingerprint because normal
-Lynx JavaScript changes must remain OTA-capable.
+mini-app source -> release.zip -> verified bundle
+                                  -> selected by a compatible deployment
+```
 
 ### Failure behavior
 
-Release creation fails before build or upload when the registry is missing,
-malformed, or has no valid `runtimeVersion`. The error tells the developer to
-build the embedded baseline for the intended native build first.
+Host preparation fails when the shared embedded registry is missing or
+malformed. Native prebuild and host registration fail when the selected
+platform has no prepared runtime. Mini-app release creation remains independent
+from host runtime state.
 
 Fingerprint calculation failures must not fall back to `expo-57`, app version,
 the current date, or a random value.
 
 ## Acceptance criteria
 
-- [ ] Embedded builds use `@expo/fingerprint`; no custom native hashing logic is
+- [x] Host preparation uses `@expo/fingerprint`; no custom native hashing logic is
       introduced.
-- [ ] The static `expo-57` runtime constant is removed from the normal build and
+- [x] The static `expo-57` runtime constant is removed from the normal build and
       release flow.
-- [ ] The plugin, embedded registry, `release.json`, Worker bundle row, and
-      mobile runtime use the exact same value.
-- [ ] A Lynx-only source change does not change the runtime fingerprint.
-- [ ] A native dependency, Expo config-plugin native input, Lynx native module,
+- [x] The plugin, embedded registry, Worker deployment, and mobile runtime use
+      the exact same platform runtime value; releases remain platform-neutral.
+- [x] A Lynx-only source change does not change the runtime fingerprint.
+- [x] A native dependency, Expo config-plugin native input, Lynx native module,
       Pod/Gradle input, or native project change changes the fingerprint.
-- [ ] Repeating the calculation with identical inputs returns the same value.
-- [ ] A remote release reads the retained embedded runtime rather than silently
-      targeting unbuilt native changes in the current working tree.
-- [ ] Missing or stale runtime metadata stops before any network request.
+- [x] Repeating the calculation with identical inputs returns the same value.
+- [x] Host registration verifies the retained prepared runtime against the
+      current working tree before making a network request.
+- [x] Missing or stale runtime metadata stops before any network request.
 
 ## Required verification
 

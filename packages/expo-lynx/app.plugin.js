@@ -343,15 +343,14 @@ function runtimeFiles(featureDirectory) {
   return files;
 }
 
-function validateEmbeddedBundles(sourcePath) {
+function validateEmbeddedBundles(sourcePath, platform) {
   const registryPath = resolveEmbeddedPath(sourcePath, 'registry.json', 'embedded registry');
   const registry = parseJSONFile(registryPath, 'embedded registry');
   if (
     !isPlainObject(registry) ||
-    registry.schemaVersion !== 1 ||
-    typeof registry.runtimeVersion !== 'string' ||
-    !registry.runtimeVersion ||
-    !isPlainObject(registry.features)
+    registry.schemaVersion !== 2 ||
+    !isPlainObject(registry.features) ||
+    !isPlainObject(registry.runtimes)
   ) {
     throw new Error('expo-lynx-view embedded registry is malformed.');
   }
@@ -374,7 +373,7 @@ function validateEmbeddedBundles(sourcePath) {
     if (
       !isPlainObject(registryEntry) ||
       registryEntry.baseline !== `${feature}/baseline.json` ||
-      registryEntry.entry !== `${feature}/main.lynx.bundle`
+      Object.keys(registryEntry).length !== 1
     ) {
     throw new Error(`expo-lynx-view embedded registry entry is invalid for ${feature}.`);
     }
@@ -394,13 +393,10 @@ function validateEmbeddedBundles(sourcePath) {
     const baseline = parseJSONFile(baselinePath, `embedded baseline ${feature}`);
     if (
       !isPlainObject(baseline) ||
-      baseline.schemaVersion !== 1 ||
+      baseline.schemaVersion !== 2 ||
       baseline.feature !== feature ||
-      baseline.runtimeVersion !== registry.runtimeVersion ||
       baseline.entry !== 'main.lynx.bundle' ||
-      !Array.isArray(baseline.files) ||
-      typeof baseline.inputFingerprint !== 'string' ||
-      !SHA_256.test(baseline.inputFingerprint)
+      !Array.isArray(baseline.files)
     ) {
     throw new Error(`expo-lynx-view embedded baseline is malformed for ${feature}.`);
     }
@@ -432,7 +428,22 @@ function validateEmbeddedBundles(sourcePath) {
     if (JSON.stringify(actual) !== JSON.stringify(declared))
       throw new Error(`expo-lynx-view embedded baseline is stale or incomplete for ${feature}.`);
   }
-  return { registry, features, runtimeVersion: registry.runtimeVersion };
+  const runtime = platform === undefined ? undefined : registry.runtimes[platform];
+  if (
+    platform !== undefined &&
+    (!isPlainObject(runtime) ||
+      typeof runtime.runtimeVersion !== 'string' ||
+      !runtime.runtimeVersion ||
+      typeof runtime.appVersion !== 'string' ||
+      !runtime.appVersion ||
+      typeof runtime.buildNumber !== 'string' ||
+      !runtime.buildNumber)
+  ) {
+    throw new Error(
+      `expo-lynx-view needs a prepared ${platform} runtime. Run lynx host prepare --platform ${platform}.`
+    );
+  }
+  return { registry, features, runtimeVersion: runtime?.runtimeVersion };
 }
 
 function writeFeatureDeclaration(sourcePath, features) {
@@ -513,7 +524,7 @@ function materializeV2Resources({ projectRoot, platformProjectRoot, nativeProjec
     'publicKeyPath',
     'file'
   );
-  const embedded = validateEmbeddedBundles(sourcePath);
+  const embedded = validateEmbeddedBundles(sourcePath, 'ios');
   writeFeatureDeclaration(sourcePath, embedded.features);
   // Validate the configured key here as well as in the Info.plist mod. This
   // keeps prebuild failures deterministic even when one platform mod is run
@@ -542,7 +553,7 @@ function applyV2InfoPlist(infoPlist, projectRoot, options) {
     'embeddedBundlesPath',
     'directory'
   );
-  const embedded = validateEmbeddedBundles(embeddedPath);
+  const embedded = validateEmbeddedBundles(embeddedPath, 'ios');
   infoPlist[INFO_PLIST_PUBLIC_KEY] = publicKey.pem;
   infoPlist[INFO_PLIST_PUBLIC_KEY_FINGERPRINT] = publicKey.fingerprint;
   infoPlist[INFO_PLIST_RUNTIME_VERSION] = embedded.runtimeVersion;
@@ -593,7 +604,7 @@ function materializeV2AndroidResources({ projectRoot, options }) {
     options.embeddedBundlesPath,
     'android'
   );
-  const embedded = validateEmbeddedBundles(sourcePath);
+  const embedded = validateEmbeddedBundles(sourcePath, 'android');
   const publicKeyPath = resolveProjectPath(
     projectRoot,
     options.publicKeyPath,
@@ -621,10 +632,8 @@ function materializeV2AndroidResources({ projectRoot, options }) {
 
 function resolvePlatformEmbeddedBundles(projectRoot, embeddedBundlesPath, platform) {
   const root = resolveProjectPath(projectRoot, embeddedBundlesPath, 'embeddedBundlesPath', 'directory');
-  const platformDirectory = path.join(root, platform);
-  if (fs.existsSync(path.join(platformDirectory, 'registry.json'))) return platformDirectory;
-  if (platform === 'ios' && fs.existsSync(path.join(root, 'registry.json'))) return root;
-  throw new Error(`expo-lynx-view needs an embedded ${platform} baseline. Run lynx host embed <mini-app-directory> --platform ${platform}.`);
+  if (fs.existsSync(path.join(root, 'registry.json'))) return root;
+  throw new Error(`expo-lynx-view needs an embedded baseline. Run lynx host embed <mini-app-directory>, then lynx host prepare --platform ${platform}.`);
 }
 
 function withV2AndroidResources(config, v2Options) {

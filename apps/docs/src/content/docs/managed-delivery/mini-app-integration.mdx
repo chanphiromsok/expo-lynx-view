@@ -1,5 +1,5 @@
 ---
-title: Mini-app integration
+title: Mini-app CLI
 description: Build and publish one Lynx mini app from its own repository.
 ---
 
@@ -25,11 +25,9 @@ pnpm lynx release
 ```
 
 The CLI builds `release.zip`, reserves its immutable ID with the Worker, and
-uploads directly to R2. The Worker attaches the release to the **Current host
-build**; the mini-app repository never supplies a runtime identity. In a
-terminal, confirm the displayed app version and build number before the R2
-upload. CI supplies `--host-build 42` (or `LYNX_EXPECTED_HOST_BUILD=42`) and
-fails if the Console has a different current build.
+uploads directly to R2. The release is platform-neutral and contains no native
+runtime identity. After verification, the operator can select the same release
+for any compatible platform/runtime scope registered by the host team.
 
 Use `pnpm lynx release --draft` to produce only
 `dist/lynx-releases/<releaseId>/release.json` and `release.zip`; use `pnpm lynx

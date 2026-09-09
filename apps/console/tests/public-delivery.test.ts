@@ -35,7 +35,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyAm
                     revision: 7,
                     updatedAt: '2026-09-01T01:20:00.000Z',
                     version: '2026.09.01',
-                    platform: 'ios', runtimeVersion: 'expo-57',
+                    archiveObjectKey: `default/${feature}/releases/${releaseId}/release.zip`,
                     archiveSha256,
                     archiveBytes: archive.byteLength,
                   } : null;
@@ -63,10 +63,10 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyAm
                   releaseId,
                   feature,
                   '2026.09.01',
-                  'ios',
-                  'expo-57',
+                  `default/${feature}/releases/${releaseId}/release.zip`,
                   archiveSha256,
                   archive.byteLength,
+                  '2026-09-01T01:20:00.000Z',
                   '2026-09-01T01:20:00.000Z',
                 ]] : [];
               },
@@ -135,7 +135,7 @@ function environment(options: { deployment?: boolean; bundle?: boolean; legacyAm
   );
   assert.equal(response.status, 200);
   const body = await response.json() as { archiveUrl: string };
-  assert.equal(body.archiveUrl, `/v1/shop/${feature}/ios/${releaseId}/release.zip`);
+  assert.equal(body.archiveUrl, `/v1/shop/${feature}/${releaseId}/release.zip`);
 }
 
 {

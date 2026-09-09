@@ -35,13 +35,16 @@ register the app/mini-app IDs with the [Cloudflare Console](/managed-delivery/cl
 
 The generated embedded directory contains only the approved local fallback
 bundles. The host project does not contain mini-app source or a feature map.
-Prepare the native compatibility record before the native archive:
+Embed each mini app once, then prepare the native compatibility record before
+the native archive:
 
 ```sh
-pnpm lynx host prepare
+pnpm lynx host embed ../merchant-home
+pnpm lynx host prepare --register
 ```
 
-After the native archive succeeds, run `pnpm lynx host register`. See [Host app
+Then run the normal native build without changing native dependencies or the
+Expo Lynx configuration between preparation and the build. See [Host app
 integration](/managed-delivery/host-app-integration/) for the complete flow.
 
 :::note[When a new native build is needed]

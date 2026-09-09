@@ -16,6 +16,7 @@ export default defineConfig({
           label: "Start here",
           items: [
             { label: "Overview", slug: "" },
+            { label: "Team onboarding", slug: "getting-started/team-onboarding" },
             { label: "Installation", slug: "getting-started/installation" },
             {
               label: "Local development",
@@ -39,15 +40,15 @@ export default defineConfig({
               slug: "managed-delivery/cloudflare-worker",
             },
             {
-              label: "Host app integration",
+              label: "Mobile app integration",
               slug: "managed-delivery/host-app-integration",
             },
             {
-              label: "Mini-app integration",
+              label: "Mini-app CLI",
               slug: "managed-delivery/mini-app-integration",
             },
             {
-              label: "Local operator console",
+              label: "Worker and Console",
               slug: "managed-delivery/local-console",
             },
           ],
@@ -56,6 +57,7 @@ export default defineConfig({
           label: "Reference",
           items: [
             { label: "Lynx CLI", slug: "reference/cli" },
+            { label: "Mobile CLI", slug: "reference/mobile-cli" },
             {
               label: "Local delivery troubleshooting",
               slug: "troubleshooting/local-delivery",

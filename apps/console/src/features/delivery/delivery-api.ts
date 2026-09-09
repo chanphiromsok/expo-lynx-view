@@ -5,8 +5,6 @@ export type Bundle = {
   appId: string;
   feature: string;
   version: string;
-  platform: 'ios' | 'android';
-  runtimeVersion: string;
   archiveSha256: string;
   archiveBytes: number;
   createdAt: string;
@@ -62,6 +60,8 @@ export const deliveryQueryKeys = {
       runtimeVersion,
       sessionRevision,
     ] as const,
+  bundles: (appId: string, feature: string, sessionRevision: number) =>
+    ['delivery', 'bundles', appId, feature, sessionRevision] as const,
 };
 
 export type ConsoleUser = {
@@ -152,6 +152,12 @@ export const deliveryApi = {
 
   getScopes(): Promise<DeliveryScope[]> {
     return request<DeliveryScope[]>('/api/deployments');
+  },
+
+  getMiniAppBundles(appId: string, feature: string): Promise<Bundle[]> {
+    return request<Bundle[]>(
+      `/api/apps/${encodeURIComponent(appId)}/mini-apps/${encodeURIComponent(feature)}/bundles`,
+    );
   },
 
   getApps(): Promise<RegisteredApp[]> {

@@ -14,6 +14,42 @@ The host owns `embeddedBundlesPath`, the public trust key, and the public
 delivery endpoint. A mini app owns only its `appId` and `feature`; it does not
 copy host runtime values into its source repository.
 
+## Mini-app team handoff
+
+Before a mini-app team can run `lynx release`, the Console operator must create
+the matching **host app** and **mini app** in the Delivery Console. This is an
+allow-list: `bs-one` / `mart` in the mini-app config must exist in the Worker
+before an upload is accepted.
+
+The mini-app repository needs only:
+
+1. `expo-lynx-bundle-cli` as a dev dependency.
+2. `lynx-miniapp.config.ts` with the exact registered `appId` and `feature`.
+3. An ignored `.env.lynx` containing the six delivery upload variables
+   below. Do **not** copy the Console password or delivery private key.
+
+```dotenv
+LYNX_DELIVERY_SERVER="https://your-worker.workers.dev"
+LYNX_DELIVERY_API_KEY="lynx_live_your-upload-key"
+CLOUDFLARE_ACCOUNT_ID="your-cloudflare-account-id"
+LYNX_DELIVERY_R2_BUCKET="your-delivery-bucket"
+R2_ACCESS_KEY_ID="your-r2-s3-access-key-id"
+R2_SECRET_ACCESS_KEY="your-r2-s3-secret-access-key"
+```
+
+```sh
+set -a
+source .env.lynx
+set +a
+
+pnpm exec lynx doctor
+pnpm exec lynx release
+```
+
+The CLI builds the mini app, uploads `release.zip` directly to R2, then asks
+the Worker to verify it. It does not enable the release; the Console operator
+selects it for each registered iOS or Android host runtime.
+
 ## Deploy the Console from a host app
 
 The Console is deployed by the host app owner, not by this library repository.
@@ -37,17 +73,13 @@ updates without replacing D1 data or Worker secrets.
 # Expo host repository
 lynx keys generate
 lynx doctor --platform ios
-lynx host embed ../mart --platform ios
-lynx host prepare --platform ios
-lynx host register --platform ios
+lynx host embed ../mart
+lynx host prepare --register
 lynx doctor --platform android
-lynx host embed ../mart --platform android
-lynx host prepare --platform android
-lynx host register --platform android
 
 # independent mini-app repository
 lynx doctor
-lynx release --platform ios
+lynx release
 ```
 
 ## Release workflow
@@ -57,16 +89,16 @@ export LYNX_DELIVERY_SERVER="http://127.0.0.1:8787"
 export LYNX_DELIVERY_API_KEY="<local-delivery-api-key>"
 
 # Build, package, upload the ZIP, and ask the Worker to verify and register it.
-pnpm exec lynx release --platform ios
+pnpm exec lynx release
 
 # Build only. This performs no network request.
-pnpm exec lynx release --platform ios --draft
+pnpm exec lynx release --draft
 ```
 
-For a manual terminal release, the CLI shows the Worker's current host build
-and asks for confirmation. `--host-build` (or `LYNX_EXPECTED_HOST_BUILD`) is
-needed only for non-interactive CI, where it fails closed if the host team has
-registered a different build.
+One mini-app release is platform-neutral. The Console selects that same
+verified ZIP independently for an iOS deployment or an Android deployment.
+Native runtime compatibility remains with the host deployment, never with the
+mini-app release.
 
 The draft output contains exactly two files:
 
@@ -81,12 +113,11 @@ mobile and is never stored in R2:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "appId": "bs-one",
   "feature": "merchant-home",
   "releaseId": "merchant-home-20260906T101930455Z",
   "version": "2026.09.01",
-  "platform": "ios",
   "archiveSha256": "9da2223840940f013b8ffa763b4a1dde4959c8647cee8a9c1b465d16b7dd692f",
   "archiveBytes": 344959
 }
@@ -100,25 +131,31 @@ immutable bundle. Production upload requires `R2_ACCESS_KEY_ID`,
 `R2_BUCKET_NAME` (or `LYNX_DELIVERY_R2_BUCKET`). Local Worker mode needs none
 of these because it uses its local R2 binding.
 
-The Worker assigns the mini-app release to the currently registered host
-runtime for its app and platform. The mini-app never supplies a host
-fingerprint. The host team runs `lynx host prepare` then `lynx host register`
-when deliberately preparing a new native build.
+The mini-app never supplies a host fingerprint. The host team runs `lynx host
+prepare --register` when deliberately preparing a new native build. The
+Console can then enable or disable the same release per platform/runtime.
 
 Before host preparation, build the offline embedded fallback from every
 independent mini-app repository:
 
 ```sh
 # Run from the Expo host repository.
-lynx host embed ../mart --platform ios
-lynx host prepare --platform ios
-# Repeat both commands with --platform android before an Android native build.
+lynx host embed ../mart
+lynx host prepare --register
 ```
 
 `host embed` reads the mini app's `lynx-miniapp.config.ts`, confirms that its
 app and feature match the host's configured endpoint, runs its production
 Rspeedy build, and writes the permitted runtime files to the host's configured
-`embeddedBundlesPath`.
+`embeddedBundlesPath`. It does not calculate a native runtime or create
+platform directories. `host prepare` stores Expo fingerprints in the root
+`registry.json`. Without `--platform`, it prepares both
+iOS and Android; pass `--platform ios` or `--platform android` for one only.
+
+Projects created before embedded registry v2 must delete the generated
+`embeddedBundlesPath` once, rerun `host embed` for each mini app, then prepare
+the platforms they build. The directory is generated build input; do not move
+old `android/**` or `ios/**` copies into the new tree.
 
 To retry an already-built draft:
 
@@ -147,9 +184,9 @@ export default defineMiniApp({
 
 The accepted runtime output is exactly `main.lynx.bundle` plus `static/**`
 sidecars. The packer rejects unsafe paths, links, unexpected files, and ZIPs
-over the mobile archive limits before any upload is attempted. Release
-packaging and managed delivery support both `ios` and `android`; register each
-platform separately because their native runtime fingerprints differ.
+over the mobile archive limits before any upload is attempted. The ZIP is
+shared by `ios` and `android`; register each host platform separately because
+their native runtime fingerprints differ.
 
 See the [delivery console guide](../../apps/console/README.md) for Cloudflare
 setup, credentials, local D1/R2 testing, and console promotion.

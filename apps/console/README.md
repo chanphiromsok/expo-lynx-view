@@ -33,7 +33,7 @@ archives directly to R2 using its local credential.
 The flow is: **CLI uploads a verified bundle → Console selects it → Worker
 signs the selected deployment → mobile verifies and installs it**. One Worker
 serves every app: each deployment is identified by
-`(appId, feature, runtimeVersion)`. There are no channels, environments, or
+`(appId, feature, platform, runtimeVersion)`. There are no channels, environments, or
 rollout groups in this MVP.
 
 ## Development
@@ -169,12 +169,13 @@ production releases only need upload and a Console state change.
 
 The CLI stores an Expo fingerprint in the embedded registry when it builds the
 baseline. The app sends that value as `lynx-runtime-version` on every public
-deployment check. The Console shows one app / mini-app / runtime scope and
-cannot select a bundle built for another native runtime.
+deployment check. The Console shows one app / mini-app / platform / runtime
+scope. A release ZIP is platform-neutral, so the same verified bundle can be
+selected independently for compatible iOS and Android deployments.
 
 When native inputs change, run `pnpm lynx bundle <feature>`, deliberately
-prebuild and ship the new host app, then upload a release for its new
-fingerprint. Keep the prior runtime's deployment selected while that App Store
+prebuild and ship the new host app, then select a verified release for its new
+runtime. Keep the prior runtime's deployment selected while that App Store
 version remains installed.
 
 Pre-runtime-header app versions are accepted only while their app/feature has
@@ -223,11 +224,16 @@ pnpm --filter @expo-lynx/delivery-console run deploy
 Use `run deploy`, not `pnpm --filter … deploy`; the latter is pnpm's separate
 workspace packaging command.
 
-## Use a separate Lynx app repository
+## Mini-app team handoff (required)
 
 An app outside this monorepo needs the delivery Worker URL, its CLI API key,
 and the R2 S3 credential for the delivery bucket. It does not need the Console
 source, Cloudflare login, Console password, or delivery private key.
+
+Before giving a team credentials, create the exact host app and mini app in
+the Console. The Worker rejects uploads for unknown IDs instead of creating an
+app from a typo. For example, a mini app configured as `bs-one` / `mart` needs
+both the `bs-one` host app and the `mart` mini app registered first.
 
 After the first npm publish, install the CLI in the mini-app workspace:
 
@@ -246,8 +252,9 @@ export default defineMiniApp({
 });
 ```
 
-Keep these values in that app's ignored `.env.lynx.local` file; copy them from
-the Console deployment's `.env.lynx`:
+Give the mini-app team only these values in that app's ignored
+`.env.lynx.local` file. They come from the Console deployment's `.env.lynx`;
+do not copy the Console password or private signing key:
 
 ```dotenv
 LYNX_DELIVERY_SERVER="https://your-worker.workers.dev"
@@ -258,8 +265,7 @@ R2_ACCESS_KEY_ID="your-r2-access-key-id"
 R2_SECRET_ACCESS_KEY="your-r2-secret-access-key"
 ```
 
-Build, package, and upload the mini app. `--platform ios` is required;
-Android managed delivery is not available yet:
+Build, package, and upload the platform-neutral mini app release:
 
 ```sh
 set -a
@@ -267,7 +273,7 @@ source .env.lynx.local
 set +a
 
 pnpm exec lynx doctor
-pnpm exec lynx release --platform ios
+pnpm exec lynx release
 ```
 
 `appId` is the Worker namespace for this host app. Give every host app a

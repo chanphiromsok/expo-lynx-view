@@ -20,18 +20,20 @@ export type LynxBundleConfig = {
   releaseOutputDir?: string;
 };
 
-export type EmbeddedRegistryV1 = {
-  schemaVersion: 1;
-  runtimeVersion: string;
-  features: Record<string, { baseline: string; entry: string }>;
+export type EmbeddedRegistryV2 = {
+  schemaVersion: 2;
+  features: Record<string, { baseline: string }>;
+  runtimes: Partial<Record<LynxDeliveryPlatform, {
+    runtimeVersion: string;
+    appVersion: string;
+    buildNumber: string;
+  }>>;
 };
 
-export type EmbeddedBaselineV1 = {
-  schemaVersion: 1;
+export type EmbeddedBaselineV2 = {
+  schemaVersion: 2;
   feature: string;
-  runtimeVersion: string;
   entry: 'main.lynx.bundle';
-  inputFingerprint: string;
   files: Array<{ path: string; bytes: number; sha256: string }>;
 };
 
@@ -44,4 +46,4 @@ export type LynxMiniAppConfig = {
 export function defineMiniApp(config: LynxMiniAppConfig): LynxMiniAppConfig;
 export type LynxDeliveryPlatform = 'ios' | 'android';
 export function createNativeRuntimeVersion(projectRoot: string, platform?: LynxDeliveryPlatform): Promise<string>;
-export function readEmbeddedRuntimeVersion(config: LynxBundleConfig): string;
+export function readEmbeddedRuntimeVersion(config: LynxBundleConfig, platform?: LynxDeliveryPlatform): string;

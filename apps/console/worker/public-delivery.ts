@@ -11,7 +11,7 @@ export interface DeliveryEnv {
 }
 
 type DeploymentRow = typeof deployments.$inferSelect & Partial<Pick<typeof bundles.$inferSelect,
-  'version' | 'runtimeVersion' | 'archiveSha256' | 'archiveBytes'>>;
+  'version' | 'archiveSha256' | 'archiveBytes' | 'archiveObjectKey'>>;
 
 const featureId = /^[a-z][a-z0-9-]{0,63}$/;
 const appId = /^[a-z][a-z0-9-]{0,63}$/;
@@ -42,7 +42,7 @@ export async function handlePublicDeliveryRequest(
       const feature = parts[2];
       const releaseId = parts[3];
       if (!feature || !releaseId || !featureId.test(feature) || !bundleId.test(releaseId)) return notFound();
-      return getArchive(environment, request, 'default', feature, 'ios', releaseId);
+      return getArchive(environment, request, 'default', feature, releaseId);
     }
     if (parts.length === 3) {
       const [app, feature] = [parts[1], parts[2]];
@@ -52,12 +52,12 @@ export async function handlePublicDeliveryRequest(
     if (parts.length === 5 && parts[4] === 'release.zip') {
       const [app, feature, releaseId] = [parts[1], parts[2], parts[3]];
       if (!app || !feature || !releaseId || !appId.test(app) || !featureId.test(feature) || !bundleId.test(releaseId)) return notFound();
-      return getArchive(environment, request, app, feature, 'ios', releaseId);
+      return getArchive(environment, request, app, feature, releaseId);
     }
     if (parts.length === 6 && parts[5] === 'release.zip') {
       const [app, feature, targetPlatform, releaseId] = [parts[1], parts[2], parts[3], parts[4]];
       if (!app || !feature || !targetPlatform || !releaseId || !appId.test(app) || !featureId.test(feature) || !platform.test(targetPlatform) || !bundleId.test(releaseId)) return notFound();
-      return getArchive(environment, request, app, feature, targetPlatform, releaseId);
+      return getArchive(environment, request, app, feature, releaseId);
     }
     return notFound();
   } catch {
@@ -102,22 +102,12 @@ async function getDeployment(
     return jsonResponse(409, { error: { code: 'legacy-runtime-ambiguous', message: 'This app version must upgrade before delivery can select a runtime.' } });
   }
   const [deployment] = matchingDeployments;
-  const bundleFilter = requestedRuntime === null
-    ? and(
-      eq(bundles.appId, app),
-      eq(bundles.featureId, feature),
-      eq(bundles.platform, requestedPlatform),
-      eq(bundles.id, deployment?.bundleId ?? ''),
-      isNotNull(bundles.verifiedAt),
-    )
-    : and(
-      eq(bundles.appId, app),
-      eq(bundles.featureId, feature),
-      eq(bundles.platform, requestedPlatform),
-      eq(bundles.runtimeVersion, requestedRuntime),
-      eq(bundles.id, deployment?.bundleId ?? ''),
-      isNotNull(bundles.verifiedAt),
-    );
+  const bundleFilter = and(
+    eq(bundles.appId, app),
+    eq(bundles.featureId, feature),
+    eq(bundles.id, deployment?.bundleId ?? ''),
+    isNotNull(bundles.verifiedAt),
+  );
   const [bundle] = deployment?.bundleId
     ? await database.select().from(bundles).where(bundleFilter).limit(1)
     : [];
@@ -176,7 +166,7 @@ function deploymentDocument(feature: string, runtimeVersion: string | undefined,
     version: row.version,
     runtimeVersion: row.runtimeVersion,
     archiveUrl: scopedRoute
-      ? `/v1/${encodeURIComponent(app)}/${encodeURIComponent(feature)}/${encodeURIComponent(row.platform)}/${encodeURIComponent(row.bundleId)}/release.zip`
+      ? `/v1/${encodeURIComponent(app)}/${encodeURIComponent(feature)}/${encodeURIComponent(row.bundleId)}/release.zip`
       : `/v1/bundles/${encodeURIComponent(feature)}/${encodeURIComponent(row.bundleId)}/release.zip`,
     archiveSha256: row.archiveSha256,
     archiveBytes,
@@ -189,7 +179,6 @@ async function getArchive(
   request: Request,
   app: string,
   feature: string,
-  platform: string,
   releaseId: string,
 ): Promise<Response> {
   const [row] = await createDeliveryDatabase(environment.DB)
@@ -198,7 +187,6 @@ async function getArchive(
     .where(and(
       eq(bundles.appId, app),
       eq(bundles.featureId, feature),
-      eq(bundles.platform, platform),
       eq(bundles.id, releaseId),
       isNotNull(bundles.verifiedAt),
     ))
@@ -209,9 +197,9 @@ async function getArchive(
   }
   const etag = `"${row.archiveSha256}"`;
   if (matchesIfNoneMatch(request, etag)) return notModified(etag);
-  const object = await environment.ARTIFACTS.get(archiveObjectKey(app, feature, platform, releaseId))
+  const object = await environment.ARTIFACTS.get(row.archiveObjectKey)
     // Existing iOS releases were stored before platform became part of the R2 key.
-    ?? (platform === 'ios' ? await environment.ARTIFACTS.get(prePlatformArchiveObjectKey(app, feature, releaseId)) : null)
+    ?? await environment.ARTIFACTS.get(prePlatformArchiveObjectKey(app, feature, releaseId))
     // D1 rows from before 0003 are migrated into `default`; their immutable R2
     // objects keep the old key until a later retention cleanup.
     ?? (app === 'default' ? await environment.ARTIFACTS.get(legacyArchiveObjectKey(feature, releaseId)) : null);
@@ -228,10 +216,6 @@ async function getArchive(
       'X-Content-Type-Options': 'nosniff',
     },
   });
-}
-
-function archiveObjectKey(app: string, feature: string, platform: string, releaseId: string): string {
-  return `${app}/${feature}/${platform}/releases/${releaseId}/release.zip`;
 }
 
 function prePlatformArchiveObjectKey(app: string, feature: string, releaseId: string): string {

@@ -14,6 +14,7 @@
     "docs:build": "pnpm --filter @expo-lynx/docs build",
     "build": "pnpm --filter expo-lynx-view build && pnpm --filter expo-lynx-bundle-cli build",
     "test": "pnpm --filter expo-lynx-view test && pnpm --filter expo-lynx-bundle-cli test && node --test scripts/release.test.mjs",
+    "test:delivery-contract": "node --test --test-concurrency=1 packages/lynx-bundle-cli/test/cli.test.mjs packages/lynx-bundle-cli/test/release-upload.test.mjs scripts/delivery-contract.test.mjs && pnpm --filter @expo-lynx/delivery-console test",
     "lint": "pnpm --filter expo-lynx-view lint && pnpm --filter expo-lynx-bundle-cli lint",
     "release:prepare": "node scripts/release.mjs prepare",
     "release:check": "node scripts/release.mjs check",

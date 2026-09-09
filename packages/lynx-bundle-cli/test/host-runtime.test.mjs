@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cpSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
@@ -16,8 +16,17 @@ function temporaryHost() {
       deliveryEndpoints: { delivery: 'https://delivery.example/v1/bs-one/delivery' },
     }]],
   } }));
-  writeFileSync(resolve(root, 'generated/expo-lynx/embedded/registry.json'), JSON.stringify({ schemaVersion: 1, runtimeVersion: 'old', features: { delivery: { baseline: 'delivery/baseline.json', entry: 'delivery/main.lynx.bundle' } } }));
-  writeFileSync(resolve(embedded, 'baseline.json'), JSON.stringify({ schemaVersion: 1, feature: 'delivery', runtimeVersion: 'old' }));
+  writeFileSync(resolve(root, 'generated/expo-lynx/embedded/registry.json'), JSON.stringify({
+    schemaVersion: 2,
+    features: { delivery: { baseline: 'delivery/baseline.json' } },
+    runtimes: {},
+  }));
+  writeFileSync(resolve(embedded, 'baseline.json'), JSON.stringify({
+    schemaVersion: 2,
+    feature: 'delivery',
+    entry: 'main.lynx.bundle',
+    files: [],
+  }));
   return root;
 }
 
@@ -25,7 +34,9 @@ test('prepares then registers the exact runtime held by the embedded registry', 
   const root = temporaryHost();
   const prepared = await prepareHostRuntime({ cwd: root, runtimeFactory: async () => 'runtime-a' });
   assert.equal(prepared.runtimeVersion, 'runtime-a');
-  assert.equal(JSON.parse(readFileSync(resolve(root, 'generated/expo-lynx/embedded/registry.json'))).runtimeVersion, 'runtime-a');
+  assert.deepEqual(JSON.parse(readFileSync(resolve(root, 'generated/expo-lynx/embedded/registry.json'))).runtimes.ios, {
+    runtimeVersion: 'runtime-a', appVersion: '1.2.0', buildNumber: '42',
+  });
   let request;
   const registered = await registerPreparedHostRuntime({
     cwd: root,
@@ -45,14 +56,12 @@ test('prepares then registers the exact runtime held by the embedded registry', 
 
 test('prepares Android with its own native build number', async () => {
   const root = temporaryHost();
-  const embedded = resolve(root, 'generated/expo-lynx/embedded');
-  const android = resolve(embedded, 'android');
-  mkdirSync(android);
-  cpSync(resolve(embedded, 'delivery'), resolve(android, 'delivery'), { recursive: true });
-  copyFileSync(resolve(embedded, 'registry.json'), resolve(android, 'registry.json'));
   const result = await prepareHostRuntime({ cwd: root, platform: 'android', runtimeFactory: async () => 'android-runtime-a' });
   assert.equal(result.buildNumber, '7');
   assert.equal(result.runtimeVersion, 'android-runtime-a');
+  assert.deepEqual(JSON.parse(readFileSync(resolve(root, 'generated/expo-lynx/embedded/registry.json'))).runtimes.android, {
+    runtimeVersion: 'android-runtime-a', appVersion: '1.2.0', buildNumber: '7',
+  });
   let request;
   await registerPreparedHostRuntime({
     cwd: root,

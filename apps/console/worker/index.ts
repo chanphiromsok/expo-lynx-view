@@ -8,6 +8,7 @@ import {
   createMiniApp,
   getApps,
   getCurrentUser,
+  getMiniAppBundles,
   getDeploymentOverview,
   getDeploymentScopes,
   handleLocalUpload,
@@ -54,6 +55,11 @@ export const app = new Elysia({ adapter: CloudflareAdapter })
     ({ request, params, body }) => createMiniApp(bindings, request, params.appId, body),
     { params: AppParametersSchema, body: MiniAppCreateSchema },
   )
+  .get(
+    '/api/apps/:appId/mini-apps/:feature/bundles',
+    ({ request, params }) => getMiniAppBundles(bindings, request, params.appId, params.feature),
+    { params: AppFeatureParametersSchema },
+  )
   .put(
     '/api/apps/:appId/runtime',
     ({ request, params, body }) => registerHostRuntime(bindings, request, params.appId, body),
@@ -83,8 +89,8 @@ export const app = new Elysia({ adapter: CloudflareAdapter })
     { params: BundleParametersSchema },
   )
   .put(
-    '/__local-r2/:appId/:feature/:platform/releases/:bundleId/release.zip',
-    ({ request, params }) => handleLocalUpload(bindings, request, params.appId, params.feature, params.platform, params.bundleId),
+    '/__local-r2/:appId/:feature/releases/:bundleId/release.zip',
+    ({ request, params }) => handleLocalUpload(bindings, request, params.appId, params.feature, params.bundleId),
     { params: AppLocalUploadParametersSchema },
   )
   .all('*', ({ request }) => handlePublicDeliveryRequest(bindings, request))

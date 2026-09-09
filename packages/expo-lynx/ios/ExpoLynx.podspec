@@ -32,11 +32,15 @@ Pod::Spec.new do |s|
     'DEFINES_MODULE' => 'YES',
   }
 
+  s.module_name = 'ExpoLynx'
+  s.header_dir = 'ExpoLynx'
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
   s.exclude_files = "tests/**/*"
-  # Keep the FastImage ObjC headers out of the generated umbrella: they
-  # #import <Lynx/...>, and a non-modular include would break the ExpoLynx
-  # framework module. Nothing outside the pod needs them — ExpoLynxView
-  # registers the element by runtime class name.
-  s.private_header_files = "FastImage/**/*.h"
+  s.public_header_files = [
+    'ExpoLynx.h',
+    'FastImage/LynxFastImageViewProtocol.h',
+  ]
+  # Swift needs the UIKit-only bridge protocol header in the module interface.
+  # The LynxUI implementation header stays private because it imports Lynx.
+  s.private_header_files = "FastImage/LynxFastImageElement.h"
 end

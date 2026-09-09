@@ -51,21 +51,22 @@ function makeTemporaryEmbeddedTree() {
   fs.writeFileSync(
     path.join(feature, 'baseline.json'),
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       feature: 'shopping',
-      runtimeVersion: 'expo-57',
       entry: 'main.lynx.bundle',
-      inputFingerprint: 'a'.repeat(64),
       files,
     })
   );
   fs.writeFileSync(
     path.join(embedded, 'registry.json'),
     JSON.stringify({
-      schemaVersion: 1,
-      runtimeVersion: 'expo-57',
+      schemaVersion: 2,
       features: {
-        shopping: { baseline: 'shopping/baseline.json', entry: 'shopping/main.lynx.bundle' },
+        shopping: { baseline: 'shopping/baseline.json' },
+      },
+      runtimes: {
+        ios: { runtimeVersion: 'ios:expo-57', appVersion: '1.0.0', buildNumber: '1' },
+        android: { runtimeVersion: 'android:expo-57', appVersion: '1.0.0', buildNumber: '1' },
       },
     })
   );
@@ -199,7 +200,7 @@ test('validates canonical build-time deployment URLs against the embedded regist
   );
 });
 
-test('materializes one iOS-only baseline namespace and emits trust configuration into Info.plist', () => {
+test('materializes the shared baseline and emits the prepared iOS runtime into Info.plist', () => {
   const { root } = makeTemporaryEmbeddedTree();
   const keyDirectory = path.join(root, 'keys');
   fs.mkdirSync(keyDirectory);
@@ -249,18 +250,14 @@ test('materializes one iOS-only baseline namespace and emits trust configuration
   });
   assert.match(infoPlist[_internal.INFO_PLIST_PUBLIC_KEY], /BEGIN PUBLIC KEY/);
   assert.match(infoPlist[_internal.INFO_PLIST_PUBLIC_KEY_FINGERPRINT], /^[A-Za-z0-9_-]{43}$/);
-  assert.equal(infoPlist[_internal.INFO_PLIST_RUNTIME_VERSION], 'expo-57');
+  assert.equal(infoPlist[_internal.INFO_PLIST_RUNTIME_VERSION], 'ios:expo-57');
   assert.deepEqual(infoPlist[_internal.INFO_PLIST_DELIVERY_ENDPOINTS], {
     shopping: 'https://delivery.example.com/v1/deploy/shopping',
   });
 });
 
 test('materializes the same V2 runtime, endpoints, and public key into Android assets', () => {
-  const { root, embedded } = makeTemporaryEmbeddedTree();
-  const androidEmbedded = path.join(embedded, 'android');
-  fs.mkdirSync(androidEmbedded);
-  fs.cpSync(path.join(embedded, 'shopping'), path.join(androidEmbedded, 'shopping'), { recursive: true });
-  fs.copyFileSync(path.join(embedded, 'registry.json'), path.join(androidEmbedded, 'registry.json'));
+  const { root } = makeTemporaryEmbeddedTree();
   const keyDirectory = path.join(root, 'keys');
   fs.mkdirSync(keyDirectory);
   fs.copyFileSync(
@@ -281,10 +278,35 @@ test('materializes the same V2 runtime, endpoints, and public key into Android a
   );
   assert.deepEqual(JSON.parse(fs.readFileSync(result.configurationPath, 'utf8')), {
     schemaVersion: 1,
-    runtimeVersion: 'expo-57',
+    runtimeVersion: 'android:expo-57',
     deliveryEndpoints: { shopping: 'https://delivery.example.com/v1/shop/shopping' },
     publicKey: _internal.normalizePublicKey(path.join(keyDirectory, 'release.public.pem')).pem,
   });
+});
+
+test('rejects native prebuild when that platform was not prepared', () => {
+  const { root, embedded } = makeTemporaryEmbeddedTree();
+  const registryPath = path.join(embedded, 'registry.json');
+  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+  delete registry.runtimes.android;
+  fs.writeFileSync(registryPath, JSON.stringify(registry));
+  const keyDirectory = path.join(root, 'keys');
+  fs.mkdirSync(keyDirectory);
+  fs.copyFileSync(
+    path.join(fixtureRoot, 'crypto-development/updates.public.pem'),
+    path.join(keyDirectory, 'release.public.pem')
+  );
+  assert.throws(
+    () => _internal.materializeV2AndroidResources({
+      projectRoot: root,
+      options: {
+        embeddedBundlesPath: './generated/expo-lynx/embedded',
+        publicKeyPath: './keys/release.public.pem',
+        deliveryEndpoints: { shopping: 'https://delivery.example.com/v1/shop/shopping' },
+      },
+    }),
+    /prepared android runtime/
+  );
 });
 
 test('reuses the existing Xcode folder reference on repeated prebuilds', () => {

@@ -1,5 +1,5 @@
 ---
-title: Host app integration
+title: Mobile app integration
 description: Prepare and register the native compatibility boundary owned by an Expo host app.
 ---
 
@@ -22,22 +22,27 @@ URLs. It does not contain mini-app source paths or release build commands.
 The app and feature IDs in every URL must already be registered by the Console
 operator. The host never creates them from its configuration.
 
-## Prepare, build, then register
+## Embed, prepare/register, then build
 
 ```sh
-# local only: updates the prepared embedded runtime record
-pnpm lynx host prepare
+# once per mini app: writes one shared iOS/Android embedded bundle
+pnpm lynx host embed ../merchant-home
 
-# build and verify the native archive outside this command
+# local fingerprint + authenticated Worker registration for both platforms
+pnpm lynx host prepare --register
 
-# authenticated: records exactly that prepared runtime in the Worker
-pnpm lynx host register
+# build and verify the native app outside this command
 ```
 
 `host register` recalculates the native compatibility identity and fails if the
 project changed since `host prepare`. This prevents a remote bundle for one
-native build being selected for another. CI can use `pnpm lynx host prepare
---register` when registering before the native archive is intentional.
+native build being selected for another. Do not change native dependencies or
+the Expo Lynx plugin configuration between this command and the native build.
+
+Run `host embed` only once when the embedded mini app changes. Before an
+Android release, the default preparation already contains its runtime. Pass
+`--platform` to `host prepare` only when the project intentionally targets one
+platform. No second bundle directory is created.
 
 If a released binary was not registered, devices receive a signed disabled
 response and keep their embedded baseline. They never receive a bundle for a

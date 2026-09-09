@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import MMKV
+import OSLog
 
 struct LynxManagedState: Codable, Sendable {
   var activeReleaseID: String?
@@ -28,10 +29,14 @@ final class LynxManagedDeploymentState {
   static let shared = LynxManagedDeploymentState()
 
   private static var didInitializeMMKV = false
+  private static let log = Logger(subsystem: "expo.lynx.delivery", category: "state")
+
   private let store: MMKV?
-  private let legacyDefaults: UserDefaults
   private let prefix = "expo.lynx.managed.v3"
   private var recoveredScopes = Set<String>()
+  // Per-scope blob held only when MMKV cannot persist it this launch. Keeps the
+  // running session self-consistent; discarded when the process exits.
+  private var memoryFallback: [String: LynxManagedState] = [:]
 
   static func prepareStorage() {
     #if DEBUG
@@ -44,14 +49,12 @@ final class LynxManagedDeploymentState {
 
   init(
     storeID: String = "expo.lynx.managed.v3",
-    storeRoot: URL? = nil,
-    legacyDefaults: UserDefaults = .standard
+    storeRoot: URL? = nil
   ) {
     Self.prepareStorage()
     let root = storeRoot ?? Self.defaultStoreRoot
     try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     self.store = MMKV(mmapID: storeID, rootPath: root.path)
-    self.legacyDefaults = legacyDefaults
   }
 
   func recover(feature: String, runtimeVersion: String) -> LynxManagedState {
@@ -69,11 +72,12 @@ final class LynxManagedDeploymentState {
   }
 
   func beginAttempt(releaseID: String, feature: String, runtimeVersion: String) {
-    var state = read(scope: key(feature: feature, runtimeVersion: runtimeVersion))
+    let scope = key(feature: feature, runtimeVersion: runtimeVersion)
+    var state = read(scope: scope)
     state.previousReleaseID = state.activeReleaseID
     state.pendingReleaseID = nil
     state.attemptingReleaseID = releaseID
-    write(state, scope: key(feature: feature, runtimeVersion: runtimeVersion))
+    write(state, scope: scope)
   }
 
   func confirm(releaseID: String, feature: String, runtimeVersion: String) {
@@ -124,34 +128,33 @@ final class LynxManagedDeploymentState {
   }
 
   private func read(scope: String) -> LynxManagedState {
-    let data: Data?
-    if let stored = store?.data(forKey: scope) {
-      data = stored
-    } else if let legacy = legacyDefaults.data(forKey: scope) {
-      // Keep one atomic state blob. Copy before deleting so an interrupted
-      // migration still has the UserDefaults source on the next launch.
-      if store?.set(legacy, forKey: scope) == true {
-        legacyDefaults.removeObject(forKey: scope)
-      }
-      data = legacy
-    } else {
-      data = nil
+    if let data = store?.data(forKey: scope) {
+      return decode(data)
     }
-    return decode(data)
+    return memoryFallback[scope] ?? .empty
   }
 
-  private func decode(_ data: Data?) -> LynxManagedState {
-    guard let data,
-      let state = try? JSONDecoder().decode(LynxManagedState.self, from: data)
-    else { return .empty }
+  private func decode(_ data: Data) -> LynxManagedState {
+    guard let state = try? JSONDecoder().decode(LynxManagedState.self, from: data) else {
+      return .empty
+    }
     return state
   }
 
   private func write(_ state: LynxManagedState, scope: String) {
     guard let data = try? JSONEncoder().encode(state) else { return }
-    if store?.set(data, forKey: scope) != true {
-      legacyDefaults.set(data, forKey: scope)
+    if store?.set(data, forKey: scope) == true {
+      memoryFallback[scope] = nil
+      return
     }
+    // MMKV is unavailable this launch (mmap failed) or rejected the write. Retain
+    // the blob in memory so a fail() during a bad rollout is not forgotten and the
+    // broken release cannot retry within this session; recover() rebuilds durable
+    // state from the embedded bundle on the next launch.
+    memoryFallback[scope] = state
+    Self.log.error(
+      "mmkv_write_failed scope=\(scope, privacy: .public); holding delivery state in memory for this session"
+    )
   }
 
   private static var defaultStoreRoot: URL {

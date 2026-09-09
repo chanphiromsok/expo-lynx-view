@@ -10,8 +10,11 @@ variables win over file values.
 | --- | --- | --- |
 | `lynx console setup` | Console operator | Provisions the shared Worker, D1, and R2 once |
 | `lynx console deploy` | Console operator | Deploys a Console/Worker update and pending migrations |
-| `lynx host prepare` | Expo host | None |
-| `lynx host register` | Expo host | Registers the prepared Current host build |
+| `lynx host embed <mini-app>` | Expo host | Builds one shared iOS/Android embedded fallback |
+| `lynx host prepare` | Expo host | Prepares iOS and Android locally; no network |
+| `lynx host prepare --platform ios` | Expo host | Prepares only the selected platform locally |
+| `lynx host register` | Expo host | Registers both prepared platform runtimes |
+| `lynx host register --platform ios` | Expo host | Registers only the selected platform runtime |
 | `lynx host prepare --register` | Expo host / CI | Prepares, then registers |
 | `lynx release` | Mini app | Builds, reserves, uploads, and verifies a candidate |
 | `lynx release --draft` | Mini app | None |
@@ -19,10 +22,12 @@ variables win over file values.
 | `lynx doctor` | Any workspace | Local read-only checks |
 | `lynx doctor --remote` | Any workspace | Local checks plus Worker reachability |
 
-`host prepare` reads `app.json`, validates canonical delivery URLs against the
-embedded registry, and writes the prepared native runtime there. `host
-register` requires `LYNX_DELIVERY_SERVER` and `LYNX_DELIVERY_API_KEY`; it fails
-if the project changed after preparation.
+`host embed` never calculates a native fingerprint and never creates platform
+directories. `host prepare` reads `app.json`, validates canonical delivery URLs
+against the embedded registry, and writes both platform runtimes there unless
+`--platform ios` or `--platform android` limits it.
+`host register` requires `LYNX_DELIVERY_SERVER` and
+`LYNX_DELIVERY_API_KEY`; it fails if the project changed after preparation.
 
 `release` reads `lynx-miniapp.config.ts`, `src/index.tsx`, and `lynx.config.ts`.
 It requires the Worker URL/API key and direct R2 S3 credentials. It never

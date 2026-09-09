@@ -33,9 +33,10 @@ ZIP.
 
 `enabled: false` stops new distribution; it never remotely deletes a verified
 release. During an App Store rollout, keep one deployment for each installed
-runtime. The Console scopes them by `(appId, feature, runtimeVersion)`.
-`runtimeVersion` is an internal opaque native-compatibility identity; Console
-users work with the human-readable **Current host build** instead.
+runtime. The Console scopes them by `(appId, feature, platform,
+runtimeVersion)`. `runtimeVersion` is an internal opaque native-compatibility
+identity. A bundle's **Active** label applies only to the platform/runtime
+selected in the Console.
 
 ```text
 Host v1 asks for runtime A → only A deployment can be returned

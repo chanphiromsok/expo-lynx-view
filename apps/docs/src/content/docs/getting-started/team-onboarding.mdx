@@ -1,0 +1,61 @@
+---
+title: Team onboarding
+description: Choose the one Expo Lynx workflow your team owns.
+---
+
+Do not give every developer the entire delivery setup. Expo Lynx has four
+small workflows:
+
+| Start here | You own | Continue with |
+| --- | --- | --- |
+| Mobile app | Render managed Lynx features in the Expo host | [Mobile app integration](/managed-delivery/host-app-integration/) |
+| Mobile CLI | Embed baselines and register native host runtimes | [Mobile CLI](/reference/mobile-cli/) |
+| Mini-app CLI | Build and upload an independent Lynx release | [Mini-app CLI](/managed-delivery/mini-app-integration/) |
+| Worker / Console | Provision Cloudflare and select deployments | [Worker and Console](/managed-delivery/cloudflare-worker/) |
+
+Commands below use Yarn. With pnpm, replace `yarn lynx` with `pnpm exec
+lynx`.
+
+## How the pieces connect
+
+```text
+Worker / Console creates IDs and deployment scopes
+                     ↓
+Mobile CLI embeds + registers the host runtime
+                     ↓
+Mobile app ships the embedded fallback
+                     ↓
+Mini-app CLI uploads one platform-neutral ZIP
+                     ↓
+Console selects/enables that ZIP for a platform + runtime
+```
+
+The release ZIP is shared by iOS and Android. Distribution is scoped by
+`(appId, feature, platform, runtimeVersion)`, so **Active** always means active
+for the platform/runtime currently selected in Console—not globally active.
+
+## Credential boundaries
+
+| Team | Give them | Keep away from them |
+| --- | --- | --- |
+| Mobile app / Mobile CLI | `LYNX_DELIVERY_SERVER`, `LYNX_DELIVERY_API_KEY`, mobile public key | R2 secret, signing private key, Console password |
+| Mini-app CLI | Worker URL/API key plus bucket-scoped R2 S3 credentials | Signing private key, Console password |
+| Worker / Console operator | Cloudflare access, Console password, signing key | Nothing outside the operator team |
+
+Keep all values in an ignored `.env.lynx` or your secret manager. Never commit
+the file or `.local-lynx-keys/updates.private.pem`.
+
+## First end-to-end check
+
+1. The Worker/Console operator creates the host app and mini-app IDs.
+2. The Mobile CLI team runs `host embed` and `host prepare --register`.
+3. The Mobile team builds and installs the host app.
+4. The Mini-app CLI team runs `release --draft`, then `release`.
+5. The operator selects the exact platform/runtime, chooses the bundle, and
+   enables it.
+6. The device reports `checking` → `pending`; reopen the mini app when force is
+   off, or expect `reloaded` when force is on.
+
+If a device reports `no-update` with revision 1, its platform/runtime has no
+matching deployment. Compare the runtime in the host's embedded
+`registry.json` with the Console scope before debugging R2.

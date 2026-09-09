@@ -73,16 +73,15 @@ pnpm lynx console
 # Terminal 2: Expo example app for device testing.
 pnpm start
 
-# Terminal 3: after changing apps/expo-lynx-example/features/delivery.
+# Terminal 3: from an independent mini-app repository after a source change.
 # Builds, packages, and uploads. Then select and enable it in the console.
-pnpm lynx release delivery
+pnpm exec lynx release
 ```
 
-`pnpm lynx release delivery` generates an immutable release ID and a display
-version automatically. It reads the local delivery API key from the ignored
-`apps/console/.dev.vars` file and targets `http://127.0.0.1:8787` by default.
-Use `--draft` to package without publishing. A changed embedded public key or
-app endpoint requires a new native binary; a later `lynx release` does not.
+`lynx release` reads `lynx-miniapp.config.ts` and the nearest ignored
+`.env.lynx`. Use `--draft` to package without publishing. A changed embedded
+public key or app endpoint requires a new native binary; a later release does
+not.
 
 ## Publish the module and CLI
 
@@ -134,11 +133,8 @@ each mini-app repository, and check the configuration:
 ```sh
 pnpm exec lynx keys generate
 pnpm exec lynx doctor --platform ios
-pnpm exec lynx host embed ../merchant-home --platform ios
-pnpm exec lynx host prepare --platform ios
-pnpm exec lynx doctor --platform android
-pnpm exec lynx host embed ../merchant-home --platform android
-pnpm exec lynx host prepare --platform android
+pnpm exec lynx host embed ../merchant-home
+pnpm exec lynx host prepare
 ```
 
 In the independent Lynx mini-app repository, install the CLI as a development
@@ -157,26 +153,39 @@ export default defineMiniApp({
 });
 ```
 
-Then package a platform-specific release without contacting the Worker:
+Then package one platform-neutral release without contacting the Worker:
 
 ```sh
 pnpm exec lynx doctor
-pnpm exec lynx release --platform ios --draft
-pnpm exec lynx release --platform android --draft
+pnpm exec lynx release --draft
 ```
 
 The mini app needs `src/index.tsx` and `lynx.config.ts`. Its draft contains
 only `release.json` and `release.zip`; the uploaded release is later enabled
 from the Console.
 
-`generated/expo-lynx/embedded` is host build input, not a Metro asset. Android
-uses `generated/expo-lynx/embedded/android`; iOS uses its existing root
-baseline until `generated/expo-lynx/embedded/ios` exists. A host
-native-release pipeline must receive the matching initial mini-app baseline
-before prebuild. `lynx host embed <mini-app-directory>` builds one independent
-mini app and writes its `main.lynx.bundle`, `static/**`, `baseline.json`, and
-the registry entry into the host's configured `embeddedBundlesPath`. Run it
-once for every configured feature before `lynx host prepare`.
+`generated/expo-lynx/embedded` is host build input, not a Metro asset. iOS and
+Android copy the same platform-neutral mini-app tree. Platform-specific native
+fingerprints live only in `registry.json`. A host native-release pipeline must
+receive the matching initial mini-app baseline before prebuild. `lynx host
+embed <mini-app-directory>` builds one independent mini app and writes its
+`main.lynx.bundle`, `static/**`, `baseline.json`, and registry entry. Run it
+once for every configured feature, then run `lynx host prepare`. With no
+`--platform`, prepare writes both iOS and Android runtime records; pass the flag
+when building only one platform.
+
+Run the cross-package contract harness after changing the embedded schema,
+host commands, mini-app release command, Expo plugin, mobile delivery metadata,
+or Worker API:
+
+```sh
+pnpm test:delivery-contract
+```
+
+It covers `lynx release --draft`, registration/direct R2 upload, host
+embed/prepare/register, Expo native metadata, and both Worker APIs. It uses
+temporary files only and does not run Expo prebuild, Xcode, Gradle, a simulator,
+or a native build.
 
 ## Generate the signing PEM key pair
 
@@ -251,20 +260,20 @@ is an explicit requirement.
 
 The embedded bundle remains the offline fallback. A remote release is a new
 immutable `release.zip`; creating one does not rebuild React Native or iOS.
-For local testing, start the Console and Expo app, then build/upload:
+For local testing, start the Console and Expo app, then build/upload from the
+independent mini-app repository:
 
 ```sh
 pnpm lynx console
 pnpm start
-pnpm lynx release delivery
+cd ../mart
+pnpm exec lynx release
 ```
 
-`pnpm lynx bundle <feature>` calculates an Expo native fingerprint and writes
-it to the embedded registry. `pnpm lynx release <feature>` reads that recorded
-fingerprint; it never recalculates from a potentially changed working tree.
-After a native dependency, plugin, Pod, Swift, Kotlin, or embedded-baseline
-change, run `pnpm lynx bundle <feature>`, then deliberately prebuild and ship a
-new host binary before uploading releases for that runtime.
+`lynx release` never calculates or accepts a native fingerprint. The host team
+owns that boundary with `lynx host prepare --register`; after a native
+dependency, plugin, Pod, Swift, Kotlin, or embedded-baseline change, prepare a
+new host runtime and ship its native binary before enabling releases for it.
 
 For Cloudflare setup, run `lynx keys generate` and `lynx console setup` from
 the Expo host app—not from this library repository. The CLI packages the
@@ -315,12 +324,13 @@ installation time and opens it on the next mini-app launch.
 
 ## Runtime-safe native updates
 
-Each deployment is scoped by `(appId, feature, runtimeVersion)`. The app sends
+Each deployment is scoped by `(appId, feature, platform, runtimeVersion)`. The app sends
 its build-time fingerprint in `lynx-runtime-version`; the Worker returns only
 that runtime's signed selection. An App Store update with a different
 fingerprint therefore starts its new embedded baseline, never an incompatible
-cached remote bundle. The console lets you select each compatible runtime
-separately during an App Store rollout.
+cached remote bundle. Release ZIPs are shared by iOS and Android; the console
+lets you select or disable the same verified ZIP separately per platform and
+runtime during an App Store rollout.
 
 Older app binaries that do not send the header remain supported only while an
 app/feature has one unambiguous deployment. Once multiple native runtimes are

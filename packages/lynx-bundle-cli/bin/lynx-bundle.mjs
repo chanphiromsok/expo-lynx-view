@@ -40,7 +40,7 @@ function required(value, name) {
 
 async function main() {
   if (!command || command === '--help') {
-    process.stdout.write(`Usage:\n  lynx-bundle keys generate --output-dir directory\n  lynx-bundle build <feature> [--config file]\n  lynx-bundle build-embedded [feature...] --runtime-version version [--config file]\n  lynx-bundle check-embedded --runtime-version version [--config file]\n  lynx-bundle pack <feature> --release-id id --version version --platform ios|android --runtime-version version [--config file]\n`);
+    process.stdout.write(`Usage:\n  lynx-bundle keys generate --output-dir directory\n  lynx-bundle build <feature> [--config file]\n  lynx-bundle build-embedded [feature...] [--config file]\n  lynx-bundle check-embedded [--config file]\n  lynx-bundle pack <feature> --release-id id --version version [--config file]\n`);
     return;
   }
   if (command === 'keys' && positional()[0] === 'generate') {
@@ -59,11 +59,11 @@ async function main() {
   }
   if (command === 'build-embedded') {
     const features = positional();
-    writeResult(buildEmbedded(config, features, required(option('--runtime-version'), '--runtime-version')), option('--output'));
+    writeResult(buildEmbedded(config, features), option('--output'));
     return;
   }
   if (command === 'check-embedded') {
-    writeResult(checkEmbedded(config, required(option('--runtime-version'), '--runtime-version')), option('--output'));
+    writeResult(checkEmbedded(config), option('--output'));
     return;
   }
   if (command === 'pack') {
@@ -72,8 +72,6 @@ async function main() {
       featureId,
       releaseId: required(option('--release-id'), '--release-id'),
       version: required(option('--version'), '--version'),
-      platform: required(option('--platform'), '--platform'),
-      runtimeVersion: required(option('--runtime-version'), '--runtime-version'),
     }), option('--output'));
     return;
   }

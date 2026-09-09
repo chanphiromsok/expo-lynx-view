@@ -27,10 +27,8 @@ test('builds an independent mini app into the host embedded fallback tree', asyn
   const result = await embedMiniApp({
     cwd: root,
     miniAppDirectory: './mart',
-    runtimeFactory: async () => 'ios:runtime-a',
     buildFactory: (config, feature) => ({
       outputDirectory: output,
-      inputFingerprint: 'input-a',
       files: [
         { path: 'main.lynx.bundle', bytes: 6, sha256: 'a'.repeat(64), absolutePath: resolve(output, 'main.lynx.bundle') },
         { path: 'static/logo.png', bytes: 4, sha256: 'b'.repeat(64), absolutePath: resolve(output, 'static/logo.png') },
@@ -42,14 +40,22 @@ test('builds an independent mini app into the host embedded fallback tree', asyn
 
   const embedded = resolve(root, 'generated/expo-lynx/embedded');
   assert.deepEqual(result, {
-    appId: 'bs-one', feature: 'merchant-home', platform: 'ios', runtimeVersion: 'ios:runtime-a', embeddedRoot: embedded,
+    appId: 'bs-one', feature: 'merchant-home', embeddedRoot: embedded,
   });
   assert.equal(readFileSync(resolve(embedded, 'merchant-home/main.lynx.bundle'), 'utf8'), 'bundle');
   assert.deepEqual(JSON.parse(readFileSync(resolve(embedded, 'registry.json'), 'utf8')), {
-    schemaVersion: 1,
-    runtimeVersion: 'ios:runtime-a',
-    features: { 'merchant-home': { baseline: 'merchant-home/baseline.json', entry: 'merchant-home/main.lynx.bundle' } },
+    schemaVersion: 2,
+    features: { 'merchant-home': { baseline: 'merchant-home/baseline.json' } },
+    runtimes: {},
   });
-  assert.equal(JSON.parse(readFileSync(resolve(embedded, 'merchant-home/baseline.json'), 'utf8')).inputFingerprint, 'input-a');
+  assert.deepEqual(JSON.parse(readFileSync(resolve(embedded, 'merchant-home/baseline.json'), 'utf8')), {
+    schemaVersion: 2,
+    feature: 'merchant-home',
+    entry: 'main.lynx.bundle',
+    files: [
+      { path: 'main.lynx.bundle', bytes: 6, sha256: 'a'.repeat(64) },
+      { path: 'static/logo.png', bytes: 4, sha256: 'b'.repeat(64) },
+    ],
+  });
   assert.equal(existsSync(output), false);
 });

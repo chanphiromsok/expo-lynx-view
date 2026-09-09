@@ -7,6 +7,7 @@ import {
   getCurrentUser,
   getDeploymentOverview,
   getDeploymentScopes,
+  getMiniAppBundles,
   handleLocalUpload,
   login,
   logout,
@@ -16,20 +17,17 @@ import {
   type ControlEnv,
 } from '../worker/control-api.ts';
 import { hexToBase64, sha256Hex } from '../worker/protocol.ts';
-import type { MiniAppReleaseV2, ReleaseMetadata } from '../worker/schema.ts';
+import type { MiniAppRelease } from '../worker/schema.ts';
 
 type StoredBundle = {
   appId: string;
   id: string;
   featureId: string;
   version: string;
-  platform: string;
-  runtimeVersion: string;
+  archiveObjectKey: string;
   archiveSha256: string;
   archiveBytes: number;
   verifiedAt: string | null;
-  targetAppVersion: string | null;
-  targetBuildNumber: string | null;
   createdAt: string;
 };
 
@@ -148,7 +146,7 @@ function createDatabase() {
               }
               if (query.includes('from "bundles"')) {
                 if (query.includes('group by')) {
-                  return [...bundles.values()].map((bundle) => [bundle.appId, bundle.featureId, bundle.platform, bundle.runtimeVersion]);
+                  return [];
                 }
                 if (query.includes('"bundles"."id" = ?')) {
                   const bundle = bundles.get(bundleKey(String(values[0]), String(values[1])));
@@ -208,7 +206,7 @@ function createDatabase() {
               }
               if (query.includes('from "bundles"')) {
                 if (query.includes('group by')) {
-                  return [...bundles.values()].map((bundle) => [bundle.appId, bundle.featureId, bundle.platform, bundle.runtimeVersion]);
+                  return [];
                 }
                 const rows = query.includes('"bundles"."id" = ?')
                   ? [bundles.get(bundleKey(String(values[0]), String(values[1])))].filter(Boolean) as StoredBundle[]
@@ -218,13 +216,10 @@ function createDatabase() {
                   bundle.id,
                   bundle.featureId,
                   bundle.version,
-                  bundle.platform,
-                  bundle.runtimeVersion,
+                  bundle.archiveObjectKey,
                   bundle.archiveSha256,
                   bundle.archiveBytes,
                   bundle.verifiedAt,
-                  bundle.targetAppVersion,
-                  bundle.targetBuildNumber,
                   bundle.createdAt,
                 ]);
               }
@@ -273,14 +268,11 @@ function createDatabase() {
                   id,
                   featureId: String(values[2]),
                   version: String(values[3]),
-                  platform: String(values[4]),
-                  runtimeVersion: String(values[5]),
-                  archiveSha256: String(values[6]),
-                  archiveBytes: Number(values[7]),
-                  verifiedAt: values[8] === null ? null : String(values[8]),
-                  targetAppVersion: values[9] === null ? null : String(values[9]),
-                  targetBuildNumber: values[10] === null ? null : String(values[10]),
-                  createdAt: String(values[11]),
+                  archiveObjectKey: String(values[4]),
+                  archiveSha256: String(values[5]),
+                  archiveBytes: Number(values[6]),
+                  verifiedAt: values[7] === null ? null : String(values[7]),
+                  createdAt: String(values[8]),
                 });
                 return { meta: { changes: 1 } };
               }
@@ -352,14 +344,12 @@ function createDatabase() {
 }
 
 const archive = new Uint8Array([80, 75, 3, 4, 1, 2, 3, 4]);
-const release: ReleaseMetadata = {
-  schemaVersion: 1,
+const release: MiniAppRelease = {
+  schemaVersion: 3,
   appId: 'shop',
   feature: 'delivery',
   releaseId: 'delivery-20260901T011848990Z-ac8c0e',
   version: '2026.09.01',
-  platform: 'ios',
-  runtimeVersion: 'expo-57',
   archiveSha256: await sha256Hex(archive),
   archiveBytes: archive.byteLength,
 };
@@ -446,6 +436,26 @@ const sessionAuthorization = { Cookie: sessionCookie };
   assert.deepEqual(await response.json(), []);
 }
 
+assert.equal((await createApp(
+  environment,
+  new Request('http://127.0.0.1:8787/api/apps', { headers: sessionAuthorization }),
+  { id: 'shop', name: 'Shop' },
+)).status, 201);
+assert.equal((await createMiniApp(
+  environment,
+  new Request('http://127.0.0.1:8787/api/apps/shop/mini-apps', { headers: sessionAuthorization }),
+  'shop',
+  { id: 'delivery', name: 'Delivery' },
+)).status, 201);
+for (const platform of ['ios', 'android'] as const) {
+  assert.equal((await registerHostRuntime(
+    environment,
+    new Request('http://127.0.0.1:8787/api/apps/shop/runtime', { headers: apiKeyAuthorization }),
+    'shop',
+    { schemaVersion: 1, platform, runtimeVersion: `${platform}-runtime`, appVersion: '1.0.0', buildNumber: '1', features: ['delivery'] },
+  )).status, 200);
+}
+
 const registered = await registerUpload(
   environment,
   new Request('http://127.0.0.1:8787/api/uploads', { headers: apiKeyAuthorization }),
@@ -468,9 +478,8 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
       headers: registration.upload.headers,
       body: archive,
     }),
-    release.appId!,
+    release.appId,
     release.feature,
-    release.platform,
     release.releaseId,
   );
   assert.equal(response.status, 200);
@@ -496,7 +505,18 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     environment,
     new Request('http://127.0.0.1:8787/api/deployments', { headers: sessionAuthorization }),
   );
-  assert.deepEqual(await scopes.json(), [{ appId: 'shop', feature: 'delivery', platform: 'ios', runtimeVersion: 'expo-57' }]);
+  assert.deepEqual(await scopes.json(), [
+    { appId: 'shop', feature: 'delivery', platform: 'android', runtimeVersion: 'android-runtime' },
+    { appId: 'shop', feature: 'delivery', platform: 'ios', runtimeVersion: 'ios-runtime' },
+  ]);
+  const uploadedBundles = await getMiniAppBundles(
+    environment,
+    new Request('http://127.0.0.1:8787/api/apps/shop/mini-apps/delivery/bundles', { headers: sessionAuthorization }),
+    'shop',
+    'delivery',
+  );
+  assert.equal(uploadedBundles.status, 200);
+  assert.equal((await uploadedBundles.json() as Array<{ id: string }>)[0]?.id, release.releaseId);
 }
 
 {
@@ -507,9 +527,8 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
   );
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    schemaVersion: 2,
+    schemaVersion: 3,
     bundleId: 'delivery-unconfigured',
-    target: { appId: 'shop', feature: 'delivery', platform: 'ios', appVersion: null, buildNumber: null },
     complete: false,
     uploaded: false,
   });
@@ -518,100 +537,68 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
 {
   const promote = await updateDeployment(
     environment,
-    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-57', { headers: sessionAuthorization }),
-    release.appId!,
+    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=ios-runtime', { headers: sessionAuthorization }),
+    release.appId,
     'delivery',
     { bundleId: release.releaseId, force: false },
   );
   assert.equal(promote.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.revision, 1);
-  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.enabled, 0);
+  assert.equal(storage.deployments.get('shop/delivery/ios/ios-runtime')?.revision, 3);
+  assert.equal(storage.deployments.get('shop/delivery/ios/ios-runtime')?.enabled, 0);
 
   const enabled = await updateDeployment(
     environment,
-    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-57', { headers: sessionAuthorization }),
-    release.appId!,
+    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=ios-runtime', { headers: sessionAuthorization }),
+    release.appId,
     'delivery',
     { enabled: true },
   );
   assert.equal(enabled.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.revision, 2);
-  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.enabled, 1);
+  assert.equal(storage.deployments.get('shop/delivery/ios/ios-runtime')?.revision, 4);
+  assert.equal(storage.deployments.get('shop/delivery/ios/ios-runtime')?.enabled, 1);
 
   const noOp = await updateDeployment(
     environment,
-    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-57', { headers: sessionAuthorization }),
-    release.appId!,
+    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=ios-runtime', { headers: sessionAuthorization }),
+    release.appId,
     'delivery',
     { bundleId: release.releaseId, force: false },
   );
   assert.equal(noOp.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.revision, 2);
+  assert.equal(storage.deployments.get('shop/delivery/ios/ios-runtime')?.revision, 4);
 
   const forced = await updateDeployment(
     environment,
-    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-57', { headers: sessionAuthorization }),
-    release.appId!,
+    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=ios-runtime', { headers: sessionAuthorization }),
+    release.appId,
     'delivery',
     { bundleId: release.releaseId, force: true },
   );
   assert.equal(forced.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.revision, 3);
-  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.force, 1);
+  assert.equal(storage.deployments.get('shop/delivery/ios/ios-runtime')?.revision, 5);
+  assert.equal(storage.deployments.get('shop/delivery/ios/ios-runtime')?.force, 1);
 
   const disabled = await updateDeployment(
     environment,
-    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-57', { headers: sessionAuthorization }),
-    release.appId!,
+    new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=ios-runtime', { headers: sessionAuthorization }),
+    release.appId,
     'delivery',
     { enabled: false },
   );
   assert.equal(disabled.status, 200);
-  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.bundleId, release.releaseId);
-  assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.force, 0);
+  assert.equal(storage.deployments.get('shop/delivery/ios/ios-runtime')?.bundleId, release.releaseId);
+  assert.equal(storage.deployments.get('shop/delivery/ios/ios-runtime')?.force, 0);
 }
 
-const alternateRuntimeRelease: ReleaseMetadata = {
-  ...release,
-  releaseId: 'delivery-20260902T000000000Z-runtime2',
-  runtimeVersion: 'expo-fingerprint-2',
-};
-const alternateRegistered = await registerUpload(
-  environment,
-  new Request('http://127.0.0.1:8787/api/uploads', { headers: apiKeyAuthorization }),
-  alternateRuntimeRelease,
-);
-const alternateRegistration = await alternateRegistered.json() as {
-  upload: { url: string; headers: Record<string, string> };
-};
-assert.equal(alternateRegistered.status, 200);
-assert.equal((await handleLocalUpload(
-  environment,
-  new Request(alternateRegistration.upload.url, {
-    method: 'PUT',
-    headers: alternateRegistration.upload.headers,
-    body: archive,
-  }),
-  alternateRuntimeRelease.appId!,
-  alternateRuntimeRelease.feature,
-  alternateRuntimeRelease.platform,
-  alternateRuntimeRelease.releaseId,
-)).status, 200);
-assert.equal((await completeUpload(
-  environment,
-  new Request(`http://127.0.0.1:8787/api/uploads/${alternateRuntimeRelease.releaseId}/complete`, { headers: apiKeyAuthorization }),
-  alternateRuntimeRelease.releaseId,
-  alternateRuntimeRelease,
-)).status, 201);
 assert.equal((await updateDeployment(
   environment,
-  new Request('http://127.0.0.1:8787/api/deploy/delivery?runtimeVersion=expo-fingerprint-2', { headers: sessionAuthorization }),
-  alternateRuntimeRelease.appId!,
-  alternateRuntimeRelease.feature,
-  { bundleId: alternateRuntimeRelease.releaseId, force: false },
+  new Request('http://127.0.0.1:8787/api/deploy/delivery?platform=android&runtimeVersion=android-runtime', { headers: sessionAuthorization }),
+  release.appId,
+  release.feature,
+  { bundleId: release.releaseId, force: false },
 )).status, 200);
-assert.equal(storage.deployments.get('shop/delivery/ios/expo-57')?.bundleId, release.releaseId);
-assert.equal(storage.deployments.get('shop/delivery/ios/expo-fingerprint-2')?.bundleId, alternateRuntimeRelease.releaseId);
+assert.equal(storage.deployments.get('shop/delivery/ios/ios-runtime')?.bundleId, release.releaseId);
+assert.equal(storage.deployments.get('shop/delivery/android/android-runtime')?.bundleId, release.releaseId);
 
 {
   const createdApp = await createApp(
@@ -636,11 +623,10 @@ assert.equal(storage.deployments.get('shop/delivery/ios/expo-fingerprint-2')?.bu
   assert.equal(runtimeA.status, 200);
   assert.equal(storage.deployments.get('bs-one/merchant-home/ios/runtime-a')?.revision, 2);
 
-  const independentRelease: MiniAppReleaseV2 = {
-    schemaVersion: 2,
+  const independentRelease: MiniAppRelease = {
+    schemaVersion: 3,
     appId: 'bs-one',
     feature: 'merchant-home',
-    platform: 'ios',
     releaseId: 'merchant-home-20260905T120000Z-a1b2c3',
     version: '2026.09.05',
     archiveSha256: release.archiveSha256,
@@ -648,20 +634,17 @@ assert.equal(storage.deployments.get('shop/delivery/ios/expo-fingerprint-2')?.bu
   };
   const reserved = await registerUpload(
     { ...environment, LOCAL_UPLOADS: undefined },
-    new Request('https://delivery.example/api/uploads', {
-      headers: { ...apiKeyAuthorization, 'lynx-expected-host-build': '42' },
-    }),
+    new Request('https://delivery.example/api/uploads', { headers: apiKeyAuthorization }),
     independentRelease,
   );
   assert.equal(reserved.status, 200);
   assert.deepEqual(await reserved.json(), {
-    schemaVersion: 2,
+    schemaVersion: 3,
     bundleId: independentRelease.releaseId,
-    target: { appId: 'bs-one', feature: 'merchant-home', platform: 'ios', appVersion: '1.2.0', buildNumber: '42' },
     complete: false,
     uploaded: false,
   });
-  assert.equal(storage.bundles.get('bs-one/merchant-home-20260905T120000Z-a1b2c3')?.runtimeVersion, 'runtime-a');
+  assert.equal(storage.bundles.get('bs-one/merchant-home-20260905T120000Z-a1b2c3')?.archiveObjectKey, 'bs-one/merchant-home/releases/merchant-home-20260905T120000Z-a1b2c3/release.zip');
 
   const runtimeB = await registerHostRuntime(
     environment,
@@ -676,7 +659,7 @@ assert.equal(storage.deployments.get('shop/delivery/ios/expo-fingerprint-2')?.bu
     independentRelease,
   );
   assert.equal(retried.status, 200);
-  assert.equal(storage.bundles.get('bs-one/merchant-home-20260905T120000Z-a1b2c3')?.runtimeVersion, 'runtime-a');
+  assert.equal(storage.bundles.get('bs-one/merchant-home-20260905T120000Z-a1b2c3')?.archiveObjectKey, 'bs-one/merchant-home/releases/merchant-home-20260905T120000Z-a1b2c3/release.zip');
   const rejectedUnknownMiniApp = await registerUpload(
     environment,
     new Request('http://127.0.0.1:8787/api/uploads', { headers: apiKeyAuthorization }),

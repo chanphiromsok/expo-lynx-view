@@ -87,8 +87,8 @@ Provide commands equivalent to:
 
 ```text
 lynx-bundle build <feature>
-lynx-bundle build-embedded [feature...] --runtime-version <version>
-lynx-bundle check-embedded --runtime-version <version>
+lynx-bundle build-embedded [feature...]
+lynx-bundle check-embedded
 lynx-bundle pack <feature> --release-id <id> --version <version> \
   --platform ios --runtime-version <version>
 lynx-bundle keys generate --output-dir <directory>
@@ -130,21 +130,22 @@ Generate outside Expo normal assets:
 Normative metadata:
 
 ```ts
-type EmbeddedRegistryV1 = {
-  schemaVersion: 1;
-  runtimeVersion: string;
+type EmbeddedRegistryV2 = {
+  schemaVersion: 2;
   features: Record<string, {
     baseline: string;
-    entry: string;
   }>;
+  runtimes: Partial<Record<'ios' | 'android', {
+    runtimeVersion: string;
+    appVersion: string;
+    buildNumber: string;
+  }>>;
 };
 
-type EmbeddedBaselineV1 = {
-  schemaVersion: 1;
+type EmbeddedBaselineV2 = {
+  schemaVersion: 2;
   feature: string;
-  runtimeVersion: string;
   entry: 'main.lynx.bundle';
-  inputFingerprint: string;
   files: Array<{
     path: string;
     bytes: number;
@@ -154,14 +155,15 @@ type EmbeddedBaselineV1 = {
 ```
 
 Serialize feature keys and file lists lexicographically. File metadata covers
-runtime files and excludes `baseline.json` to avoid self-hashing. Registry paths
-are relative to the generated root; file paths are relative to the feature
-directory. Reject URLs, absolute paths, traversal, symlinks, undeclared files,
-and missing entries.
+runtime files and excludes `baseline.json` to avoid self-hashing. `host embed`
+updates only `features`; `host prepare` updates only the selected platform in
+`runtimes`. Registry paths are relative to the generated root; file paths are
+relative to the feature directory. Reject URLs, absolute paths, traversal,
+symlinks, undeclared files, and missing entries.
 
 Build and validate the complete new tree, then atomically replace the whole
-`embeddedOutputDir`. `check-embedded` recomputes source/config fingerprints and
-fails on stale, missing, mixed, malformed, or wrong-runtime output.
+`embeddedOutputDir`. `check-embedded` verifies declared file hashes and fails
+on stale, missing, mixed, or malformed output.
 
 ## Phase C — Deterministic remote ZIP
 

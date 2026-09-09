@@ -10,23 +10,11 @@ import { uploadRelease } from '../src/release-upload.mjs';
 const archive = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const archiveSha256 = createHash('sha256').update(archive).digest('hex');
 const release = {
-  schemaVersion: 1,
+  schemaVersion: 3,
+  appId: 'bs-one',
   feature: 'delivery',
   releaseId: 'delivery-20260901T011848990Z-ac8c0e',
   version: '2026.09.01',
-  platform: 'ios',
-  runtimeVersion: 'expo-57',
-  archiveSha256,
-  archiveBytes: archive.byteLength,
-};
-
-const miniAppRelease = {
-  schemaVersion: 2,
-  appId: 'bs-one',
-  feature: 'merchant-home',
-  releaseId: 'merchant-home-20260905T120000Z-a1b2c3',
-  version: '2026.09.05',
-  platform: 'ios',
   archiveSha256,
   archiveBytes: archive.byteLength,
 };
@@ -37,55 +25,6 @@ function temporaryRelease() {
   writeFileSync(resolve(directory, 'release.zip'), archive);
   return directory;
 }
-
-function temporaryMiniAppRelease() {
-  const directory = mkdtempSync(resolve(tmpdir(), 'lynx-mini-app-release-upload-'));
-  writeFileSync(resolve(directory, 'release.json'), `${JSON.stringify(miniAppRelease)}\n`);
-  writeFileSync(resolve(directory, 'release.zip'), archive);
-  return directory;
-}
-
-test('v2 upload leaves runtime ownership with the Worker and checks the target build', async () => {
-  const directory = temporaryMiniAppRelease();
-  let confirmation;
-  const result = await uploadRelease({
-    releaseDirectory: directory,
-    server: 'https://delivery.example',
-    apiKey: 'lynx_live_test_key',
-    expectedHostBuild: '42',
-    confirmTarget: async (target) => { confirmation = target; },
-    fetchImpl: async (input, init = {}) => {
-      const url = String(input);
-      if (url.endsWith('/api/uploads')) {
-        assert.equal(init.headers['lynx-expected-host-build'], '42');
-        assert.equal('runtimeVersion' in JSON.parse(init.body), false);
-        return response({ bundleId: miniAppRelease.releaseId, complete: false, uploaded: false, target: { appId: 'bs-one', feature: 'merchant-home', appVersion: '1.2.0', buildNumber: '42' } });
-      }
-      return response({ bundle: { id: miniAppRelease.releaseId, version: miniAppRelease.version, archiveSha256, archiveBytes: archive.byteLength }, created: true }, 201);
-    },
-    r2: { accountId: 'account', bucketName: 'bundles', accessKeyId: 'key', secretAccessKey: 'secret' },
-    r2FetchImpl: async (input) => {
-      assert.equal(String(input), `https://account.r2.cloudflarestorage.com/bundles/bs-one/merchant-home/ios/releases/${miniAppRelease.releaseId}/release.zip`);
-      return new Response(null, { status: 200 });
-    },
-  });
-  assert.deepEqual(confirmation, { appId: 'bs-one', feature: 'merchant-home', appVersion: '1.2.0', buildNumber: '42' });
-  assert.deepEqual(result.target, confirmation);
-});
-
-test('v2 draft upload requires an expected host build when it cannot ask', async () => {
-  let called = false;
-  await assert.rejects(
-    uploadRelease({
-      releaseDirectory: temporaryMiniAppRelease(),
-      server: 'https://delivery.example',
-      apiKey: 'lynx_live_test_key',
-      fetchImpl: async () => { called = true; return response({}); },
-    }),
-    /Non-interactive v2 upload requires --host-build/,
-  );
-  assert.equal(called, false);
-});
 
 function response(value, status = 200) {
   return Response.json(value, { status });
@@ -111,7 +50,7 @@ test('registers, sends the ZIP directly to R2, and completes the release', async
       assert.equal(init.method, 'POST');
       assert.equal(init.headers.Authorization, 'Bearer lynx_live_test_key');
       assert.deepEqual(JSON.parse(init.body), release);
-      return response({ bundle: { id: release.releaseId, version: release.version, runtimeVersion: release.runtimeVersion, archiveSha256, archiveBytes: archive.byteLength }, created: true }, 201);
+      return response({ bundle: { id: release.releaseId, version: release.version, archiveSha256, archiveBytes: archive.byteLength }, created: true }, 201);
     }
     throw new Error(`Unexpected request: ${url}`);
   };
@@ -125,7 +64,7 @@ test('registers, sends the ZIP directly to R2, and completes the release', async
     r2FetchImpl: async (input, init = {}) => {
       const url = String(input);
       calls.push({ url, init });
-      assert.equal(url, `https://account.r2.cloudflarestorage.com/bundles/default/delivery/ios/releases/${release.releaseId}/release.zip`);
+      assert.equal(url, `https://account.r2.cloudflarestorage.com/bundles/bs-one/delivery/releases/${release.releaseId}/release.zip`);
       assert.equal(init.method, 'PUT');
       assert.deepEqual(init.headers, {
         'content-type': 'application/zip',
@@ -139,13 +78,13 @@ test('registers, sends the ZIP directly to R2, and completes the release', async
   });
 
   assert.deepEqual(result, {
-    bundle: { id: release.releaseId, version: release.version, runtimeVersion: release.runtimeVersion, archiveSha256, archiveBytes: archive.byteLength },
+    bundle: { id: release.releaseId, version: release.version, archiveSha256, archiveBytes: archive.byteLength },
     created: true,
     alreadyComplete: false,
   });
   assert.deepEqual(calls.map(({ url }) => url), [
     'https://delivery.example/api/uploads',
-    `https://account.r2.cloudflarestorage.com/bundles/default/delivery/ios/releases/${release.releaseId}/release.zip`,
+    `https://account.r2.cloudflarestorage.com/bundles/bs-one/delivery/releases/${release.releaseId}/release.zip`,
     `https://delivery.example/api/uploads/${release.releaseId}/complete`,
   ]);
 });
@@ -163,7 +102,7 @@ test('skips PUT and completion when the Worker already registered matching metad
     },
   });
   assert.deepEqual(result, {
-    bundle: { id: release.releaseId, version: release.version, runtimeVersion: release.runtimeVersion },
+    bundle: { id: release.releaseId, version: release.version },
     created: false,
     alreadyComplete: true,
   });
@@ -183,7 +122,7 @@ test('skips PUT when a prior interrupted run already uploaded the matching ZIP',
       if (url.endsWith('/api/uploads')) {
         return response({ bundleId: release.releaseId, complete: false, uploaded: true });
       }
-      return response({ bundle: { id: release.releaseId, version: release.version, runtimeVersion: release.runtimeVersion, archiveSha256, archiveBytes: archive.byteLength }, created: true }, 201);
+      return response({ bundle: { id: release.releaseId, version: release.version, archiveSha256, archiveBytes: archive.byteLength }, created: true }, 201);
     },
   });
   assert.equal(result.created, true);

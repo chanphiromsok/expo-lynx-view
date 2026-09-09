@@ -1,5 +1,5 @@
 ---
-title: Cloudflare Worker and data plane
+title: Worker and Console
 description: One Worker, D1 database, and R2 bucket for all host apps and mini-app features.
 ---
 
@@ -7,7 +7,7 @@ The Console ships one TanStack console and one Elysia Cloudflare Worker. It
 serves many host apps and mini apps:
 
 ```text
-appId + feature + runtimeVersion → selected immutable bundle
+appId + feature + platform + runtimeVersion → selected immutable bundle
 ```
 
 ## First-time Cloudflare setup
@@ -21,7 +21,7 @@ organization. That Worker can serve many host apps and mini apps. In the
 Console, create the identity hierarchy before either team releases:
 
 ```text
-Apps → BS One → Merchant Home → Current host build → Bundles
+Apps → BS One → Merchant Home → platform/runtime → Bundles
 ```
 
 App and mini-app IDs are immutable. Upload typos are rejected instead of
@@ -112,9 +112,8 @@ binary because the endpoint is a native configuration value:
 After one-time setup, each team uses its own workflow:
 
 ```sh
-# Expo host: prepare locally, build native app, then register
-pnpm lynx host prepare
-pnpm lynx host register
+# Expo host: prepare/register, then build the native app
+pnpm lynx host prepare --register
 
 # independent mini app: build and upload
 pnpm lynx release
@@ -127,7 +126,7 @@ The CLI upload itself does not enable a release.
 | D1 table | Purpose |
 | --- | --- |
 | `apps` / `mini_apps` | Allow-listed host and mini-app identities. |
-| `bundles` | Immutable verified ZIP metadata, pinned to the Current host build at reservation. |
+| `bundles` | Immutable verified, platform-neutral ZIP metadata. |
 | `deployments` | Selected bundle, enabled state, force flag, and revision for one runtime scope. |
 | `users` | Console username/password and hashed CLI API key. |
 

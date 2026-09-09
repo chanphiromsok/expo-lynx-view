@@ -50,6 +50,7 @@ import {
   type RegisteredApp,
   type UpdateDeployment,
 } from './delivery-api';
+import { MiniAppConfigCards } from './MiniAppConfigCards';
 
 const identifier = /^[a-z][a-z0-9-]{0,63}$/;
 
@@ -458,6 +459,7 @@ function AppDetailsScreen({
 
 function EmptyMiniAppBundlesScreen({
   app,
+  bundles,
   miniApp,
   onManageApps,
   onOpenApp,
@@ -465,6 +467,7 @@ function EmptyMiniAppBundlesScreen({
   username,
 }: {
   app: RegisteredApp;
+  bundles: Bundle[];
   miniApp: RegisteredApp['miniApps'][number];
   onManageApps: () => void;
   onOpenApp: () => void;
@@ -482,12 +485,22 @@ function EmptyMiniAppBundlesScreen({
           <p className="mt-2 font-mono text-xs text-muted-foreground">{miniApp.id}</p>
           <Card className="mt-7 max-w-2xl shadow-sm">
             <CardHeader>
-              <CardTitle>No bundles yet</CardTitle>
+              <CardTitle>{bundles.length > 0 ? 'Bundle uploaded — host build needed' : 'No verified bundles yet'}</CardTitle>
               <CardDescription>
-                This mini app has no registered host build, so compatible bundles cannot be uploaded yet.
+                {bundles.length > 0
+                  ? 'Register an iOS or Android host build before selecting and enabling one of these bundles for devices.'
+                  : 'Upload a release with the CLI, then register an iOS or Android host build before selecting it for devices.'}
               </CardDescription>
             </CardHeader>
           </Card>
+          {bundles.length > 0 ? (
+            <div className="mt-4 max-w-5xl">
+              <BundleTable bundles={bundles} selectedId={null} />
+            </div>
+          ) : null}
+          <div className="mt-4 max-w-5xl">
+            <MiniAppConfigCards appId={app.id} feature={miniApp.id} />
+          </div>
         </section>
       </div>
     </main>
@@ -673,7 +686,7 @@ function BundleTable({
 }: {
   bundles: Bundle[];
   selectedId: string | null;
-  onSelect: (bundle: Bundle) => void;
+  onSelect?: (bundle: Bundle) => void;
 }) {
   return (
     <Card className="min-h-[28rem] shadow-sm">
@@ -701,7 +714,7 @@ function BundleTable({
                 <TableHead>Status</TableHead>
                 <TableHead className="hidden md:table-cell">Archive</TableHead>
                 <TableHead className="hidden lg:table-cell">Created</TableHead>
-                <TableHead className="w-36 text-right">Action</TableHead>
+                {onSelect ? <TableHead className="w-36 text-right">Action</TableHead> : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -735,19 +748,17 @@ function BundleTable({
                   <TableCell className="hidden text-muted-foreground lg:table-cell">
                     {formatDate(bundle.createdAt)}
                   </TableCell>
-                  <TableCell className="pr-4 text-right">
-                    {bundle.id === selectedId ? (
-                      <Badge variant="outline">Selected</Badge>
-                    ) : (
-                      <Button
-                        onClick={() => onSelect(bundle)}
-                        size="sm"
-                        variant="outline"
-                      >
-                        Select
-                      </Button>
-                    )}
-                  </TableCell>
+                  {onSelect ? (
+                    <TableCell className="pr-4 text-right">
+                      {bundle.id === selectedId ? (
+                        <Badge variant="outline">Selected</Badge>
+                      ) : (
+                        <Button onClick={() => onSelect(bundle)} size="sm" variant="outline">
+                          Select
+                        </Button>
+                      )}
+                    </TableCell>
+                  ) : null}
                 </TableRow>
               ))}
             </TableBody>
@@ -960,6 +971,12 @@ export function DeliveryConsoleDashboard({
     enabled: Boolean(sessionQuery.data && selectedMiniApp && selectedScope.runtimeVersion),
     retry: false,
   });
+  const uploadedBundlesQuery = useQuery({
+    queryKey: deliveryQueryKeys.bundles(selectedAppId, routeMiniAppId ?? '', sessionRevision),
+    queryFn: () => deliveryApi.getMiniAppBundles(selectedAppId, routeMiniAppId ?? ''),
+    enabled: Boolean(sessionQuery.data && selectedMiniApp && routeMiniAppId && selectedMiniScopes.length === 0),
+    retry: false,
+  });
   const loginMutation = useMutation({
     mutationFn: () => deliveryApi.login(username.trim(), password),
     onSuccess: (session) => {
@@ -1054,6 +1071,7 @@ export function DeliveryConsoleDashboard({
   function refresh() {
     void scopesQuery.refetch();
     if (selectedScope.runtimeVersion) void overviewQuery.refetch();
+    if (selectedMiniScopes.length === 0) void uploadedBundlesQuery.refetch();
   }
 
   if (sessionQuery.isPending)
@@ -1121,9 +1139,26 @@ export function DeliveryConsoleDashboard({
       />
     );
   if (selectedMiniScopes.length === 0)
+    if (uploadedBundlesQuery.isPending)
+      return (
+        <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground">
+          <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />
+          Loading uploaded bundles…
+        </main>
+      );
+    else if (uploadedBundlesQuery.isError)
+      return (
+        <FailureScreen
+          error={uploadedBundlesQuery.error}
+          onSignOut={() => logoutMutation.mutate()}
+          onRetry={() => void uploadedBundlesQuery.refetch()}
+        />
+      );
+    else
     return (
       <EmptyMiniAppBundlesScreen
         app={selectedApp}
+        bundles={uploadedBundlesQuery.data ?? []}
         miniApp={selectedMiniApp}
         onManageApps={openApps}
         onOpenApp={() => openApp(selectedApp.id)}
@@ -1196,6 +1231,9 @@ export function DeliveryConsoleDashboard({
             scopes={selectedMiniScopes}
             selectedScope={currentScope}
           />
+          <div className="mx-auto mt-6 max-w-7xl px-4 sm:px-7">
+            <MiniAppConfigCards appId={selectedApp.id} feature={selectedMiniApp.id} />
+          </div>
           <ConsoleContent
             appId={selectedScope.appId}
             feature={selectedScope.feature}

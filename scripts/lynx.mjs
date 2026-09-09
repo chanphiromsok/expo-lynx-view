@@ -11,11 +11,7 @@ import { dirname, relative, resolve } from 'node:path';
 import { loadEnvFile } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import {
-  createNativeRuntimeVersion,
-  loadConfigAsync,
-  readEmbeddedRuntimeVersion,
-} from '../packages/lynx-bundle-cli/src/index.mjs';
+import { loadConfigAsync } from '../packages/lynx-bundle-cli/src/index.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const exampleRoot = resolve(repositoryRoot, 'apps/expo-lynx-example');
@@ -238,11 +234,10 @@ async function initProject(options) {
   } else if (dryRun) {
     process.stdout.write(`Would build the embedded baseline from ${paths.configPath}\n`);
   } else {
-    const runtimeVersion = await createNativeRuntimeVersion(paths.appRoot);
-    run(process.execPath, [bundleCli, 'build-embedded', '--config', paths.configPath, '--runtime-version', runtimeVersion]);
+    run(process.execPath, [bundleCli, 'build-embedded', '--config', paths.configPath]);
     process.stdout.write(`Built embedded baselines at ${paths.bundle.embeddedOutputDir}\n`);
   }
-  process.stdout.write(`\nNext required native step:\n  cd ${relative(repositoryRoot, paths.appRoot)} && pnpm exec expo prebuild --platform ios\n`);
+  process.stdout.write(`\nNext required native step:\n  cd ${relative(repositoryRoot, paths.appRoot)} && pnpm exec lynx host prepare --platform ios\n`);
   process.stdout.write('Then install one new iOS development build. Cloudflare provisioning and Worker deployment are not run by this command yet.\n');
 }
 
@@ -259,8 +254,7 @@ function startConsole() {
 }
 
 async function buildEmbedded(feature) {
-  const runtimeVersion = await createNativeRuntimeVersion(exampleRoot);
-  run(process.execPath, [bundleCli, 'build-embedded', feature, '--config', bundleConfigPath, '--runtime-version', runtimeVersion]);
+  run(process.execPath, [bundleCli, 'build-embedded', feature, '--config', bundleConfigPath]);
 }
 
 function configureLocalDeliveryUpload() {
@@ -277,11 +271,9 @@ async function release(feature, options) {
   }
   const releaseId = generatedReleaseId(feature);
   const version = generatedVersion();
-  const runtimeVersion = readEmbeddedRuntimeVersion(
-    await loadConfigAsync({ configPath: bundleConfigPath })
-  );
+  await loadConfigAsync({ configPath: bundleConfigPath });
   process.stdout.write(`Preparing ${feature}. Release identity is generated automatically.\n`);
-  run(process.execPath, [bundleCli, 'pack', feature, '--config', bundleConfigPath, '--release-id', releaseId, '--version', version, '--platform', 'ios', '--runtime-version', runtimeVersion]);
+  run(process.execPath, [bundleCli, 'pack', feature, '--config', bundleConfigPath, '--release-id', releaseId, '--version', version]);
   const releaseDirectory = resolve(exampleRoot, 'dist/lynx-releases', feature, releaseId);
   if (options.get('--draft')) {
     process.stdout.write(`Draft package ready: ${releaseDirectory}\n`);

@@ -32,7 +32,12 @@ with `LYNX_ALLOW_LOCAL_MANAGED_RELEASE=1`.
 ## A published update does not appear
 
 The Console must select and enable the uploaded bundle for the exact
-`(appId, feature, runtimeVersion)` scope. With force disabled, close and reopen
-the feature after it stages. If the app keeps its embedded baseline after a new
-native build, the host team should run `lynx host prepare`, build the archive,
-then run `lynx host register` before the mini-app team uploads.
+`(appId, feature, platform, runtimeVersion)` scope. **Active** means active only
+for the runtime currently selected in Console. With force disabled, close and
+reopen the feature after it stages.
+
+`no-update` at revision 1 means the Worker has no matching registered
+deployment for the runtime sent by that device. Compare the runtime in the
+host's embedded `registry.json` with the Console selection. The host team
+should run `lynx host prepare --register`, then build and install that exact
+host without changing native inputs in between.

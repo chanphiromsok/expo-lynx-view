@@ -29,17 +29,19 @@ test('resolves two canonical feature roots and builds an atomic embedded tree', 
   assert.equal(config.features.shopping.root, resolve(root, 'features/shopping'));
   assert.equal(config.features.orders.root, resolve(root, 'features/orders'));
 
-  const built = buildEmbedded(config, [], 'expo-57');
+  const built = buildEmbedded(config, []);
   assert.deepEqual(Object.keys(built.registry.features), ['orders', 'shopping']);
-  assert.deepEqual(checkEmbedded(config, 'expo-57').features, built.registry.features);
-  assert.equal(readEmbeddedRuntimeVersion(config), 'expo-57');
+  assert.deepEqual(checkEmbedded(config).features, built.registry.features);
+  built.registry.runtimes.ios = { runtimeVersion: 'ios:expo-57', appVersion: '1.0.0', buildNumber: '1' };
+  writeFileSync(resolve(root, 'generated/expo-lynx/embedded/registry.json'), JSON.stringify(built.registry));
+  assert.equal(readEmbeddedRuntimeVersion(config), 'ios:expo-57');
   assert.equal(
     readFileSync(resolve(root, 'generated/expo-lynx/embedded/shopping/main.lynx.bundle'), 'utf8').includes('shopping'),
     true
   );
 
-  writeFileSync(resolve(root, 'features/shopping/src/index.tsx'), "export const miniApp = 'shopping-v2';\n");
-  assert.throws(() => checkEmbedded(config, 'expo-57'), /stale/);
+  writeFileSync(resolve(root, 'generated/expo-lynx/embedded/shopping/main.lynx.bundle'), 'changed');
+  assert.throws(() => checkEmbedded(config), /stale/);
 });
 
 test('loads a TypeScript config through the public defineConfig helper shape', async () => {
@@ -81,7 +83,7 @@ test('rejects a feature-directory symlink that resolves outside the consuming re
   const originalFeatures = resolve(root, 'features');
   renameSync(originalFeatures, resolve(externalRoot, 'features'));
   symlinkSync(resolve(externalRoot, 'features'), originalFeatures, 'dir');
-  assert.throws(() => buildEmbedded(config, [], 'expo-57'), /resolves outside/);
+  assert.throws(() => buildEmbedded(config, []), /resolves outside/);
 });
 
 test('produces deterministic ZIP bytes and the minimal unsigned release metadata', async () => {
@@ -90,8 +92,6 @@ test('produces deterministic ZIP bytes and the minimal unsigned release metadata
     featureId: 'shopping',
     releaseId: 'shopping-2026.08.29.1',
     version: '2026.08.29.1',
-    platform: 'ios',
-    runtimeVersion: 'expo-57',
   };
   const first = packRelease(config, options);
   const firstZip = readFileSync(resolve(first.outputDirectory, 'release.zip'));
@@ -105,7 +105,7 @@ test('produces deterministic ZIP bytes and the minimal unsigned release metadata
   assert.deepEqual(readFileSync(resolve(second.outputDirectory, 'release.zip')), firstZip);
   assert.deepEqual(readFileSync(resolve(second.outputDirectory, 'release.json')), firstRelease);
   assert.deepEqual(Object.keys(JSON.parse(firstRelease)), [
-    'schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'platform', 'runtimeVersion', 'archiveSha256', 'archiveBytes',
+    'schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'archiveSha256', 'archiveBytes',
   ]);
   assert.equal(first.release.appId, 'default');
   assert.equal(existsSync(resolve(first.outputDirectory, 'release-envelope.json')), false);

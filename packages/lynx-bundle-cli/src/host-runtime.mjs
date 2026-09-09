@@ -8,18 +8,15 @@ export async function prepareHostRuntime({ cwd = process.cwd(), platform = 'ios'
   assertManagedPlatform(platform);
   const host = readHost(cwd, platform);
   const runtimeVersion = await runtimeFactory(host.root, platform);
-  const registryPath = embeddedRegistryPath(host, platform);
-  assertPlatformBaseline(registryPath, platform);
+  const registryPath = embeddedRegistryPath(host);
+  assertEmbeddedBaseline(registryPath);
   const registry = readJson(registryPath, 'Embedded registry');
   assertRegistry(registry, host.features);
-  registry.runtimeVersion = runtimeVersion;
-  for (const feature of host.features) {
-    const baselinePath = resolve(host.root, host.embeddedBundlesPath, registry.features[feature].baseline);
-    const baseline = readJson(baselinePath, `Embedded baseline ${feature}`);
-    if (baseline?.feature !== feature) throw new Error(`Embedded baseline is malformed for ${feature}.`);
-    baseline.runtimeVersion = runtimeVersion;
-    writeJsonAtomic(baselinePath, baseline);
-  }
+  registry.runtimes[platform] = {
+    runtimeVersion,
+    appVersion: host.appVersion,
+    buildNumber: host.buildNumber,
+  };
   writeJsonAtomic(registryPath, registry);
   return { ...host, platform, runtimeVersion };
 }
@@ -27,12 +24,16 @@ export async function prepareHostRuntime({ cwd = process.cwd(), platform = 'ios'
 export async function registerPreparedHostRuntime({ cwd = process.cwd(), platform = 'ios', server = process.env.LYNX_DELIVERY_SERVER, apiKey = process.env.LYNX_DELIVERY_API_KEY, fetchImpl = fetch, runtimeFactory = createNativeRuntimeVersion } = {}) {
   assertManagedPlatform(platform);
   const host = readHost(cwd, platform);
-  const registryPath = embeddedRegistryPath(host, platform);
-  assertPlatformBaseline(registryPath, platform);
+  const registryPath = embeddedRegistryPath(host);
+  assertEmbeddedBaseline(registryPath);
   const registry = readJson(registryPath, 'Embedded registry');
   assertRegistry(registry, host.features);
+  const prepared = registry.runtimes[platform];
+  if (!prepared || typeof prepared !== 'object') {
+    throw new Error(`The ${platform} host is not prepared. Run lynx host prepare --platform ${platform}.`);
+  }
   const actualRuntime = await runtimeFactory(host.root, platform);
-  if (registry.runtimeVersion !== actualRuntime) {
+  if (prepared.runtimeVersion !== actualRuntime || prepared.appVersion !== host.appVersion || prepared.buildNumber !== host.buildNumber) {
     throw new Error('The host project changed after lynx host prepare. Run lynx host prepare again before registering.');
   }
   if (typeof apiKey !== 'string' || apiKey.length === 0) throw new Error('A delivery API key is required. Set LYNX_DELIVERY_API_KEY.');
@@ -43,7 +44,7 @@ export async function registerPreparedHostRuntime({ cwd = process.cwd(), platfor
     body: JSON.stringify({
       schemaVersion: 1,
       platform,
-      runtimeVersion: registry.runtimeVersion,
+      runtimeVersion: prepared.runtimeVersion,
       appVersion: host.appVersion,
       buildNumber: host.buildNumber,
       features: host.features,
@@ -63,8 +64,8 @@ function assertManagedPlatform(platform) {
   if (platform !== 'ios' && platform !== 'android') throw new Error('platform must be ios or android.');
 }
 
-export function readHost(cwd = process.cwd(), platform = 'ios') {
-  assertManagedPlatform(platform);
+export function readHost(cwd = process.cwd(), platform) {
+  if (platform !== undefined) assertManagedPlatform(platform);
   const root = resolve(cwd);
   const app = loadExpoConfig(root);
   if (!app || typeof app !== 'object') throw new Error('Expo configuration must contain an object.');
@@ -75,8 +76,8 @@ export function readHost(cwd = process.cwd(), platform = 'ios') {
   if (!options || typeof options !== 'object' || typeof options.embeddedBundlesPath !== 'string' || !options.deliveryEndpoints || typeof options.deliveryEndpoints !== 'object') {
     throw new Error('Expo config must configure expo-lynx-view with embeddedBundlesPath and deliveryEndpoints.');
   }
-  const buildNumber = platform === 'ios' ? app.ios?.buildNumber : app.android?.versionCode;
-  if (typeof app.version !== 'string' || app.version.length === 0 || (typeof buildNumber !== 'string' && typeof buildNumber !== 'number') || String(buildNumber).length === 0) {
+  const buildNumber = platform === undefined ? undefined : platform === 'ios' ? app.ios?.buildNumber : app.android?.versionCode;
+  if (platform !== undefined && (typeof app.version !== 'string' || app.version.length === 0 || (typeof buildNumber !== 'string' && typeof buildNumber !== 'number') || String(buildNumber).length === 0)) {
     throw new Error(`Expo config must declare expo.version and expo.${platform === 'ios' ? 'ios.buildNumber' : 'android.versionCode'} before host preparation.`);
   }
   const entries = Object.entries(options.deliveryEndpoints);
@@ -92,8 +93,7 @@ export function readHost(cwd = process.cwd(), platform = 'ios') {
   return {
     root,
     appId: appIds[0],
-    appVersion: app.version,
-    buildNumber: String(buildNumber),
+    ...(platform === undefined ? {} : { appVersion: app.version, buildNumber: String(buildNumber) }),
     embeddedBundlesPath: options.embeddedBundlesPath,
     features: parsed.map(({ feature }) => feature).sort(),
     workerOrigin: origins[0],
@@ -111,32 +111,24 @@ function parseDeliveryEndpoint(value) {
 }
 
 function assertRegistry(registry, features) {
-  if (!registry || registry.schemaVersion !== 1 || !registry.features || typeof registry.features !== 'object') {
+  if (!registry || registry.schemaVersion !== 2 || !registry.features || typeof registry.features !== 'object' || !registry.runtimes || typeof registry.runtimes !== 'object') {
     throw new Error('Embedded registry is malformed. Build the embedded baseline first.');
   }
   const actual = Object.keys(registry.features).sort();
   if (JSON.stringify(actual) !== JSON.stringify(features)) throw new Error('Embedded registry features do not match deliveryEndpoints.');
   for (const feature of features) {
     const entry = registry.features[feature];
-    if (!entry || entry.baseline !== `${feature}/baseline.json`) throw new Error(`Embedded registry entry is invalid for ${feature}.`);
+    if (!entry || typeof entry !== 'object' || entry.baseline !== `${feature}/baseline.json` || Object.keys(entry).length !== 1) throw new Error(`Embedded registry entry is invalid for ${feature}.`);
   }
 }
 
-export function embeddedRootForPlatform(host, platform) {
-  const root = resolve(host.root, host.embeddedBundlesPath);
-  const platformRoot = resolve(root, platform);
-  // Keep existing iOS projects working. Android is always isolated because
-  // its native runtime fingerprint must never overwrite iOS metadata.
-  return platform === 'ios' && !existsSync(resolve(platformRoot, 'registry.json')) ? root : platformRoot;
+function embeddedRegistryPath(host) {
+  return resolve(host.root, host.embeddedBundlesPath, 'registry.json');
 }
 
-function embeddedRegistryPath(host, platform) {
-  return resolve(embeddedRootForPlatform(host, platform), 'registry.json');
-}
-
-function assertPlatformBaseline(registryPath, platform) {
+function assertEmbeddedBaseline(registryPath) {
   if (!existsSync(registryPath)) {
-    throw new Error(`No embedded ${platform} baseline exists. Run lynx host embed <mini-app-directory> --platform ${platform} first.`);
+    throw new Error('No embedded baseline exists. Run lynx host embed <mini-app-directory> first.');
   }
 }
 

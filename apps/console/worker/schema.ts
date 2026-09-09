@@ -31,35 +31,16 @@ export const LocalUploadParametersSchema = Type.Object({
 export const AppLocalUploadParametersSchema = Type.Object({
   appId: Type.String({ pattern: appPattern }),
   feature: Type.String({ pattern: featurePattern }),
-  platform: Type.String({ pattern: platformPattern }),
   bundleId: Type.String({ pattern: bundlePattern }),
 });
 
-export const ReleaseMetadataSchema = Type.Object(
+export const MiniAppReleaseSchema = Type.Object(
   {
-    schemaVersion: Type.Literal(1),
-    // Optional so packages built before multi-app support still upload into
-    // the default app during the development migration.
-    appId: Type.Optional(Type.String({ pattern: appPattern })),
-    feature: Type.String({ pattern: featurePattern }),
-    releaseId: Type.String({ pattern: bundlePattern }),
-    version: Type.String({ minLength: 1, maxLength: 128, pattern: '^[\\u0020-\\u007e]+$' }),
-    platform: Type.String({ pattern: platformPattern }),
-    runtimeVersion: Type.String({ minLength: 1, maxLength: 128, pattern: '^[\\u0020-\\u007e]+$' }),
-    archiveSha256: Type.String({ pattern: sha256Pattern }),
-    archiveBytes: Type.Integer({ minimum: 1, maximum: 64 * 1024 * 1024 }),
-  },
-  { additionalProperties: false },
-);
-
-export const MiniAppReleaseV2Schema = Type.Object(
-  {
-    schemaVersion: Type.Literal(2),
+    schemaVersion: Type.Literal(3),
     appId: Type.String({ pattern: appPattern }),
     feature: Type.String({ pattern: featurePattern }),
     releaseId: Type.String({ pattern: bundlePattern }),
     version: Type.String({ minLength: 1, maxLength: 128 }),
-    platform: Type.String({ pattern: platformPattern }),
     archiveSha256: Type.String({ pattern: sha256Pattern }),
     archiveBytes: Type.Integer({ minimum: 1, maximum: 64 * 1024 * 1024 }),
   },
@@ -120,8 +101,7 @@ export type AppParameters = Static<typeof AppParametersSchema>;
 export type BundleParameters = Static<typeof BundleParametersSchema>;
 export type LocalUploadParameters = Static<typeof LocalUploadParametersSchema>;
 export type AppLocalUploadParameters = Static<typeof AppLocalUploadParametersSchema>;
-export type ReleaseMetadata = Static<typeof ReleaseMetadataSchema>;
-export type MiniAppReleaseV2 = Static<typeof MiniAppReleaseV2Schema>;
+export type MiniAppRelease = Static<typeof MiniAppReleaseSchema>;
 export type AppCreateInput = Static<typeof AppCreateSchema>;
 export type MiniAppCreateInput = Static<typeof MiniAppCreateSchema>;
 export type HostRuntimeRegistrationInput = Static<typeof HostRuntimeRegistrationSchema>;

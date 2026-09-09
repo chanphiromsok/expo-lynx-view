@@ -1,0 +1,78 @@
+---
+title: Mobile CLI
+description: Prepare an Expo host's embedded Lynx baselines and register its native runtimes.
+---
+
+Run these commands from the Expo host repository. The Mobile CLI does not build
+the native app and does not upload mini-app ZIPs.
+
+## One-time key setup
+
+Configure `expo-lynx-view` with `publicKeyPath`, then run:
+
+```sh
+yarn lynx keys generate
+```
+
+This creates the mobile public key and the local Worker signing private key.
+The public key is embedded in the app; the private key stays with the Worker
+operator. With pnpm, use `pnpm exec lynx` instead of `yarn lynx`.
+
+## Prepare a host release
+
+```sh
+# Build one platform-neutral embedded fallback for every mini app in the host.
+yarn lynx host embed ../mart
+
+# Prepare and register iOS + Android in one command.
+yarn lynx host prepare --register
+
+# Now run the host project's normal prebuild/archive process without changing
+# native dependencies or the expo-lynx-view configuration in between.
+```
+
+`host embed` writes `registry.json`, `baseline.json`, the bundle, and static
+assets under the configured `embeddedBundlesPath`. It never creates separate
+iOS/Android bundle directories.
+
+`host prepare` calculates the Expo native fingerprint for each platform and
+writes it into `registry.json`. `--register` sends those runtimes to the
+Worker, creating disabled deployment scopes. Registration does not select a
+bundle and does not enable delivery.
+
+Build the native app immediately after preparation/registration without
+changing native dependencies, the Expo Lynx plugin, or the public key:
+
+```sh
+yarn prebuild:prod
+# run the host project's normal iOS/Android archive or install command
+```
+
+For one platform only:
+
+```sh
+yarn lynx host prepare --platform ios --register
+yarn lynx host prepare --platform android --register
+```
+
+## Checks
+
+```sh
+yarn lynx doctor --platform ios
+yarn lynx doctor --platform android
+yarn lynx doctor --remote
+```
+
+If `host register` says the project changed, run preparation again and rebuild
+the host. A changed native dependency or `expo-lynx-view` version must create a
+new runtime; do not force an old runtime onto a new binary.
+
+## What the Mobile CLI needs
+
+```dotenv
+LYNX_DELIVERY_SERVER="https://your-worker.workers.dev"
+LYNX_DELIVERY_API_KEY="lynx_live_..."
+```
+
+It does not need R2 credentials, the Console password, or the Worker's signing
+private key.

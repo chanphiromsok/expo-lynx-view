@@ -1,5 +1,5 @@
 ---
-title: Delivery console
+title: Local Worker and Console
 description: Set up, operate, and deploy the unified Cloudflare delivery console.
 ---
 
@@ -27,9 +27,9 @@ migrations, and writes the deployment URL/API key into `.env.lynx`. See
 for the complete host configuration.
 
 ```sh
-# Host team: prepare, build native app, then register
-pnpm lynx host prepare
-pnpm lynx host register
+# Host team: embed once, prepare/register, then build the native app
+pnpm lynx host embed ../mart
+pnpm lynx host prepare --register
 
 # Mini-app team: build and upload independently
 pnpm lynx release
