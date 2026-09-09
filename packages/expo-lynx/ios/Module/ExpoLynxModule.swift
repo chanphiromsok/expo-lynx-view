@@ -11,6 +11,15 @@ public final class ExpoLynxModule: Module {
         .modulePayload()
     }
 
+    // Build the background JS runtime (engine + lynx_core.js) ahead of the first
+    // ExpoLynxView mount. Call this from JS once the app is interactive (e.g.
+    // InteractionManager.runAfterInteractions after the splash hides) so the
+    // work does not compete with app launch. Runs off the main thread; a second
+    // call while one is already building is a no-op.
+    AsyncFunction("prewarmRuntime") {
+      ExpoLynxRuntimeWarmer.shared.prime()
+    }
+
     OnCreate {
 #if !DEBUG
       // Lynx defaults to emitting native Info logs through NSLog in Release.
@@ -27,11 +36,6 @@ public final class ExpoLynxModule: Module {
       // from this provider and installs it as both the template and generic
       // resource fetcher so Rspeedy can fetch HMR hot-update resources.
       lynxEnv.prepareConfig(LynxConfig(provider: ExpoLynxTemplateProvider.shared))
-
-      // Warm a background JS runtime now (engine + lynx_core.js) so the first
-      // ExpoLynxView attaches to a live runtime instead of paying that cost on
-      // the Lynx_JS thread at mount. See ExpoLynxRuntimeWarmer.
-      ExpoLynxRuntimeWarmer.shared.prime()
     }
 
     View(ExpoLynxView.self) {

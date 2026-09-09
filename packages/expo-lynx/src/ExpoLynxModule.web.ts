@@ -7,6 +7,10 @@ const ExpoLynxModule = {
       'expo-lynx-view: managed bundle delivery is currently implemented on iOS only.'
     );
   },
+
+  // No runtime to warm on web; resolve silently so callers can call it
+  // unconditionally on app start.
+  async prewarmRuntime(): Promise<void> {},
 };
 
 export default ExpoLynxModule;

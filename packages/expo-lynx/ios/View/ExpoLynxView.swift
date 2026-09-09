@@ -4,11 +4,15 @@ import Lynx
 
 /// Keeps one `LynxBackgroundRuntime` warmed ahead of the next `ExpoLynxView`
 /// mount. Creating the runtime spins up the background JS engine and evaluates
-/// `lynx_core.js`; doing that once from `ExpoLynxModule.OnCreate` (app launch)
-/// instead of lazily at every mount takes the JSC init + framework eval off the
-/// `Lynx_JS` thread at mount time, where it otherwise contends with the main
+/// `lynx_core.js`; doing that ahead of time takes the JSC init + framework eval
+/// off the `Lynx_JS` thread at mount, where it otherwise contends with the main
 /// thread's first render. The runtime is consumed when a view attaches to it,
 /// so a replacement is rebuilt in the background after every `take()`.
+///
+/// `prime()` is exposed as the `prewarmRuntime` module function rather than run
+/// from `OnCreate`, so the host app controls the timing (call it once the first
+/// screen is interactive) and the JSC init never competes with app launch. The
+/// build runs on a `.utility` queue so the scheduler yields it under load.
 final class ExpoLynxRuntimeWarmer {
   static let shared = ExpoLynxRuntimeWarmer()
 
@@ -17,7 +21,7 @@ final class ExpoLynxRuntimeWarmer {
   private var building = false
   private let queue = DispatchQueue(
     label: "com.expo.lynx.runtime-warmer",
-    qos: .userInitiated
+    qos: .utility
   )
 
   private func makeOptions() -> LynxBackgroundRuntimeOptions {
@@ -214,21 +218,19 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
         builder.debuggable = true
       #endif
       builder.fontScale = 1
-      // Default is AllOnUI: template decode, element-tree build, starlight
-      // layout and text measure all run on the main thread during the first
-      // load. MostOnTASM moves the engine + layout onto Lynx's own threads
-      // (flipping LynxShadowNodeOwner into async-layout mode); the main thread
-      // is left with the UI flush. All four strategies are implemented in
-      // Lynx 4.x despite the stale "only AllOnUI" note in LynxViewEnum.h.
-      builder.setThreadStrategyForRender(.mostOnTASM)
       // Attach to a background JS runtime whose engine + lynx_core.js were
-      // evaluated ahead of time (ExpoLynxRuntimeWarmer, primed in
-      // ExpoLynxModule.OnCreate). Otherwise the LynxView spins up JSC and
-      // evaluates lynx_core.js on the Lynx_JS thread at mount, contending with
-      // the main thread's first render. nil falls back to the stock path.
+      // evaluated ahead of time (ExpoLynxRuntimeWarmer, primed via the
+      // `prewarmRuntime` module function). Otherwise the LynxView spins up JSC
+      // and evaluates lynx_core.js on the Lynx_JS thread at mount, contending
+      // with the main thread's first render. nil falls back to the stock path.
       if let warmRuntime = ExpoLynxRuntimeWarmer.shared.take() {
         builder.lynxBackgroundRuntime = warmRuntime
       }
+      // NOTE: `builder.setThreadStrategyForRender(.mostOnTASM)` moves element
+      // build + layout + text measure off the UI thread and shaves a further
+      // ~50-90ms, but runs custom UI elements' measure/shadow-node code on
+      // Lynx's layout thread — only safe once every registered element is known
+      // thread-safe. Left on the default (.allOnUI); revisit as an opt-in.
     }
 
     super.init(appContext: appContext)
