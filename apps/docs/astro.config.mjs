@@ -1,12 +1,12 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
-import { ion } from "starlight-ion-theme";
+import starlightThemeBlack from "starlight-theme-black";
 
 export default defineConfig({
   integrations: [
     starlight({
-      // plugins: [ion()],
+      plugins: [starlightThemeBlack({ docs: { showMarkdownActions: false } })],
       title: "Expo Lynx",
       description:
         "Embed, deliver, and operate signed Lynx mini-app bundles in Expo.",
