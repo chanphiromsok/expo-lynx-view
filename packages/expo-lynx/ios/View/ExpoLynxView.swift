@@ -2,10 +2,103 @@ import ExpoModulesCore
 import Lynx
 
 
+/// Keeps one `LynxBackgroundRuntime` warmed ahead of the next `ExpoLynxView`
+/// mount. Creating the runtime spins up the background JS engine and evaluates
+/// `lynx_core.js`; doing that once from `ExpoLynxModule.OnCreate` (app launch)
+/// instead of lazily at every mount takes the JSC init + framework eval off the
+/// `Lynx_JS` thread at mount time, where it otherwise contends with the main
+/// thread's first render. The runtime is consumed when a view attaches to it,
+/// so a replacement is rebuilt in the background after every `take()`.
+final class ExpoLynxRuntimeWarmer {
+  static let shared = ExpoLynxRuntimeWarmer()
+
+  private let lock = NSLock()
+  private var warm: LynxBackgroundRuntime?
+  private var building = false
+  private let queue = DispatchQueue(
+    label: "com.expo.lynx.runtime-warmer",
+    qos: .userInitiated
+  )
+
+  private func makeOptions() -> LynxBackgroundRuntimeOptions {
+    let options = LynxBackgroundRuntimeOptions()
+    // Default engine is JSC, matching the per-view builder. The resource
+    // fetchers are `nonnull`; reuse the shared provider that is also installed
+    // on `LynxEnv` in `ExpoLynxModule.OnCreate`, so lazy bundles / external JS
+    // requested by the background runtime resolve the same way.
+    let provider = ExpoLynxTemplateProvider.shared
+    options.templateResourceFetcher = provider
+    options.genericResourceFetcher = provider
+    options.mediaResourceFetcher = provider
+    // Evaluate lynx_core.js during this prewarm, not at mount.
+    options.pendingCoreJsLoad = false
+    return options
+  }
+
+  /// Build the first warm runtime. Safe to call more than once.
+  func prime() {
+    refillIfNeeded()
+  }
+
+  /// Hand the warm runtime to a mounting view (consumed on attach) and schedule
+  /// a replacement. Returns nil when none is ready yet — the caller then starts
+  /// its own runtime, exactly as before this optimisation.
+  func take() -> LynxBackgroundRuntime? {
+    lock.lock()
+    let runtime = warm
+    warm = nil
+    lock.unlock()
+    refillIfNeeded()
+    return runtime
+  }
+
+  private func refillIfNeeded() {
+    lock.lock()
+    guard warm == nil, !building else {
+      lock.unlock()
+      return
+    }
+    building = true
+    lock.unlock()
+
+    queue.async { [weak self] in
+      guard let self else { return }
+      let options = self.makeOptions()
+      #if DEBUG
+        let runtime = LynxBackgroundRuntime(options: options, debuggable: true)
+      #else
+        let runtime = LynxBackgroundRuntime(options: options)
+      #endif
+      self.lock.lock()
+      self.warm = runtime
+      self.building = false
+      self.lock.unlock()
+    }
+  }
+}
+
+
 private struct ExpoLynxSourcePayload: Decodable {
   let kind: String
   let feature: String?
   let url: String?
+
+  // Hand-rolled parse of the small `{kind, feature?, url?}` object. Avoids the
+  // generic `JSONDecoder` / `Codable` path, whose one-time Swift-runtime witness
+  // resolution (swift_conformsToProtocol / _checkGenericRequirements) is a few
+  // ms of main-thread work on the first load.
+  init?(jsonString: String) {
+    guard
+      let object = try? JSONSerialization.jsonObject(with: Data(jsonString.utf8)),
+      let dict = object as? [String: Any],
+      let kind = dict["kind"] as? String
+    else {
+      return nil
+    }
+    self.kind = kind
+    self.feature = dict["feature"] as? String
+    self.url = dict["url"] as? String
+  }
 }
 
 private struct ExpoLynxLoadTarget {
@@ -121,6 +214,21 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
         builder.debuggable = true
       #endif
       builder.fontScale = 1
+      // Default is AllOnUI: template decode, element-tree build, starlight
+      // layout and text measure all run on the main thread during the first
+      // load. MostOnTASM moves the engine + layout onto Lynx's own threads
+      // (flipping LynxShadowNodeOwner into async-layout mode); the main thread
+      // is left with the UI flush. All four strategies are implemented in
+      // Lynx 4.x despite the stale "only AllOnUI" note in LynxViewEnum.h.
+      builder.setThreadStrategyForRender(.mostOnTASM)
+      // Attach to a background JS runtime whose engine + lynx_core.js were
+      // evaluated ahead of time (ExpoLynxRuntimeWarmer, primed in
+      // ExpoLynxModule.OnCreate). Otherwise the LynxView spins up JSC and
+      // evaluates lynx_core.js on the Lynx_JS thread at mount, contending with
+      // the main thread's first render. nil falls back to the stock path.
+      if let warmRuntime = ExpoLynxRuntimeWarmer.shared.take() {
+        builder.lynxBackgroundRuntime = warmRuntime
+      }
     }
 
     super.init(appContext: appContext)
@@ -302,21 +410,17 @@ extension ExpoLynxView {
       return
     }
 
-    do {
-      let payload = try JSONDecoder().decode(
-        ExpoLynxSourcePayload.self,
-        from: Data(sourceJSON.utf8)
-      )
-      load(payload, generation: generation)
-    } catch {
+    guard let payload = ExpoLynxSourcePayload(jsonString: sourceJSON) else {
       emitError(
         url: "",
         feature: "",
         stage: .manifest,
         code: "ERR_LYNX_SOURCE_INVALID",
-        message: "Could not decode the Lynx source configuration: \(error.localizedDescription)"
+        message: "Could not decode the Lynx source configuration."
       )
+      return
     }
+    load(payload, generation: generation)
   }
 
   fileprivate func load(_ payload: ExpoLynxSourcePayload, generation: Int) {
@@ -698,17 +802,94 @@ extension ExpoLynxView {
     }
   }
 
+  // Decoded template bundles, reused across mounts / reloads of the same binary.
+  // `LynxTemplateBundle` is the SDK's PreDecode product: parsing the App Bundle
+  // once, on a background queue, keeps the template binary decode out of
+  // `LynxView.loadTemplate`, which otherwise runs it synchronously on the main
+  // thread on every load.
+  private static let templateBundleCache: NSCache<NSString, LynxTemplateBundle> = {
+    let cache = NSCache<NSString, LynxTemplateBundle>()
+    cache.countLimit = 8
+    return cache
+  }()
+
+  private static let templateDecodeQueue = DispatchQueue(
+    label: "com.expo.lynx.template-decode",
+    qos: .userInitiated
+  )
+
+  // Key on path + size + mtime so a rebuilt bundle at the same path (dev
+  // rebuilds, managed hot-updates that reuse a slot) busts the entry.
+  private static func templateCacheKey(for url: URL) -> NSString? {
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+      return nil
+    }
+    let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+    let mtime = Int((attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)
+    return "\(url.path)|\(size)|\(mtime)" as NSString
+  }
+
   fileprivate func loadLocalURL(_ url: URL, target: ExpoLynxLoadTarget, generation: Int) {
-    do {
-      let data = try Data(contentsOf: url, options: .mappedIfSafe)
+    let cacheKey = ExpoLynxView.templateCacheKey(for: url)
+
+    // Fast path: a bundle decoded on an earlier mount is reused with no I/O
+    // and no decode on the main thread.
+    if let cacheKey, let cached = ExpoLynxView.templateBundleCache.object(forKey: cacheKey) {
       guard generation == loadGeneration, currentTarget?.url == target.url else { return }
-      lynxView.loadTemplate(
-        data,
+      // ObjC `loadTemplateBundle:withURL:initData:` imports into Swift as
+      // `load(_:withURL:initData:)`.
+      lynxView.load(
+        cached,
         withURL: target.url,
         initData: consumeTemplateDataForLoad()
       )
-    } catch {
-      finishWithError(error, target: target, generation: generation)
+      return
+    }
+
+    ExpoLynxView.templateDecodeQueue.async { [weak self] in
+      let outcome: Result<(LynxTemplateBundle?, Data), Error>
+      do {
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        let bundle = LynxTemplateBundle(template: data)
+        if let bundle, bundle.errorMsg() == nil {
+          outcome = .success((bundle, data))
+        } else {
+          // Pre-decode produced an invalid bundle; keep the raw bytes so the
+          // main thread can fall back and let LynxView surface the real error.
+          outcome = .success((nil, data))
+        }
+      } catch {
+        outcome = .failure(error)
+      }
+
+      DispatchQueue.main.async {
+        guard let self, generation == self.loadGeneration,
+          self.currentTarget?.url == target.url
+        else { return }
+
+        switch outcome {
+        case .failure(let error):
+          self.finishWithError(error, target: target, generation: generation)
+        case .success(let (bundle, data)):
+          let initData = self.consumeTemplateDataForLoad()
+          if let bundle {
+            if let cacheKey {
+              ExpoLynxView.templateBundleCache.setObject(bundle, forKey: cacheKey)
+            }
+            self.lynxView.load(
+              bundle,
+              withURL: target.url,
+              initData: initData
+            )
+          } else {
+            self.lynxView.loadTemplate(
+              data,
+              withURL: target.url,
+              initData: initData
+            )
+          }
+        }
+      }
     }
   }
 
