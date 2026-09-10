@@ -32,14 +32,19 @@ const ExpoLynxModule = {
    * `InteractionManager.runAfterInteractions(...)` after the splash screen
    * hides — so the work never competes with app launch. Runs off the main
    * thread; calling it more than once is a no-op while a build is in flight.
-   * No-op on platforms other than iOS.
+   *
+   * **iOS only.** On Android this resolves immediately without doing anything:
+   * the native module does not register `prewarmRuntime`, so Android still pays
+   * engine init at first mount. See `docs/android-parity.md` (A02) — a real
+   * Android warm-up is deferred to separate performance work.
    */
   prewarmRuntime(): Promise<void> {
-    // Enforce the documented "no-op on platforms other than iOS" contract. The
-    // Android module registers only `checkForUpdate` and the view-scoped
-    // `reload`, so an unconditional call rejects with
-    // "nativeModule.prewarmRuntime is not a function". A capability check (not
-    // a Platform check) stays correct if Android later gains the function.
+    // Enforce the documented "iOS only" contract. The Android native module
+    // registers module-scoped `checkForUpdate`, the view-scoped `reload`, and
+    // the view's props/events — but not `prewarmRuntime` — so an unconditional
+    // call would reject with "nativeModule.prewarmRuntime is not a function".
+    // A capability check (not a Platform check) stays correct if Android later
+    // gains the function.
     if (typeof nativeModule.prewarmRuntime !== 'function') {
       return Promise.resolve();
     }

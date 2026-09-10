@@ -97,9 +97,15 @@ from the example app before and after.
 
 The TS capability check (F19) means callers get a resolved promise rather than a
 rejection, so nothing breaks — but the documented warm-up simply does not happen,
-and Android pays engine init at first mount. Two acceptable outcomes: implement
-an Android equivalent, or keep the no-op and state the platform limitation in the
-docstring and the docs site. Decide deliberately; do not leave it ambiguous.
+and Android pays engine init at first mount.
+
+**Decided (2026-09-10): documented no-op.** A real Android warm-up means building
+a background Lynx runtime/shell, which is coupled to Android's threading and
+sizing model — the same reason first-render performance is an explicit non-goal
+of this document. The limitation is now stated in the `ExpoLynxModule.ts`
+docstring, a `:::caution[iOS only]` block on the docs-site reference page, and a
+comment in `ExpoLynxModule.kt` where the other `AsyncFunction`s are registered.
+Revisit under separate Android performance work.
 
 ### Tier B — correctness and robustness
 
@@ -259,8 +265,9 @@ Each is observable. "Parity" that cannot be demonstrated does not count.
 
 These need an answer before the work they gate can start:
 
-- **`prewarmRuntime` on Android** (A2): implement, or document as iOS-only?
-  Gates acceptance criterion 2.
+- ~~**`prewarmRuntime` on Android** (A2): implement, or document as iOS-only?~~
+  **Decided: documented no-op** (see A2 above). Acceptance criterion 2 met by
+  the docstring + docs-site caution.
 - **`<image>` support** (C1): ship a Glide-backed `ILynxImageService`, or document
   the limitation? Gates criterion 14, and the answer changes whether Glide becomes
   load-bearing for core rendering rather than one custom element.

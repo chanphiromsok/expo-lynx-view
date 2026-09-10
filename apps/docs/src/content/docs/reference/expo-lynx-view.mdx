@@ -4,8 +4,9 @@ description: React component and module API for rendering a Lynx bundle inside a
 ---
 
 `ExpoLynxView` renders a compiled Lynx page as a native view. The default module
-export exposes delivery and runtime helpers. Both are available on iOS and
-Android; the web entry throws for native sources.
+export exposes delivery and runtime helpers. The component and `checkForUpdate`
+work the same on iOS and Android; `prewarmRuntime` is iOS-only and a no-op on
+Android (see below). The web entry throws for native sources.
 
 ## `<ExpoLynxView>`
 
@@ -144,3 +145,11 @@ one is already building is a no-op; on web it resolves silently.
 
 Call it once the app is interactive, and ideally when the user is heading
 toward the Lynx screen. See [Performance](/managed-delivery/performance/).
+
+:::caution[iOS only]
+On Android `prewarmRuntime()` resolves immediately and does nothing — the
+native module does not implement it, so Android still pays engine
+initialization at the first `ExpoLynxView` mount. The call is safe to make
+unconditionally; it is a no-op there by design. A native Android warm-up is
+tracked as separate performance work (see `docs/android-parity.md`).
+:::

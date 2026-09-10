@@ -30,6 +30,34 @@ class ExpoLynxModule : Module() {
       LynxEnv.inst().init(application, null, null, null)
     }
 
+    // A01 (#15): module-scoped, matching iOS `ExpoLynxModule.swift`. Declared
+    // inside the `View {}` block below it would be built as a view-manager
+    // function (dispatched through a view ref), not a module function, so
+    // `nativeModule.checkForUpdate(...)` in `src/ExpoLynxModule.ts` would be
+    // `undefined` at runtime. `reload` stays view-scoped: its lambda needs a
+    // specific mounted `ExpoLynxView`; this one needs only a feature name.
+    AsyncFunction("checkForUpdate") { feature: String, promise: Promise ->
+      val application = appContext.reactContext?.applicationContext
+      if (application == null) {
+        promise.reject("ERR_LYNX_DELIVERY", "Managed Lynx delivery is unavailable.", null)
+        return@AsyncFunction
+      }
+      ManagedDeliveryCoordinator.checkForUpdate(
+        application,
+        feature,
+        onResult = { promise.resolve(it.modulePayload()) },
+        onError = { promise.reject(it.code, it.message, it) },
+      )
+    }
+
+    // `prewarmRuntime` is intentionally NOT registered on Android (A02, #15). A
+    // genuine equivalent means building a background Lynx runtime/shell, which
+    // is coupled to Android's threading and sizing model — the parity spec's
+    // explicit non-goal (docs/android-parity.md, "first-render performance").
+    // `src/ExpoLynxModule.ts` capability-checks the function, so the JS call
+    // resolves as a no-op rather than rejecting. Revisit under separate
+    // Android performance work.
+
     View(ExpoLynxView::class) {
       Events("onLoadStart", "onLoad", "onError", "onUpdate")
 
@@ -47,20 +75,6 @@ class ExpoLynxModule : Module() {
 
       AsyncFunction("reload") { view: ExpoLynxView ->
         view.reload()
-      }
-
-      AsyncFunction("checkForUpdate") { feature: String, promise: Promise ->
-        val application = appContext.reactContext?.applicationContext
-        if (application == null) {
-          promise.reject("ERR_LYNX_DELIVERY", "Managed Lynx delivery is unavailable.", null)
-          return@AsyncFunction
-        }
-        ManagedDeliveryCoordinator.checkForUpdate(
-          application,
-          feature,
-          onResult = { promise.resolve(it.modulePayload()) },
-          onError = { promise.reject(it.code, it.message, it) },
-        )
       }
 
       OnViewDestroys { view: ExpoLynxView ->
