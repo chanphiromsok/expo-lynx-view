@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import java.io.File
 import java.net.URI
 import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
 import com.lynx.tasm.LynxError
 import com.lynx.tasm.LynxView
 import com.lynx.tasm.LynxViewBuilder
@@ -345,6 +346,17 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
       emitError(feature, "cache", "manifest", "ERR_LYNX_MANAGED_FEATURE", "A managed Lynx source requires a feature name.", "")
       return
     }
+    // A5 (#17): `loadManaged` is reached only from `setSourceJSON`, so it is
+    // unambiguously user-initiated -- but it delegates to
+    // `loadBestLocalManagedSource`, which always calls `scheduleLoad(deliveryOwned
+    // = true)` because it also serves a delivery-internal caller
+    // (`onReceivedError`'s local-fallback branch). A flag at that call site can't
+    // tell the two origins apart, so the bump belongs here, one level up, where
+    // the origin is still known. Without it, a delivery check left in flight from
+    // the previous load survives a same-feature `setSourceJSON` re-set (it still
+    // matches `managedFeature` and the un-bumped `deliveryEpoch`) and emits a
+    // stale `onUpdate` for a release the new load never picked.
+    deliveryEpoch += 1
     sourceSelectionStartedAt = SystemClock.elapsedRealtime()
     val config = try { ManagedDeliveryConfig.load(context) } catch (error: ManagedDeliveryException) {
       emitDeliveryError(feature, error)
@@ -451,10 +463,28 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
         val slash = target.url.lastIndexOf('/')
         val dir = if (slash > 0) target.url.substring(0, slash) else ""
         val name = target.url.substring(slash + 1)
-        context.assets.list(dir)?.contains(name) == true
+        assetNamesIn(dir).contains(name)
       }.getOrDefault(false)
     else -> true
   }
+
+  // A6 (#17): `AssetManager.list(dir)` is a linear scan of the whole asset
+  // table -- measurably slow, and `loadSource()` calls `localBundleExists` on
+  // the main thread ahead of every render, including the first. Assets are
+  // baked into the APK at build time and cannot change within a process, so a
+  // directory's listing is safe to cache forever once it succeeds -- shared
+  // across every `ExpoLynxView` instance, since they all read the same APK.
+  // A listing that throws is deliberately NOT cached: `AssetManager.list` can
+  // fail for reasons other than "the directory doesn't exist" (a transient
+  // I/O error, a torn-down `AssetManager`), and caching that as an
+  // authoritative empty set would turn a one-off failure into a permanent
+  // false for the rest of the process -- so the exception is left to
+  // propagate to the `runCatching` in `localBundleExists`, which already
+  // treats it as "not found" for this call only. `computeIfAbsent` on
+  // `ConcurrentHashMap` gives atomic guarded access without caching on
+  // exception.
+  private fun assetNamesIn(dir: String): Set<String> =
+    assetListingCache.computeIfAbsent(dir) { context.assets.list(dir)?.toSet() ?: emptySet() }
 
   private fun elapsedSinceSelection() = SystemClock.elapsedRealtime() - sourceSelectionStartedAt
   private fun elapsedSinceLoad() = SystemClock.elapsedRealtime() - loadStartedAt
@@ -479,4 +509,8 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
     })
   }
 
+  private companion object {
+    // A6 (#17): backs `assetNamesIn` -- see that function's comment.
+    private val assetListingCache = ConcurrentHashMap<String, Set<String>>()
+  }
 }

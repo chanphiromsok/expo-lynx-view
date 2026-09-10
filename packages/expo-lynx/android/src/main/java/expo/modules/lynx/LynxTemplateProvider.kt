@@ -68,22 +68,34 @@ class LynxTemplateProvider(context: Context) : AbsTemplateProvider() {
     }
   }
 
+  // A7 (#17): dispatched via OkHttp's own async `enqueue` rather than
+  // `loadExecutor` -- see that pool's companion-object comment for why.
   private fun loadFromNetwork(uri: String, callback: Callback) {
-    loadExecutor.execute {
-      try {
-        val request = Request.Builder().url(uri).build()
-        httpClient.newCall(request).execute().use { response ->
+    val request = Request.Builder().url(uri).build()
+    httpClient.newCall(request).enqueue(object : okhttp3.Callback {
+      override fun onFailure(call: okhttp3.Call, e: IOException) {
+        callback.onFailed(e.message)
+      }
+
+      override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+        response.use {
           val body = response.body
           if (!response.isSuccessful || body == null) {
             callback.onFailed("HTTP ${response.code} loading $uri")
-            return@use
+            return
           }
-          callback.onSuccess(body.bytes())
+          try {
+            callback.onSuccess(body.bytes())
+          } catch (e: IOException) {
+            // Reading the body can itself fail (truncated stream, etc.); OkHttp
+            // does not route an exception thrown from `onResponse` to
+            // `onFailure`, so this has to be caught here explicitly to keep the
+            // old `execute()` + outer try/catch's failure semantics.
+            callback.onFailed(e.message)
+          }
         }
-      } catch (e: IOException) {
-        callback.onFailed(e.message)
       }
-    }
+    })
   }
 
   private fun loadFromAssets(uri: String, callback: Callback) {
@@ -124,9 +136,19 @@ class LynxTemplateProvider(context: Context) : AbsTemplateProvider() {
     // B5 (#17): the provider spawned a bare `Thread` per load in all three
     // branches, so thread count scaled with in-flight resource requests. A
     // Lynx page pulling many sub-resources at once could fan out to dozens of
-    // threads. iOS runs local reads on one `DispatchQueue.global` and remote
-    // fetches through `URLSession.shared`; this bounded pool is the analogue,
-    // shared across every provider instance in the process.
+    // threads. This bounded pool now backs `loadFromAssets` and `loadFromFile`
+    // only, shared across every provider instance in the process.
+    //
+    // A7 (#17): it used to also run `loadFromNetwork`'s blocking `execute()`
+    // call, on the claim that this pool was the Android analogue of iOS's
+    // split between `DispatchQueue.global` (local reads) and `URLSession.shared`
+    // (remote fetches) -- see `ExpoLynxTemplateProvider.swift`'s `loadData`.
+    // It wasn't: both branches shared this single 4-thread pool, so four
+    // slow or hanging dev-server fetches could starve every local asset/file
+    // load, including the main template. `loadFromNetwork` now dispatches
+    // through OkHttp's own async `enqueue`, which runs on OkHttp's internal
+    // dispatcher and never occupies a slot here -- that's what actually makes
+    // it independent of local reads, matching iOS.
     private val loadExecutor: ExecutorService = Executors.newFixedThreadPool(4) { runnable ->
       Thread(runnable, "ExpoLynxResource").apply { isDaemon = true }
     }
