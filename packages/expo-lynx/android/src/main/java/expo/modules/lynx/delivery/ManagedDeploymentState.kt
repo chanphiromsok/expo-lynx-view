@@ -16,13 +16,27 @@ internal data class ManagedState(
   var lastRevision: Int? = null,
 )
 
-internal class ManagedDeploymentState(context: Context) {
+internal class ManagedDeploymentState private constructor(context: Context) {
   companion object {
     private const val storeId = "expo.lynx.managed.v3"
     private val lock = Any()
     private val recoveredScopes = mutableSetOf<String>()
 
     private var didInitializeMMKV = false
+
+    // B3 (#16): one instance per process. iOS holds a single
+    // `LynxManagedDeploymentState.shared`; Android was constructing a fresh
+    // object at all five call sites, each re-entering `openStore` (a JNI call
+    // + `synchronized` block) and holding its own `SharedPreferences` handle.
+    // `MMKV.mmkvWithID` already de-dupes the mmap internally, but the extra
+    // work and the split legacy-preferences handle are avoidable.
+    @Volatile
+    private var instance: ManagedDeploymentState? = null
+
+    fun get(context: Context): ManagedDeploymentState =
+      instance ?: synchronized(lock) {
+        instance ?: ManagedDeploymentState(context.applicationContext).also { instance = it }
+      }
 
     private fun openStore(context: Context): MMKV? = synchronized(lock) {
       try {

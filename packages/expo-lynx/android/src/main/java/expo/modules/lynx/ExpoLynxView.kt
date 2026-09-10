@@ -69,6 +69,19 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
   private var destroyed = false
   private var deliveryStarted = false
   private var forceReloadCompletion: ((Result<Unit>) -> Unit)? = null
+
+  // B1 (#16): iOS threads a `loadGeneration` (F1) through every async
+  // continuation so a superseded load's callback is dropped rather than
+  // applied to its successor. `target` is "the latest desired load"; it is
+  // reassigned the instant a new load is scheduled. A stale `onLoadSuccess`
+  // that reads `target` at completion time therefore confirms whatever the
+  // newest load points at, on the strength of an older render. `loadGeneration`
+  // increments on every `scheduleLoad`; `renderingGeneration` / `renderingTarget`
+  // snapshot the load actually handed to Lynx, and the SDK callbacks reconcile
+  // against `loadGeneration` before touching delivery state.
+  private var loadGeneration = 0
+  private var renderingGeneration = -1
+  private var renderingTarget: LynxLoadTarget? = null
   private var sourceSelectionStartedAt = SystemClock.elapsedRealtime()
   private var loadStartedAt = sourceSelectionStartedAt
 
@@ -89,9 +102,13 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
 
     lynxView.addLynxViewClient(object : LynxViewClient() {
       override fun onLoadSuccess() {
+        // B1: a newer load has been scheduled since this render was dispatched.
+        // Its own `onLoadSuccess` will run against `renderingTarget`; applying
+        // this one would confirm the wrong release.
+        if (renderingGeneration != loadGeneration) return
+        val current = renderingTarget ?: return
         hasLoadedTemplate = true
         lynxView.visibility = View.VISIBLE
-        val current = target ?: return
         LynxIFRLogger.log(context, "load_finished_ms", elapsedSinceLoad(), current)
         // Lynx's Android SDK reports its first successful template load here.
         // It has no separate first-screen callback like iOS.
@@ -102,7 +119,7 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
           onUpdate.invoke(updatePayload(current.feature, "reloaded", current))
         } ?: current.candidateReleaseId?.let { releaseId ->
           current.managedRuntime?.let { runtime ->
-            ManagedDeploymentState(context).confirm(current.feature, runtime, releaseId)
+            ManagedDeploymentState.get(context).confirm(current.feature, runtime, releaseId)
           }
         }
         onLoad.invoke(loadPayload(current))
@@ -113,16 +130,21 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
       }
 
       override fun onReceivedError(error: LynxError) {
+        // B1: same guard as `onLoadSuccess`. Without it a superseded load's
+        // failure would call `fail(...)` on the release the newest load points
+        // at and kick off a redundant fallback.
+        if (renderingGeneration != loadGeneration) return
+
         // Hide the previous render so a failed reload cannot leave stale UI on
         // screen. Android's public LynxView API has no wipe-but-stay-alive call.
         lynxView.visibility = View.GONE
 
         // Mirror iOS's required payload shape while retaining SDK details useful
         // to callers that want to diagnose a failed bundle load.
-        val current = target
+        val current = renderingTarget
         current?.candidateReleaseId?.let { releaseId ->
           current.managedRuntime?.let { runtime ->
-            ManagedDeploymentState(context).fail(current.feature, runtime, releaseId)
+            ManagedDeploymentState.get(context).fail(current.feature, runtime, releaseId)
             forceReloadCompletion?.let { completion ->
               forceReloadCompletion = null
               completion(Result.failure(ManagedDeliveryException("lynx", "ERR_LYNX_CANDIDATE", "The downloaded Lynx release failed to render.")))
@@ -192,6 +214,10 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
   }
 
   private fun scheduleLoad() {
+    // B1: every scheduled load supersedes whatever was in flight. Bump before
+    // the coalescing early-return so a stale SDK callback that lands between
+    // now and `loadSource()` sees `renderingGeneration != loadGeneration`.
+    loadGeneration += 1
     if (loadScheduled) return
 
     // Props may arrive in either order during one React commit. Posting the
@@ -211,6 +237,10 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
     hasLoadedTemplate = false
     deliveryStarted = false
     loadStartedAt = SystemClock.elapsedRealtime()
+    // B1: this is the load Lynx will actually run. Pin it and its generation so
+    // `onLoadSuccess` / `onReceivedError` reconcile against the right target.
+    renderingTarget = current
+    renderingGeneration = loadGeneration
     lynxView.visibility = View.VISIBLE
     when {
       current.url.startsWith("file://") -> templateProvider.setLocalResourceRoot(File(URI(current.url)).parentFile)
@@ -250,13 +280,13 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
   }
 
   private fun loadBestLocalManagedSource(feature: String, runtime: String) {
-    val state = ManagedDeploymentState(context).recover(feature, runtime)
+    val state = ManagedDeploymentState.get(context).recover(feature, runtime)
     val store = ManagedBundleStore(context)
     val pending = state.pendingReleaseId?.let { store.launchInstalledRelease(feature, it, runtime) }
     val active = state.activeReleaseId?.let { store.launchInstalledRelease(feature, it, runtime) }
     val release = pending ?: active
     if (release != null) {
-      if (pending != null) ManagedDeploymentState(context).beginAttempt(feature, runtime, release.releaseId)
+      if (pending != null) ManagedDeploymentState.get(context).beginAttempt(feature, runtime, release.releaseId)
       loadManagedRelease(release, runtime, pending != null)
     } else {
       target = LynxLoadTarget("expo-lynx-embedded/$feature/main.lynx.bundle", feature, "embedded", "embedded", runtime, assetRoot = "expo-lynx-embedded/$feature")
@@ -287,16 +317,20 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
 
   private fun startManagedDelivery(feature: String) {
     if (destroyed || managedFeature != feature) return
+    // B1: capture the generation that triggered this check. A reload or source
+    // change while the delivery request is in flight advances `loadGeneration`;
+    // the stale result must not emit `onUpdate` against the newer load.
+    val generation = loadGeneration
     val start = SystemClock.elapsedRealtime()
     onUpdate.invoke(mapOf("feature" to feature, "phase" to "checking"))
     ManagedDeliveryCoordinator.checkForUpdate(
       context,
       feature,
-      onResult = { result -> if (!destroyed && managedFeature == feature) {
+      onResult = { result -> if (!destroyed && managedFeature == feature && generation == loadGeneration) {
         LynxIFRLogger.logDelivery(context, SystemClock.elapsedRealtime() - start, feature)
         onUpdate.invoke(result.payload())
       } },
-      onError = { error -> if (!destroyed && managedFeature == feature) emitDeliveryError(feature, error) },
+      onError = { error -> if (!destroyed && managedFeature == feature && generation == loadGeneration) emitDeliveryError(feature, error) },
     )
   }
 

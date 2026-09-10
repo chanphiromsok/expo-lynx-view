@@ -5,10 +5,9 @@ import android.os.Handler
 import android.os.Looper
 import expo.modules.lynx.ExpoLynxView
 import java.lang.ref.WeakReference
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 internal data class ManagedUpdateResult(
   val feature: String,
@@ -35,6 +34,9 @@ internal data class ManagedUpdateResult(
 }
 
 internal object ManagedDeliveryCoordinator {
+  // B2 (#16): matches iOS's 15s `ExpoLynxView.startWatchdog` deadline.
+  private const val CANDIDATE_TIMEOUT_MS = 15_000L
+
   private val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
     Thread(runnable, "ExpoLynxDelivery").apply { isDaemon = true }
   }
@@ -49,7 +51,7 @@ internal object ManagedDeliveryCoordinator {
     executor.execute {
       try {
         val config = ManagedDeliveryConfig.load(context)
-        val stateStore = ManagedDeploymentState(context)
+        val stateStore = ManagedDeploymentState.get(context)
         val state = stateStore.recover(feature, config.runtimeVersion)
         when (val update = ManagedBundleStore(context).checkForUpdate(config, feature, state)) {
           is DeploymentUpdate.NotModified -> post(onResult, ManagedUpdateResult(feature, "no-update", revision = state.lastRevision))
@@ -93,27 +95,47 @@ internal object ManagedDeliveryCoordinator {
       return
     }
     stateStore.beginAttempt(update.release.feature, runtime, update.release.releaseId)
-    val remaining = AtomicInteger(views.size)
-    val finished = AtomicBoolean(false)
-    val complete: (Result<Unit>) -> Unit = completion@{ result ->
-      if (finished.get()) return@completion
-      result.fold(
-        onSuccess = {
-          if (remaining.decrementAndGet() == 0 && finished.compareAndSet(false, true)) {
-            stateStore.confirm(update.release.feature, runtime, update.release.releaseId)
-            post(onResult, ManagedUpdateResult(update.release.feature, "reloaded", update.release.releaseId, update.release.version, update.revision))
-          }
-        },
-        onFailure = {
-          if (finished.compareAndSet(false, true)) {
-            stateStore.fail(update.release.feature, runtime, update.release.releaseId)
-            post(onError, ManagedDeliveryException("lynx", "ERR_LYNX_FORCE_RELOAD", "The forced Lynx release could not render."))
-          }
-        },
-      )
-    }
+
+    val feature = update.release.feature
+    val releaseId = update.release.releaseId
+    val batch = ManagedReloadBatch(
+      viewCount = views.size,
+      timeoutMs = CANDIDATE_TIMEOUT_MS,
+      schedule = { delayMs, task -> main.postDelayed(task, delayMs) },
+      cancel = { task -> main.removeCallbacks(task) },
+      onOutcome = { result ->
+        result.fold(
+          onSuccess = {
+            stateStore.confirm(feature, runtime, releaseId)
+            post(onResult, ManagedUpdateResult(feature, "reloaded", releaseId, update.release.version, update.revision))
+          },
+          onFailure = { cause ->
+            when (cause) {
+              // Superseded by a newer forced reload, or the view unmounted
+              // (`ExpoLynxView.destroy`). The batch that supersedes this one —
+              // or `destroy()` — owns the release outcome; recording a failure
+              // here would poison the `attemptingReleaseId` the newer batch is
+              // about to confirm (B1). Settle the promise, touch no state.
+              is ManagedReloadBatch.TimeoutException -> {
+                stateStore.fail(feature, runtime, releaseId)
+                post(onError, ManagedDeliveryException("lynx", "ERR_LYNX_CANDIDATE_TIMEOUT", cause.message ?: "The forced Lynx release timed out."))
+              }
+              is CancellationException ->
+                post(onError, ManagedDeliveryException("lynx", "ERR_LYNX_FORCE_SUPERSEDED", "The forced Lynx reload was superseded before it rendered."))
+              else -> {
+                stateStore.fail(feature, runtime, releaseId)
+                val error = cause as? ManagedDeliveryException
+                  ?: ManagedDeliveryException("lynx", "ERR_LYNX_FORCE_RELOAD", "The forced Lynx release could not render.")
+                post(onError, error)
+              }
+            }
+          },
+        )
+      },
+    )
+    batch.start()
     postToMain {
-      views.forEach { it.forceReloadManagedRelease(update.release, complete) }
+      views.forEach { it.forceReloadManagedRelease(update.release, batch.complete) }
     }
   }
 

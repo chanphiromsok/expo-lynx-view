@@ -46,4 +46,10 @@ dependencies {
   // when expo-image is present its AppGlideModule + OkHttp integration cover
   // us; the plain Glide.with() API is used so no generated GlideApp is needed.
   implementation "com.github.bumptech.glide:glide:5.0.5"
+
+  // B2 (#16): the forced-reload watchdog / batch-settlement logic in
+  // `ManagedReloadBatch` is deliberately Android-free so it runs as a plain
+  // JVM unit test (`./gradlew :expo-lynx:testDebugUnitTest`) — no Robolectric,
+  // no MMKV native lib, no instrumented device.
+  testImplementation "junit:junit:4.13.2"
 }
