@@ -47,7 +47,9 @@ final class LynxManagedViewRegistry {
   }
 
   private func matchingViews(feature: String) -> [ExpoLynxView] {
-    removeReleasedViews()
+    // F23: no pruning pass here — `compactMap(\.value)` already skips zeroed
+    // weak entries. Pruning (an O(n) dictionary rebuild) stays in `register`,
+    // where the entry count actually grows.
     return views.values.compactMap(\.value).filter {
       $0.mountedManagedFeature == feature
     }

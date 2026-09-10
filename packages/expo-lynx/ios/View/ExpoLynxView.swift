@@ -13,7 +13,7 @@ import Lynx
 /// from `OnCreate`, so the host app controls the timing (call it once the first
 /// screen is interactive) and the JSC init never competes with app launch. The
 /// build runs on a `.utility` queue so the scheduler yields it under load.
-final class ExpoLynxRuntimeWarmer {
+final class ExpoLynxRuntimeWarmer: @unchecked Sendable {
   static let shared = ExpoLynxRuntimeWarmer()
 
   private let lock = NSLock()
@@ -23,6 +23,27 @@ final class ExpoLynxRuntimeWarmer {
     label: "com.expo.lynx.runtime-warmer",
     qos: .utility
   )
+
+  private init() {
+    // A warm runtime is a live JSC VM with lynx_core.js evaluated. If the last
+    // ExpoLynxView unmounts, it would otherwise sit idle for the rest of the
+    // process. Drop it under memory pressure; the host re-primes via
+    // `prewarmRuntime` when it next wants the optimisation. Never refill from
+    // here.
+    NotificationCenter.default.addObserver(
+      forName: UIApplication.didReceiveMemoryWarningNotification,
+      object: nil,
+      queue: nil
+    ) { [weak self] _ in self?.drain() }
+  }
+
+  /// Release the warm runtime without scheduling a replacement. The next mount
+  /// falls back to the stock path, exactly as when prewarm has not run.
+  func drain() {
+    lock.lock()
+    warm = nil
+    lock.unlock()
+  }
 
   private func makeOptions() -> LynxBackgroundRuntimeOptions {
     let options = LynxBackgroundRuntimeOptions()
@@ -65,8 +86,15 @@ final class ExpoLynxRuntimeWarmer {
     building = true
     lock.unlock()
 
-    queue.async { [weak self] in
-      guard let self else { return }
+    // Capture `self` strongly: `shared` is a `static let` that never
+    // deallocates, so there is no cycle to break, and a `[weak self]` that
+    // ever resolved to nil (as the previous code allowed) would strand
+    // `building == true` forever — the warmer would never refill again.
+    // `makeOptions()` and `LynxBackgroundRuntime.init` do not throw, so there
+    // is no path between here and the assignment that can bail; `warm` and
+    // `building` are still set in one critical section so a concurrent `take()`
+    // cannot observe `warm == nil && !building` with no refill pending.
+    queue.async {
       let options = self.makeOptions()
       #if DEBUG
         let runtime = LynxBackgroundRuntime(options: options, debuggable: true)
@@ -139,6 +167,29 @@ private struct LynxInitialLoadGate {
   }
 }
 
+/// `loadGeneration` is only mutated on the main actor, but Lynx delivers
+/// `didLoadFinishedWithUrl:` and `didRecieveError:` on its own threads
+/// (LynxView.mm:1145, :838). Those trampolines must read the generation
+/// *before* hopping to main, so a stale callback from load N is dropped rather
+/// than applied to load N+1. This lock-boxed mirror is the only generation
+/// value safe to read off the main thread.
+private final class LoadGenerationBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+
+  func set(_ newValue: Int) {
+    lock.lock()
+    value = newValue
+    lock.unlock()
+  }
+
+  var current: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
+}
+
 final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   let onLoadStart = EventDispatcher()
   let onLoad = EventDispatcher()
@@ -150,10 +201,21 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   private var legacySource: String?
   private var sourceJSON: String?
   private var initialDataJSON: String?
-  private var loadGeneration = 0
+  private let generationBox = LoadGenerationBox()
+  private var loadGeneration = 0 {
+    didSet { generationBox.set(loadGeneration) }
+  }
   private var hasLoadedTemplate = false
   private var lastLayoutSize = CGSize.zero
-  private var lastSafeAreaInsets: UIEdgeInsets?
+  // F11/F12: a load must not start before the real viewport is known, or Lynx
+  // lays out against a zero/default size and repeats the pass when the real
+  // size arrives. `hasViewport` flips true on the first `applyLayout`; a load
+  // that arrives first is stashed here and driven from `layoutSubviews`.
+  private var hasViewport = false
+  private var pendingLoadTarget: (target: ExpoLynxLoadTarget, generation: Int)?
+  // F16: coalesce viewport updates during a continuous resize (rotation,
+  // keyboard, sheet-detent drag) into one Lynx relayout on the next turn.
+  private var pendingViewportSize: CGSize?
   private var sourceNeedsReload = false
   private var initialDataNeedsUpdate = false
   private var currentTarget: ExpoLynxLoadTarget?
@@ -163,6 +225,14 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   private var managedFeature: String?
   private var deliveryTask: Task<Void, Never>?
   private var watchdogWorkItem: DispatchWorkItem?
+  // F3: the terminal consumer is `LynxManagedViewRegistry`'s `@MainActor`
+  // `ReloadCompletion`, which resumes a `CheckedContinuation` — a double-resume
+  // is a hard crash. Compile-time `@MainActor` typing on this closure was
+  // tried, but satisfying it from the nonisolated `deinit` needs
+  // `MainActor.assumeIsolated`, which is iOS 17+ (deployment target is 16.4).
+  // Instead `deinit` drains these on the main queue, so the resume is always
+  // main-thread — the substance of the fix. Restore the annotation when the
+  // deployment target reaches iOS 17.
   private var forceReloadCompletion: ((Result<Void, Error>) -> Void)?
   private var deferredForceReload:
     (
@@ -176,6 +246,11 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       feature: String
     )?
   private var currentLoadGate = LynxInitialLoadGate()
+  // Bumped on every `loadTarget`, including a same-URL forced reload that does
+  // not advance `loadGeneration`. A `templateDecodeQueue` callback from a
+  // superseded `loadTarget` captures the old token and drops out here, where
+  // the `currentTarget?.url == target.url` check used to let it through (F8).
+  private var loadToken = UUID()
   private var managedDeliveryStartedGeneration: Int?
   private var loadStartedAt = Date()
   #if DEBUG || LYNX_IFR_METRICS
@@ -253,7 +328,6 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     lynxView.layoutHeightMode = .exact
     lynxView.addLifecycleClient(self)
     addSubview(lynxView)
-    syncSafeAreaInsets()
 
     if bounds.size.width > 0 && bounds.size.height > 0 {
       applyLayout(bounds.size)
@@ -263,14 +337,67 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   deinit {
     deliveryTask?.cancel()
     watchdogWorkItem?.cancel()
-    forceReloadCompletion?(.failure(CancellationError()))
-    deferredForceReload?.completion(.failure(CancellationError()))
-    // `deinit` is nonisolated even for UIKit-bound instances. The registry
-    // retains views weakly and prunes released entries on its next main-actor
-    // access, so it is both safe and sufficient to skip actor-isolated cleanup
-    // here. Live views still unregister synchronously in `scheduleLoad()`.
-    lynxView.removeLifecycleClient(self)
-    lynxView.clearForDestroy()
+    // Lock-guarded and nonisolated — safe to call directly, no main hop.
+    ExpoLynxResourceRoots.shared.removeOwner(ObjectIdentifier(self))
+
+    // `deinit` is nonisolated and runs on whatever thread drops the last
+    // reference. Now that Lynx delivers callbacks from its own threads
+    // (LynxView.mm:1145, :838) — and each call transiently retains `self` —
+    // that thread may not be main. Two things here are unsafe off the main
+    // thread:
+    //   1. the pending completions reach a `@MainActor` `ReloadCompletion`
+    //      that resumes a `CheckedContinuation` (F3);
+    //   2. `LynxView.clearForDestroy` silently skips
+    //      `[_templateRender.lynxUIRenderer reset]` and instead reports
+    //      `ECLynxThreadWrongThreadDestroyError` when off the UI thread
+    //      (LynxView.mm:130-146).
+    // Push both onto the main queue. `self` is never captured; the completions
+    // and the view are — both safe to escape a deallocating object.
+    let pendingCompletions: [(Result<Void, Error>) -> Void] =
+      [forceReloadCompletion, deferredForceReload?.completion].compactMap { $0 }
+    let view = lynxView
+
+    DispatchQueue.main.async {
+      for completion in pendingCompletions {
+        completion(.failure(CancellationError()))
+      }
+      // `removeLifecycleClient(self)` is deliberately not called: the
+      // dispatcher holds clients in an `NSPointerFunctionsWeakMemory`
+      // `NSHashTable` (LynxLifecycleDispatcher.m:18), so the weak entry has
+      // already zeroed by the time `deinit` runs. `clearForDestroy` is
+      // idempotent (`_templateRender = nil`), so `LynxView.dealloc`'s own call
+      // (LynxView.mm:119) stays safe.
+      view.clearForDestroy()
+    }
+  }
+
+  // MARK: - Thread discipline at the Lynx boundary
+
+  #if DEBUG
+    /// Trips in debug when a method that must be main-thread-only is reached
+    /// off the main thread — converts F1's silent state corruption into a
+    /// crash at the exact call site.
+    private func assertMain(_ fn: StaticString = #function) {
+      assert(Thread.isMainThread, "\(fn) must run on the main thread")
+    }
+  #else
+    @inline(__always) private func assertMain(_ fn: StaticString = #function) {}
+  #endif
+
+  /// Run `work` on the main thread — synchronously when already there so the
+  /// common case adds no runloop turn, otherwise asynchronously.
+  ///
+  /// Typed `@MainActor` because every call site is `@MainActor`. Lynx can still
+  /// invoke the enclosing lifecycle method from a background thread
+  /// (LynxView.mm:1145, :838); the compiler cannot see that across the ObjC
+  /// boundary, so `Thread.isMainThread` is the real guard — the synchronous
+  /// `work()` branch runs only when the check genuinely passes.
+  private func onMain(_ work: @escaping @MainActor @Sendable () -> Void) {
+    if Thread.isMainThread {
+      work()
+    } else {
+      DispatchQueue.main.async(execute: work)
+    }
   }
 
   // MARK: - Layout
@@ -279,44 +406,59 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
     super.layoutSubviews()
 
     lynxView.frame = bounds
-    syncSafeAreaInsets()
-    guard bounds.size != lastLayoutSize else {
-      return
+
+    if bounds.size != lastLayoutSize {
+      // First viewport goes through `applyLayout` synchronously so the initial
+      // load is not delayed; later size changes coalesce (F16).
+      if hasViewport {
+        scheduleViewportUpdate(bounds.size)
+      } else {
+        applyLayout(bounds.size)
+      }
     }
 
-    applyLayout(bounds.size)
-  }
-
-  override func safeAreaInsetsDidChange() {
-    super.safeAreaInsetsDidChange()
-    syncSafeAreaInsets()
-  }
-
-  private func syncSafeAreaInsets() {
-    let insets = safeAreaInsets
-    guard insets != lastSafeAreaInsets else {
-      return
+    // F12: a load that arrived before the viewport was known resumes now.
+    if let pending = pendingLoadTarget,
+      bounds.size.width > 0, bounds.size.height > 0
+    {
+      pendingLoadTarget = nil
+      loadTarget(pending.target, generation: pending.generation)
     }
-    lastSafeAreaInsets = insets
-
-    // Lynx global props are host-owned, and the values are in the same point
-    // coordinate space as this LynxView's viewport. Update only on change:
-    // each global-props update causes Lynx to re-render the page.
-    lynxView.updateGlobalProps(with: [
-      "safeAreaTop": insets.top,
-      "safeAreaBottom": insets.bottom,
-      "safeAreaLeft": insets.left,
-      "safeAreaRight": insets.right,
-    ])
   }
+
+  // NOTE: safe-area insets are intentionally not forwarded to Lynx global props
+  // right now (removed by request). Re-add via `safeAreaInsetsDidChange` +
+  // `updateGlobalProps(["safeAreaTop": …])`, seeding the values into the
+  // initial `LynxTemplateData` before first load to avoid the mount-time double
+  // render (F17 in docs/ios-concurrency-lifecycle-remediation.md).
 
   private func applyLayout(_ size: CGSize) {
     lastLayoutSize = size
+    hasViewport = true
     lynxView.updateViewport(
       withPreferredLayoutWidth: size.width,
       preferredLayoutHeight: size.height,
       needLayout: true
     )
+  }
+
+  /// Coalesce a viewport change to the next runloop turn — used for size
+  /// changes *after* the first viewport, so a continuous resize triggers one
+  /// Lynx relayout instead of one per frame (F16).
+  private func scheduleViewportUpdate(_ size: CGSize) {
+    lastLayoutSize = size
+    let alreadyScheduled = pendingViewportSize != nil
+    pendingViewportSize = size
+    guard !alreadyScheduled else { return }
+    DispatchQueue.main.async { [weak self] in
+      guard let self, let size = self.pendingViewportSize else { return }
+      self.pendingViewportSize = nil
+      self.lynxView.updateViewport(
+        withPreferredLayoutWidth: size.width,
+        preferredLayoutHeight: size.height,
+        needLayout: true
+      )
+    }
   }
 
   // MARK: - React props
@@ -359,7 +501,9 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   }
 
   func reload() {
-    scheduleLoad()
+    // `AsyncFunction("reload")` may invoke this off the main thread, and
+    // everything `scheduleLoad` touches is main-actor state.
+    onMain { [weak self] in self?.scheduleLoad() }
   }
 }
 
@@ -380,6 +524,7 @@ extension ExpoLynxView {
     deferredDeliveryError = nil
     managedDeliveryStartedGeneration = nil
     currentTarget = nil
+    pendingLoadTarget = nil
     LynxManagedViewRegistry.shared.unregister(self)
     managedFeature = nil
 
@@ -387,12 +532,11 @@ extension ExpoLynxView {
     #if DEBUG || LYNX_IFR_METRICS
       sourceSelectionStartedAt = Date()
     #endif
-    DispatchQueue.main.async { [weak self] in
-      guard let self, generation == self.loadGeneration else {
-        return
-      }
-      self.loadSource(generation: generation)
-    }
+    // F11: no runloop hop. `applyPendingUpdate` is already the batched
+    // "all props applied" main-thread callback, and `loadTarget` now gates on
+    // the viewport itself (F12) instead of relying on this hop to let layout
+    // win the race. `reload()` hops to main before calling in.
+    loadSource(generation: generation)
   }
 
   // Initial render flow:
@@ -524,16 +668,36 @@ extension ExpoLynxView {
     #endif
   }
 
+  // F13: the embedded name a feature resolves to is fixed for the process
+  // (embedded assets are immutable). Memoise it so `loadEmbedded` stops
+  // re-probing the file system on every mount / fallback.
+  private static let embeddedNameLock = NSLock()
+  private static var embeddedNameByFeature: [String: String] = [:]
+
   fileprivate func loadEmbedded(feature: String, generation: Int) {
-    let v2Name = "ExpoLynxEmbedded.bundle/\(feature)/main.lynx.bundle"
     let embeddedName: String
-    if resolveLocalURL(v2Name) != nil {
-      embeddedName = v2Name
+    ExpoLynxView.embeddedNameLock.lock()
+    let memo = ExpoLynxView.embeddedNameByFeature[feature]
+    ExpoLynxView.embeddedNameLock.unlock()
+
+    if let memo {
+      embeddedName = memo
     } else {
-      // Preserve legacy prebuild output during migration. V2 app configs use
-      // the branch above and never duplicate these bytes in the asset graph.
-      embeddedName = resolveLocalURL("\(feature).lynx") == nil ? "static.lynx" : "\(feature).lynx"
+      let v2Name = "ExpoLynxEmbedded.bundle/\(feature)/main.lynx.bundle"
+      let resolved: String
+      if resolveLocalURL(v2Name) != nil {
+        resolved = v2Name
+      } else {
+        // Preserve legacy prebuild output during migration. V2 app configs use
+        // the branch above and never duplicate these bytes in the asset graph.
+        resolved = resolveLocalURL("\(feature).lynx") == nil ? "static.lynx" : "\(feature).lynx"
+      }
+      ExpoLynxView.embeddedNameLock.lock()
+      ExpoLynxView.embeddedNameByFeature[feature] = resolved
+      ExpoLynxView.embeddedNameLock.unlock()
+      embeddedName = resolved
     }
+
     loadTarget(
       ExpoLynxLoadTarget(
         url: embeddedName,
@@ -653,9 +817,13 @@ extension ExpoLynxView {
         )
         guard !Task.isCancelled, generation == self.loadGeneration else { return }
         self.emitUpdate(result.eventPayload(phase: result.status.rawValue))
-      } catch is CancellationError {
-        return
       } catch {
+        // F22: `checkForUpdate` can surface a cancellation wrapped in a
+        // `LynxDeliveryError` or as `URLError(.cancelled)` — neither matches
+        // `is CancellationError`. Swallow all cancellation shapes so a
+        // deliberately-cancelled check emits no spurious `onUpdate`/`onError`.
+        if error is CancellationError || Task.isCancelled { return }
+        if (error as? URLError)?.code == .cancelled { return }
         guard generation == self.loadGeneration else { return }
         self.emitUpdateError(error, feature: feature)
         self.emitDeliveryError(
@@ -672,6 +840,32 @@ extension ExpoLynxView {
     candidate: Bool,
     generation: Int
   ) {
+    let manifestID = candidate ? release.manifestID : nil
+    let runtimeVersion: String
+    do {
+      runtimeVersion = try LynxManagedDeliveryConfiguration.runtimeVersion()
+    } catch {
+      // F5: a release whose runtime version can't be resolved can never be
+      // confirmed or rolled back. Route through `failCandidate` — its
+      // unconditional block resolves any pending force-reload completion and
+      // clears the watchdog, then the nil-runtime-version branch falls back to
+      // the embedded bundle. Previously this was a silent `try?` → nil that
+      // `failCandidate`'s old top guard then dropped on the floor.
+      failCandidate(
+        ExpoLynxLoadTarget(
+          url: release.bundleURL.absoluteString,
+          feature: release.feature,
+          version: release.version,
+          source: "cache",
+          managedFeature: release.feature,
+          managedRuntimeVersion: nil,
+          candidateManifestID: manifestID
+        ),
+        error: error,
+        generation: generation
+      )
+      return
+    }
     loadTarget(
       ExpoLynxLoadTarget(
         url: release.bundleURL.absoluteString,
@@ -679,8 +873,8 @@ extension ExpoLynxView {
         version: release.version,
         source: "cache",
         managedFeature: release.feature,
-        managedRuntimeVersion: try? LynxManagedDeliveryConfiguration.runtimeVersion(),
-        candidateManifestID: candidate ? release.manifestID : nil
+        managedRuntimeVersion: runtimeVersion,
+        candidateManifestID: manifestID
       ),
       generation: generation
     )
@@ -742,6 +936,22 @@ extension ExpoLynxView {
 
   fileprivate func loadTarget(_ target: ExpoLynxLoadTarget, generation: Int) {
     guard generation == loadGeneration else { return }
+
+    // F12: never start a load at a zero/default viewport. If bounds are known,
+    // set the viewport synchronously first; otherwise stash the target and let
+    // `layoutSubviews` drive it once a real size arrives. Nothing below this
+    // guard has mutated per-load state yet, so re-entry from `layoutSubviews`
+    // is clean. A forced reload never hits this — the view already has a
+    // viewport by then.
+    if !hasViewport {
+      if bounds.size.width > 0, bounds.size.height > 0 {
+        applyLayout(bounds.size)
+      } else {
+        pendingLoadTarget = (target, generation)
+        return
+      }
+    }
+
     #if DEBUG || LYNX_IFR_METRICS
       let sourceSelectionMilliseconds = sourceSelectionStartedAt.map {
         max(0, Int(Date().timeIntervalSince($0) * 1_000))
@@ -756,20 +966,30 @@ extension ExpoLynxView {
     hasLoadedTemplate = false
     currentLoadGate = LynxInitialLoadGate()
     currentTarget = target
+    loadToken = UUID()
     loadStartedAt = Date()
-    if target.source == "cache", let bundleURL = URL(string: target.url), bundleURL.isFileURL {
-      templateProvider.setLocalResourceRoot(bundleURL.deletingLastPathComponent())
-    } else if target.source == "embedded", let bundleURL = resolveLocalURL(target.url) {
-      templateProvider.setLocalResourceRoot(bundleURL.deletingLastPathComponent())
-    } else {
-      templateProvider.setLocalResourceRoot(nil)
-    }
+    // Set the per-view provider's root AND mirror it into the process-wide
+    // registry, so a prewarmed runtime (which can only ever hold
+    // `ExpoLynxTemplateProvider.shared`) resolves this view's sidecar
+    // resources too (F4). The registry keeps the previous root as well, so a
+    // superseded load's in-flight fetches still resolve (F7).
+    let root: URL? = {
+      if target.source == "cache", let bundleURL = URL(string: target.url), bundleURL.isFileURL {
+        return bundleURL.deletingLastPathComponent()
+      }
+      if target.source == "embedded", let bundleURL = resolveLocalURL(target.url) {
+        return bundleURL.deletingLastPathComponent()
+      }
+      return nil
+    }()
+    templateProvider.setLocalResourceRoot(root)
+    ExpoLynxResourceRoots.shared.setRoot(root, owner: ObjectIdentifier(self))
     onLoadStart(eventPayload(for: target))
-    // ponytail: show the new template as soon as a load starts; if it
-    // fails, finishWithError hides it again so the stale render isn't
-    // left on screen. The engine has no public wipe-but-stay-alive API;
-    // `isHidden` is the only safe way to drop visibility.
-    lynxView.isHidden = false
+    // F18: the view is revealed in `handleFirstScreen`, once the new content
+    // has actually painted — not here. Un-hiding at load *start* re-showed the
+    // previous render's stale pixels until first screen, after a failed load
+    // had hidden the view. `finishWithError` / `handleError` still hide on
+    // failure; `isHidden` remains the only safe wipe-but-stay-alive lever.
 
     if let remoteURL = URL(string: target.url),
       ["http", "https"].contains(remoteURL.scheme?.lowercased())
@@ -798,7 +1018,7 @@ extension ExpoLynxView {
       return
     }
 
-    loadLocalURL(localURL, target: target, generation: generation)
+    loadLocalURL(localURL, target: target, generation: generation, token: loadToken)
     if target.candidateManifestID != nil, !currentLoadGate.isReady {
       startWatchdog(target: target, generation: generation)
     }
@@ -820,24 +1040,54 @@ extension ExpoLynxView {
     qos: .userInitiated
   )
 
-  // Key on path + size + mtime so a rebuilt bundle at the same path (dev
-  // rebuilds, managed hot-updates that reuse a slot) busts the entry.
+  private static let cacheKeyLock = NSLock()
+  private static var cacheKeyByPath: [String: NSString] = [:]
+
+  // Key on path + size + mtime so a rebuilt bundle at the same path busts the
+  // entry. Within one process (size, mtime) never changes for a given path —
+  // embedded assets are immutable, managed releases land in unique per-release
+  // directories, dev bundles go through the remote-URL path — so the key is
+  // memoised by path (F13) and only the first load of each path pays the stat.
   private static func templateCacheKey(for url: URL) -> NSString? {
-    guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+    let path = url.path
+
+    cacheKeyLock.lock()
+    if let cached = cacheKeyByPath[path] {
+      cacheKeyLock.unlock()
+      return cached
+    }
+    cacheKeyLock.unlock()
+
+    guard
+      let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+    else {
       return nil
     }
-    let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
-    let mtime = Int((attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)
-    return "\(url.path)|\(size)|\(mtime)" as NSString
+    let size = values.fileSize ?? 0
+    // Full sub-second precision (§8.2): the previous `Int(...)` truncation
+    // collided across a same-second rebuild producing an identically-sized
+    // bundle.
+    let mtime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+    let key = "\(path)|\(size)|\(mtime)" as NSString
+
+    cacheKeyLock.lock()
+    cacheKeyByPath[path] = key
+    cacheKeyLock.unlock()
+    return key
   }
 
-  fileprivate func loadLocalURL(_ url: URL, target: ExpoLynxLoadTarget, generation: Int) {
+  fileprivate func loadLocalURL(
+    _ url: URL,
+    target: ExpoLynxLoadTarget,
+    generation: Int,
+    token: UUID
+  ) {
     let cacheKey = ExpoLynxView.templateCacheKey(for: url)
 
     // Fast path: a bundle decoded on an earlier mount is reused with no I/O
     // and no decode on the main thread.
     if let cacheKey, let cached = ExpoLynxView.templateBundleCache.object(forKey: cacheKey) {
-      guard generation == loadGeneration, currentTarget?.url == target.url else { return }
+      guard generation == loadGeneration, token == loadToken else { return }
       // ObjC `loadTemplateBundle:withURL:initData:` imports into Swift as
       // `load(_:withURL:initData:)`.
       lynxView.load(
@@ -847,6 +1097,11 @@ extension ExpoLynxView {
       )
       return
     }
+
+    // F14: build `LynxTemplateData` on the decode queue too, not on the main
+    // continuation. Snapshot the JSON now (on main); the
+    // `initialDataNeedsUpdate` side effect still runs on main, below.
+    let initialDataJSONSnapshot = initialDataJSON
 
     ExpoLynxView.templateDecodeQueue.async { [weak self] in
       let outcome: Result<(LynxTemplateBundle?, Data), Error>
@@ -864,20 +1119,33 @@ extension ExpoLynxView {
         outcome = .failure(error)
       }
 
+      let initData: LynxTemplateData? = {
+        guard let json = initialDataJSONSnapshot, !json.isEmpty else { return nil }
+        return LynxTemplateData(json: json, useBoolLiterals: true)
+      }()
+
       DispatchQueue.main.async {
+        // F15: cache the decoded bundle whether or not this view still exists.
+        // The decode is already paid for; the next mount of the same binary
+        // should hit the fast path instead of re-decoding. `NSCache` is
+        // thread-safe and this needs only `outcome` + `cacheKey`, both captured.
+        if case .success(let (bundle, _)) = outcome, let bundle, let cacheKey {
+          ExpoLynxView.templateBundleCache.setObject(bundle, forKey: cacheKey)
+        }
+
         guard let self, generation == self.loadGeneration,
-          self.currentTarget?.url == target.url
+          token == self.loadToken
         else { return }
 
         switch outcome {
         case .failure(let error):
           self.finishWithError(error, target: target, generation: generation)
         case .success(let (bundle, data)):
-          let initData = self.consumeTemplateDataForLoad()
+          // Main-actor side effect of consuming the pending initial data —
+          // only on the path that actually hands `initData` to the engine,
+          // matching the previous `consumeTemplateDataForLoad()` placement.
+          self.initialDataNeedsUpdate = false
           if let bundle {
-            if let cacheKey {
-              ExpoLynxView.templateBundleCache.setObject(bundle, forKey: cacheKey)
-            }
             self.lynxView.load(
               bundle,
               withURL: target.url,
@@ -1078,8 +1346,14 @@ extension ExpoLynxView {
   /// boundary and may be forwarded to analytics, so remove query credentials
   /// and URL user/password components before dispatching them.
   fileprivate static func redactedEventMessage(_ message: String) -> String {
-    let words = message.split(separator: " ", omittingEmptySubsequences: false).map {
+    // F24: truncate first, and skip words that cannot be URLs before paying for
+    // a `URLComponents` parse. The `://` pre-filter is safe — the guard below
+    // only keeps a word when it parses with both a scheme and a host, which
+    // requires `://`.
+    let truncated = message.prefix(500)
+    let words = truncated.split(separator: " ", omittingEmptySubsequences: false).map {
       word -> String in
+      guard word.contains("://") else { return String(word) }
       let suffix = word.reversed().prefix { ").,]".contains($0) }
       let core = String(word.dropLast(suffix.count))
       guard var components = URLComponents(string: core), components.scheme != nil,
@@ -1092,7 +1366,7 @@ extension ExpoLynxView {
       components.password = nil
       return (components.string ?? core) + String(suffix.reversed())
     }
-    return words.joined(separator: " ").prefix(500).description
+    return words.joined(separator: " ")
   }
 
 }
@@ -1123,12 +1397,15 @@ extension ExpoLynxView {
     error: Error,
     generation: Int
   ) {
-    guard let manifestID = target.candidateManifestID,
-      let feature = target.managedFeature,
-      let runtimeVersion = target.managedRuntimeVersion
-    else { return }
+    assertMain()
 
+    // Unconditional. `target.managedRuntimeVersion` is populated with `try?`
+    // in `loadManagedRelease` and can legitimately be nil; if the obligations
+    // below are gated on the release triple, a nil runtime version silently
+    // drops the error, leaks the watchdog, and hangs `reloadMountedViews`'
+    // continuation for the process lifetime (F5).
     watchdogWorkItem?.cancel()
+    watchdogWorkItem = nil
     if currentLoadGate.hasFirstScreen {
       emitDeliveryError(error, fallbackURL: target.url, feature: target.feature)
     } else {
@@ -1138,9 +1415,23 @@ extension ExpoLynxView {
     forceReloadCompletion = nil
     deferredForceReload?.completion(.failure(error))
     deferredForceReload = nil
-
     deliveryTask?.cancel()
+
     guard generation == loadGeneration else { return }
+
+    guard let manifestID = target.candidateManifestID,
+      let feature = target.managedFeature,
+      let runtimeVersion = target.managedRuntimeVersion
+    else {
+      // Without the full triple we cannot record the failure in
+      // `LynxManagedDeploymentState` or choose a fallback release. Load the
+      // embedded bundle so the view is not left blank.
+      if let feature = target.managedFeature ?? managedFeature {
+        loadEmbedded(feature: feature, generation: generation)
+      }
+      return
+    }
+
     LynxManagedDeploymentState.shared.fail(
       releaseID: manifestID,
       feature: feature,
@@ -1172,11 +1463,47 @@ extension ExpoLynxView {
 
 extension ExpoLynxView {
 
-  // MARK: - Lynx lifecycle
+  // MARK: - LynxViewLifecycle (thread-normalising entry points)
+  //
+  // Lynx guarantees main-thread delivery only for `lynxViewDidFirstScreen`
+  // (LynxView.mm:1123). `didLoadFinishedWithUrl:` and `didRecieveError:` are
+  // invoked synchronously on the producing thread (LynxView.mm:1145, :838) —
+  // for a resource failure that is this module's own `ExpoLynxTemplateProvider`
+  // completion queue. Snapshot the generation off-main, then hop; every
+  // `handle*` body below is main-thread-only and starts with `assertMain()`.
 
   func lynxView(_ view: LynxView, didLoadFinishedWithUrl url: String) {
+    let generation = generationBox.current
+    onMain { [weak self] in
+      self?.handleLoadFinished(url: url, generation: generation)
+    }
+  }
+
+  /// Lynx may report the post-redirect URL for a load, and this module's own
+  /// `ExpoLynxTemplateProvider.shouldRedirectUrl` rewrites local requests to
+  /// absolute file URLs. Compare on standardized file paths, falling back to
+  /// absolute-string equality for remote URLs (F6).
+  private static func isSameTemplateURL(_ lhs: String, _ rhs: String) -> Bool {
+    if lhs == rhs { return true }
+    guard let l = URL(string: lhs), let r = URL(string: rhs) else { return false }
+    if l.isFileURL && r.isFileURL {
+      return l.standardizedFileURL.path == r.standardizedFileURL.path
+    }
+    return l.absoluteString == r.absoluteString
+  }
+
+  private func handleLoadFinished(url: String, generation: Int) {
+    assertMain()
+    guard generation == loadGeneration else { return }
     guard let target = currentTarget else { return }
-    guard url.isEmpty || url == target.url else { return }
+    if !url.isEmpty, !ExpoLynxView.isSameTemplateURL(url, target.url) {
+      // The generation guard already scoped this to the current load. A
+      // same-generation URL that still doesn't match is almost certainly
+      // `shouldRedirectUrl` normalisation we didn't account for — proceed
+      // anyway. Returning here would strand the gate until the 15s watchdog
+      // fails a healthy release (F6).
+      assertionFailure("load-finished URL \(url) != current target \(target.url)")
+    }
     hasLoadedTemplate = true
     currentLoadGate.recordLoadFinished()
     #if DEBUG || LYNX_IFR_METRICS
@@ -1192,6 +1519,15 @@ extension ExpoLynxView {
   }
 
   func lynxViewDidFirstScreen(_ view: LynxView) {
+    let generation = generationBox.current
+    onMain { [weak self] in
+      self?.handleFirstScreen(generation: generation)
+    }
+  }
+
+  private func handleFirstScreen(generation: Int) {
+    assertMain()
+    guard generation == loadGeneration else { return }
     guard let target = currentTarget, currentLoadGate.recordFirstScreen() else { return }
 
     let firstScreenMilliseconds = currentLoadDurationMilliseconds()
@@ -1202,15 +1538,19 @@ extension ExpoLynxView {
         source: target.source
       )
     #endif
+    // F18: reveal now that first screen has painted. Safe to call every time —
+    // `finishWithError` / `handleError` re-hide on a subsequent failed load.
+    lynxView.isHidden = false
+
     var payload = eventPayload(for: target)
     payload["durationMs"] = firstScreenMilliseconds
     onLoad(payload)
 
     if deferredDeliveryError != nil {
-      let generation = loadGeneration
+      let deferredGeneration = loadGeneration
       DispatchQueue.main.async { [weak self] in
         guard let self,
-          generation == self.loadGeneration,
+          deferredGeneration == self.loadGeneration,
           let deferredError = self.deferredDeliveryError
         else { return }
         self.deferredDeliveryError = nil
@@ -1270,16 +1610,25 @@ extension ExpoLynxView {
   }
 
   func lynxView(_ view: LynxView, didRecieveError error: Error) {
+    let generation = generationBox.current
+    onMain { [weak self] in
+      self?.handleError(error, generation: generation)
+    }
+  }
+
+  private func handleError(_ error: Error, generation: Int) {
+    assertMain()
+    guard generation == loadGeneration else { return }
     let target = currentTarget
     if ExpoLynxView.isMainBundleError(error) {
       if let target, target.candidateManifestID != nil {
-        failCandidate(target, error: error, generation: loadGeneration)
+        failCandidate(target, error: error, generation: generation)
         return
       }
-      view.isHidden = true
+      lynxView.isHidden = true
     }
 
-    let url = view.url ?? currentTarget?.url ?? ""
+    let url = lynxView.url ?? currentTarget?.url ?? ""
     let payload = ExpoLynxView.errorPayload(for: error)
     emitError(
       url: url,

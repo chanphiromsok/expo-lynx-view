@@ -6,32 +6,54 @@ final class ExpoLynxTemplateProvider: NSObject, LynxTemplateProvider,
 {
   static let shared = ExpoLynxTemplateProvider()
   private let resourceRootLock = NSLock()
-  private var localResourceRoot: URL?
+  // This provider's own root — set by the `ExpoLynxView` that owns this
+  // instance. `.shared` (which backs prewarmed runtimes) never gets one; it
+  // resolves entirely through `ExpoLynxResourceRoots` + the app bundle.
+  private var preferredResourceRoot: URL?
 
   func setLocalResourceRoot(_ url: URL?) {
     resourceRootLock.lock()
-    localResourceRoot = url
+    preferredResourceRoot = url
     resourceRootLock.unlock()
   }
 
-  private func currentLocalResourceRoot() -> URL? {
+  /// Ordered candidate roots: this provider's own root first (the per-view
+  /// instance), then every root registered by a live view — the only source
+  /// available to `.shared` — then the app bundle. `existingFileURL` /
+  /// `existingResourceURL` still sandbox each candidate, so widening the set
+  /// cannot escape a registered root.
+  private func candidateRoots() -> [URL] {
     resourceRootLock.lock()
-    defer { resourceRootLock.unlock() }
-    return localResourceRoot
+    let preferred = preferredResourceRoot
+    resourceRootLock.unlock()
+
+    var roots: [URL] = []
+    if let preferred { roots.append(preferred) }
+    for root in ExpoLynxResourceRoots.shared.currentRoots() where !roots.contains(root) {
+      roots.append(root)
+    }
+    if let bundleRoot = Bundle.main.resourceURL, !roots.contains(bundleRoot) {
+      roots.append(bundleRoot)
+    }
+    return roots
   }
 
   func bundledResourceURL(for value: String) -> URL? {
-    guard let resourceRoot = Bundle.main.resourceURL else { return nil }
+    let roots = candidateRoots()
+    guard !roots.isEmpty else { return nil }
 
     if let fileURL = URL(string: value), fileURL.isFileURL {
-      if let localRoot = currentLocalResourceRoot(),
-        let localURL = existingFileURL(fileURL, inside: localRoot)
-      {
-        return localURL
-      }
-      return existingFileURL(fileURL, inside: resourceRoot)
+      return roots.lazy.compactMap { self.existingFileURL(fileURL, inside: $0) }.first
     }
 
+    guard let components = normalizedComponents(value) else { return nil }
+    return roots.lazy.compactMap { self.existingResourceURL(root: $0, components: components) }.first
+  }
+
+  /// Strip a `bundle://` prefix, reject explicit schemes and `.` / `..`
+  /// traversal, and split into path components. Logic unchanged from the
+  /// previous inline implementation in `bundledResourceURL`.
+  private func normalizedComponents(_ value: String) -> [Substring]? {
     var resourcePath = value
     if resourcePath.hasPrefix("bundle://") {
       resourcePath.removeFirst("bundle://".count)
@@ -47,14 +69,7 @@ final class ExpoLynxTemplateProvider: NSObject, LynxTemplateProvider,
     else {
       return nil
     }
-
-    if let localRoot = currentLocalResourceRoot(),
-      let localURL = existingResourceURL(root: localRoot, components: pathComponents)
-    {
-      return localURL
-    }
-
-    return existingResourceURL(root: resourceRoot, components: pathComponents)
+    return pathComponents
   }
 
   private func existingResourceURL(root: URL, components: [Substring]) -> URL? {

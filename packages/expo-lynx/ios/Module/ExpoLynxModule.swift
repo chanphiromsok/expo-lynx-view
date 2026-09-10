@@ -17,6 +17,14 @@ public final class ExpoLynxModule: Module {
     // work does not compete with app launch. Runs off the main thread; a second
     // call while one is already building is a no-op.
     AsyncFunction("prewarmRuntime") {
+      // F10: do the managed-delivery store's blocking I/O (MMKV.initialize,
+      // createDirectory, mmap) here, at a host-chosen moment, instead of on the
+      // first `ExpoLynxView` mount. `ExpoLynxView.init` still calls these as an
+      // idempotent safety net for hosts that never call `prewarmRuntime`.
+      await MainActor.run {
+        LynxManagedDeploymentState.prepareStorage()
+        _ = LynxManagedDeploymentState.shared
+      }
       ExpoLynxRuntimeWarmer.shared.prime()
     }
 
