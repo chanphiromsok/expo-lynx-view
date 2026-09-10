@@ -19,6 +19,11 @@ final class ExpoLynxRuntimeWarmer: @unchecked Sendable {
   private let lock = NSLock()
   private var warm: LynxBackgroundRuntime?
   private var building = false
+  /// Bumped by `drain()` so a build already in flight can tell that its result
+  /// is no longer wanted (F26). Without it a memory warning that lands
+  /// mid-build completes anyway, allocating a fresh JSC VM immediately after
+  /// the warning that was supposed to release one.
+  private var epoch = 0
   private let queue = DispatchQueue(
     label: "com.expo.lynx.runtime-warmer",
     qos: .utility
@@ -42,6 +47,10 @@ final class ExpoLynxRuntimeWarmer: @unchecked Sendable {
   func drain() {
     lock.lock()
     warm = nil
+    // Wrapping is harmless — a collision needs 2^64 drains between one build's
+    // dispatch and its completion — and `&+=` keeps an overflow trap out of a
+    // release-path critical section.
+    epoch &+= 1
     lock.unlock()
   }
 
@@ -84,6 +93,7 @@ final class ExpoLynxRuntimeWarmer: @unchecked Sendable {
       return
     }
     building = true
+    let builtFor = epoch
     lock.unlock()
 
     // Capture `self` strongly: `shared` is a `static let` that never
@@ -102,8 +112,14 @@ final class ExpoLynxRuntimeWarmer: @unchecked Sendable {
         let runtime = LynxBackgroundRuntime(options: options)
       #endif
       self.lock.lock()
-      self.warm = runtime
+      // `building` clears unconditionally — a concurrent `take()` must never
+      // observe `warm == nil && !building` with a refill still pending. The
+      // runtime itself is kept only if no `drain()` intervened; otherwise it is
+      // released here and the next `take()` refills.
       self.building = false
+      if builtFor == self.epoch {
+        self.warm = runtime
+      }
       self.lock.unlock()
     }
   }
@@ -213,6 +229,15 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   // that arrives first is stashed here and driven from `layoutSubviews`.
   private var hasViewport = false
   private var pendingLoadTarget: (target: ExpoLynxLoadTarget, generation: Int)?
+  // F27: the viewport gate must not be able to stall a load indefinitely. A
+  // view that never receives non-zero bounds — a collapsed flex parent, a
+  // container that is mounted but never sized — would otherwise sit in
+  // `pendingLoadTarget` forever and emit nothing at all: no `onLoadStart`, no
+  // `onError`, no timeout. After this deadline the load proceeds against
+  // Lynx's default viewport, which is what happened before F12.
+  private var pendingLoadDeadline: DispatchWorkItem?
+  private var viewportGateWaived = false
+  private static let viewportGateTimeout: TimeInterval = 1
   // F16: coalesce viewport updates during a continuous resize (rotation,
   // keyboard, sheet-detent drag) into one Lynx relayout on the next turn.
   private var pendingViewportSize: CGSize?
@@ -337,6 +362,7 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
   deinit {
     deliveryTask?.cancel()
     watchdogWorkItem?.cancel()
+    pendingLoadDeadline?.cancel()
     // Lock-guarded and nonisolated — safe to call directly, no main hop.
     ExpoLynxResourceRoots.shared.removeOwner(ObjectIdentifier(self))
 
@@ -422,6 +448,8 @@ final class ExpoLynxView: ExpoView, LynxViewLifecycle {
       bounds.size.width > 0, bounds.size.height > 0
     {
       pendingLoadTarget = nil
+      pendingLoadDeadline?.cancel()
+      pendingLoadDeadline = nil
       loadTarget(pending.target, generation: pending.generation)
     }
   }
@@ -525,6 +553,9 @@ extension ExpoLynxView {
     managedDeliveryStartedGeneration = nil
     currentTarget = nil
     pendingLoadTarget = nil
+    pendingLoadDeadline?.cancel()
+    pendingLoadDeadline = nil
+    viewportGateWaived = false
     LynxManagedViewRegistry.shared.unregister(self)
     managedFeature = nil
 
@@ -934,6 +965,41 @@ extension ExpoLynxView {
 
   // MARK: - Template loading
 
+  /// Park a load until a real viewport arrives, with a deadline so it cannot
+  /// stall forever (F27). Only `layoutSubviews` drains the stash, so a view
+  /// that is never given a size would otherwise never load and never report.
+  private func stashPendingLoad(_ target: ExpoLynxLoadTarget, generation: Int) {
+    assertMain()
+    pendingLoadTarget = (target, generation)
+    guard pendingLoadDeadline == nil else { return }
+
+    let deadline = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.pendingLoadDeadline = nil
+      guard let pending = self.pendingLoadTarget else { return }
+      self.pendingLoadTarget = nil
+      self.viewportGateWaived = true
+      // Deliberately a log, not an `assertionFailure`: a view can legitimately
+      // sit at zero bounds for a while (a collapsed sheet, an inactive tab),
+      // and this path is already recovering. Trapping the debug build would
+      // punish a real layout for being slow rather than for being wrong.
+      NSLog(
+        """
+        [expo-lynx] View still had zero bounds %.0fs after a load was requested; \
+        loading against Lynx's default viewport. Give the view an explicit size \
+        — it will otherwise pay a duplicate layout pass when a real size arrives.
+        """,
+        Self.viewportGateTimeout
+      )
+      self.loadTarget(pending.target, generation: pending.generation)
+    }
+    pendingLoadDeadline = deadline
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + Self.viewportGateTimeout,
+      execute: deadline
+    )
+  }
+
   fileprivate func loadTarget(_ target: ExpoLynxLoadTarget, generation: Int) {
     guard generation == loadGeneration else { return }
 
@@ -946,10 +1012,16 @@ extension ExpoLynxView {
     if !hasViewport {
       if bounds.size.width > 0, bounds.size.height > 0 {
         applyLayout(bounds.size)
-      } else {
-        pendingLoadTarget = (target, generation)
+      } else if !viewportGateWaived {
+        stashPendingLoad(target, generation: generation)
         return
       }
+      // F27: waived by the deadline — fall through and load against Lynx's
+      // default viewport. `applyLayout` is deliberately NOT called with the
+      // zero size: `hasViewport` stays false so the first real
+      // `layoutSubviews` still performs the initial viewport sync, exactly as
+      // it did before F12 (whose `bounds.size != lastLayoutSize` guard meant a
+      // zero-bounds view never pushed a viewport to Lynx at all).
     }
 
     #if DEBUG || LYNX_IFR_METRICS

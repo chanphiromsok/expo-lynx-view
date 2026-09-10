@@ -48,7 +48,7 @@ The codebase compiles in Swift 5 language mode — `ExpoLynx.podspec` sets no `S
 | F17 | Perf | Safe-area seeding causes a second full render right after first screen. | 5 |
 | F18 | Perf | `isHidden = false` at load start reveals the stale render. | 5 |
 
-Findings F19-F21 (cloud review cross-check) are in §8; F22-F25 (low severity) are in §9. §8.1 and §8.2 amend Phase 5 — read them before implementing §5.1 or §5.3.
+Findings F19-F21 (cloud review cross-check) are in §8; F22-F25 (low severity) are in §9. §8.1 and §8.2 amend Phase 5 — read them before implementing §5.1 or §5.3. §10 is the implementation log; §11 is the post-implementation review of the landed code, and carries two findings the implementation introduced (F26, F27) plus the resolution of F25. §12 is the proposal to fix F26 and F27 — it withdraws one of the three options §11.3 floated, so read §12.1 rather than implementing from §11.3.
 
 ---
 
@@ -810,7 +810,7 @@ The `://` pre-filter is safe: `URLComponents` only yields a non-nil `scheme` *an
 
 Redaction correctness is unchanged; this is purely cost. Fold into Phase 5 if that file is already open.
 
-### 9.4 F25 (low, **unverified**) — `OnCreate`'s Lynx environment setup may run off-main
+### 9.4 F25 (low, **resolved — not a bug**) — `OnCreate`'s Lynx environment setup runs off-main, and that is safe
 
 `ExpoLynxModule.OnCreate` calls `LynxEnv.sharedInstance()` and `lynxEnv.prepareConfig(...)`. The existing comment in `ExpoLynxView.init` asserts that "Expo's module `OnCreate` closure is nonisolated", which is the stated reason the MMKV warm-up was moved into the view initializer in the first place.
 
@@ -818,7 +818,20 @@ If `OnCreate` genuinely runs off the main thread, then Lynx environment initiali
 
 **This was not verified.** It requires establishing which thread Expo Modules Core invokes `OnCreate` on for this module type, and whether `LynxEnv.sharedInstance()` / `prepareConfig` have main-thread requirements in Lynx 4.0.0. Do that before acting; if `OnCreate` does run off-main, the fix is the same `onMain` trampoline introduced in §1.2, and §5.1's relocation of the MMKV warm-up should move there too rather than into `prewarmRuntime`.
 
-Assign this to whoever implements Phase 1, since they will already have the thread-contract context loaded.
+**Resolved 2026-09-10 from source; no runtime measurement needed.** Both halves of the question are answerable from the vendored pod and from ExpoModulesCore, and the answer is that `OnCreate` may indeed run off-main but nothing it calls requires main.
+
+Half 1 — *does it run off-main?* Yes, it can. `AppContext.registerNativeModules(provider:)` (`expo-modules-core/ios/Core/AppContext.swift:399`) calls `useModulesProvider(provider)` — which builds every `ModuleHolder`, and therefore fires every `OnCreate` — **before** its `if Thread.isMainThread { MainActor.assumeIsolated { … } } else { Task { @MainActor … } }` fork at `:403`. The fork's `else` branch is itself the proof: Expo would not have written it if registration were main-only.
+
+Half 2 — *does that matter for this module's `OnCreate` body?* No. Both calls are thread-safe in Lynx 4.0.0:
+
+| Call | Evidence | Verdict |
+| --- | --- | --- |
+| `LynxEnv.sharedInstance()` | `LynxEnv.mm:89-108` — `dispatch_once`, and the one main-thread-sensitive step (`prewarmTextIfNeeded`, which touches UIKit text) is **already** wrapped by the SDK in `dispatch_async(dispatch_get_main_queue(), …)` at `:99` | Safe off-main by design |
+| `lynxEnv.prepareConfig(config)` | `LynxEnv.mm:389-397` — assigns `_config`, then `[_config.componentRegistry makeIntoGloabl]` → `LynxComponentRegistry.m:185-196` → `+registerUI:withName:` etc., whose backing stores are `LynxThreadSafeDictionary` (`:45-53`) | Safe off-main |
+
+Lynx's authors hopped the one piece that needs main and left the rest thread-agnostic. **Do not add a main hop here.** A `DispatchQueue.main.sync` would risk the launch deadlock this section originally worried about, in exchange for nothing; an async hop would break the "shared environment before any other Lynx API" ordering. §5.1's placement of the MMKV warm-up in `prewarmRuntime` also stands — it was never contingent on this.
+
+One residual, relevant only under Phase 0's sanitizer gate: `prepareConfig` writes the `_config` ivar without synchronisation. If TSan reports a race on it between module registration and a later `LynxEnv.config` read, this is the write it means. It is a one-shot publish that in practice happens long before any `LynxView` exists, and it is Lynx's code, not this module's — note it and move on rather than working around it.
 
 ---
 
@@ -914,4 +927,277 @@ All four touch `ExpoLynxView.swift`. **Needs real-device `LYNX_IFR_METRICS` befo
   - **Still not done in F13:** the third `resolveLocalURL(target.url)` inside `loadTarget`. It resolves against `ExpoLynxResourceRoots` (F7), whose root set is dynamic, so a `value → URL` memo there could return a stale root. Left as-is.
 - **F5-tail** — `loadManagedRelease` now resolves `LynxManagedDeliveryConfiguration.runtimeVersion()` with a real `do/catch` instead of `try?`. On failure it routes through `failCandidate` (whose unconditional block resolves any pending force-reload completion and clears the watchdog) with `managedRuntimeVersion: nil`, so the nil-triple branch falls back to the embedded bundle. This is the completion-aware failure path the earlier deferral was waiting on; no force-reload hang.
 
-**Not yet done:** the `LYNX_IFR_METRICS` before/after for the F11/F12/F14/F16 batch; the F25 thread check; fixture tests; the sanitizer runs; restore 1.4's `@MainActor` typing at iOS 17. **All code findings F1–F24 are now implemented** (F17 removed by request; F25 needs a runtime measurement, not a code change).
+**Not yet done:** the `LYNX_IFR_METRICS` before/after for the F11/F12/F14/F16 batch; fixture tests; the sanitizer runs; restore 1.4's `@MainActor` typing at iOS 17. **All code findings F1–F24 are now implemented** (F17 removed by request). F25 is closed as not-a-bug — see the resolution in §9.4.
+
+---
+
+## 11. Post-implementation review (2026-09-10)
+
+Read against the landed code at `42dd8e4`, not against the spec text. Verdict on the three deviations flagged at hand-off, then two findings the implementation introduced.
+
+### 11.1 Deviations — all three accepted
+
+**F3 (`@MainActor` typing reverted, runtime discipline kept).** Verified. Every site that invokes `forceReloadCompletion` or `deferredForceReload.completion` is provably main-thread:
+
+| Site | Why it is on main |
+| --- | --- |
+| `scheduleLoad` | reached from `applyPendingUpdate` (Expo's batched main-thread props callback) or from `reload()`, which goes through `onMain` |
+| `performForceReload` | called from `forceReloadManagedRelease`, whose only caller is the `@MainActor` `LynxManagedViewRegistry`, or from `completeCurrentLoadHealthIfReady` below |
+| `completeCurrentLoadHealthIfReady` | reached only from `handleLoadFinished` / `handleFirstScreen`, both post-`onMain` and both opening with `assertMain()` |
+| `failCandidate` | opens with `assertMain()`; its five callers are all inside post-`onMain` bodies or the main-queue watchdog |
+| `deinit` | explicitly drains both completions inside `DispatchQueue.main.async` |
+
+The compile-time annotation would have been strictly better, and the `MainActor.assumeIsolated` / iOS 17 reasoning for dropping it is correct against the 16.4 floor. The in-code comment already carries the restore instruction. Nothing further to do.
+
+**F9 (single critical section instead of the spec's `defer`).** The implementation is right and the spec was wrong. `defer { building = false }` around an early `return` splits the `warm` and `building` writes across two lock acquisitions, opening a window where a concurrent `take()` observes `warm == nil && !building` with no refill pending — the warmer then never refills. Since `makeOptions()` and `LynxBackgroundRuntime.init` cannot throw, there is no bail path between the guard and the assignment, so the single critical section is sound. The strong `self` capture is also correct: `shared` is a `static let`, so there is no cycle, and the previous `[weak self]` was the thing that could strand `building == true`.
+
+**F13 (memoised cache key).** The memo's correctness rests on `(size, mtime)` never changing for a given path within one process. Verified: managed releases resolve to `<root>/<feature>/ready/<runtimeKey>/<releaseID>/main.lynx.bundle` (`LynxManagedBundleStore.swift:62-67`, `:315-327`), so a new release is a new `releaseID` directory and therefore a new path — an updated bundle can never reuse a memoised key. Embedded assets are immutable; dev bundles take the remote-URL path. The premise holds.
+
+### 11.2 F26 (nit) — `drain()` does not fence an in-flight build
+
+`ExpoLynxRuntimeWarmer.drain()` clears `warm` but leaves `building` alone, and the queued build block assigns `self.warm = runtime` unconditionally. Because `refillIfNeeded` only dispatches when `warm == nil`, a drain that lands mid-build has nothing to clear and the build then completes — allocating a fresh JSC VM immediately after the memory warning that was supposed to release one. Cost is bounded at one runtime, so this is a nit, not a leak.
+
+Fix, if taken: an epoch counter bumped under the lock in `drain()` and captured by the build block, which assigns only when the epoch still matches.
+
+```swift
+private var epoch = 0
+
+func drain() {
+  lock.lock()
+  warm = nil
+  epoch &+= 1   // invalidate any build already in flight
+  lock.unlock()
+}
+```
+
+…with the build block capturing `let builtFor = epoch` inside the existing critical section and guarding `guard builtFor == self.epoch else { return }` before `self.warm = runtime` (still clearing `building` either way).
+
+### 11.3 F27 (normal) — F12's viewport gate has no escape hatch
+
+`loadTarget` stashes into `pendingLoadTarget` when the view has no viewport, and the *only* place that stash is drained is `layoutSubviews` (plus `scheduleLoad`, which discards it). A view that never receives non-zero bounds — a collapsed flex parent, a zero-height container, a host that mounts the view before giving it a size and never re-lays-out — therefore never loads, and because `onLoadStart(…)` sits *below* the gate, it emits **nothing at all**: no `onLoadStart`, no `onError`, no timeout. JS awaiting `onLoad` hangs forever with no diagnostic.
+
+This is a behavioural regression against the pre-F12 code, which loaded at a zero viewport — a wasted layout pass, but observable, and it still fired the load events. F12 traded a visible perf problem for a silent one.
+
+The fix should preserve F12's intent (never lay out Lynx against a placeholder viewport) while making the stalled state observable. In rough order of preference:
+
+1. Emit `onLoadStart` when the target is stashed rather than after the gate, so the JS side sees the load begin, and keep the Lynx call gated. This restores event parity at zero cost.
+2. Add a debug-only diagnostic — an `assertionFailure` or a one-shot log — when a target has been stashed across more than one layout pass while the view is in a window.
+3. Optionally, a bounded fallback: if the view is in a window and still zero-sized after a short deadline, proceed with the load rather than stalling indefinitely.
+
+Do **not** simply remove the gate; the F11/F12 pairing is what removes the duplicate first layout pass.
+
+---
+
+## 12. Proposal — fix F26 and F27
+
+Two independent changes, both small, both confined to `packages/expo-lynx/ios/View/ExpoLynxView.swift`. They share no state and can land in either order or in one commit. Neither touches the Lynx callback boundary, so Phase 1's thread contract is unaffected.
+
+**Recommended commit split:** one commit, `fix(ios): bound the F12 viewport gate; fence warmer drain against an in-flight build`. They are each too small to justify their own commit and both fall out of the same review pass.
+
+### 12.1 F27 — bound the viewport gate with a deadline
+
+#### Design
+
+§11.3 offered three options and listed "move `onLoadStart` above the gate" first. **Withdraw that one.** It creates a double-emit hazard: the stashed target is re-entered through `loadTarget` when layout arrives, so the announce would fire twice for one load unless the stash carries an extra `didAnnounce` flag. Adding a flag to suppress a duplicate of an event we only moved in order to be visible is the wrong shape.
+
+Take a single mechanism instead: **a deadline on the stash**. If a stashed load is still stashed after 1 second, proceed at Lynx's default viewport. This subsumes both remaining options — the load becomes observable because it actually happens (`onLoadStart`, then the normal success or failure path), and the stall is bounded without a second event mechanism.
+
+Three properties make this the right fallback rather than, say, emitting an error:
+
+1. **It restores the pre-F12 behaviour exactly, and only in the pathological case.** Before F12, a zero-bounds view loaded against Lynx's default viewport because `layoutSubviews`' `bounds.size != lastLayoutSize` guard meant `applyLayout` never ran at all. The fallback must therefore *not* call `applyLayout(.zero)` — it leaves `hasViewport == false` so the first real `layoutSubviews` still performs the initial viewport sync normally.
+2. **It self-corrects.** A view that gets a size later (a tab that activates, a container that expands) hits `layoutSubviews` → `hasViewport == false` → `applyLayout`, and Lynx relayouts against the real viewport. The cost is the duplicate layout pass F11/F12 exist to avoid — paid only by a view that sat sizeless for a second.
+3. **It cannot fire on the fast path.** `init` already calls `applyLayout` when bounds are non-zero at construction, and a normally-mounted view reaches `layoutSubviews` in the same runloop turn. The deadline is dead code in every healthy mount.
+
+1 second is chosen to be far beyond any legitimate layout latency while still well inside a user's patience for a screen that will otherwise render nothing.
+
+#### Diff
+
+New stored properties, beside the existing `pendingLoadTarget` declaration:
+
+```swift
+  private var pendingLoadTarget: (target: ExpoLynxLoadTarget, generation: Int)?
+  // F27: the viewport gate must not be able to stall a load indefinitely. A
+  // view that never receives non-zero bounds — a collapsed flex parent, a
+  // container that is mounted but never sized — would otherwise sit in
+  // `pendingLoadTarget` forever and emit nothing at all: no `onLoadStart`, no
+  // `onError`, no timeout. After this deadline the load proceeds against
+  // Lynx's default viewport, which is exactly what happened before F12.
+  private var pendingLoadDeadline: DispatchWorkItem?
+  private var viewportGateWaived = false
+  private static let viewportGateTimeout: TimeInterval = 1
+```
+
+Replace the gate in `loadTarget`:
+
+```swift
+    if !hasViewport {
+      if bounds.size.width > 0, bounds.size.height > 0 {
+        applyLayout(bounds.size)
+      } else if !viewportGateWaived {
+        stashPendingLoad(target, generation: generation)
+        return
+      }
+      // Waived by the deadline: fall through and load at Lynx's default
+      // viewport. `applyLayout` is deliberately NOT called with the zero size —
+      // `hasViewport` stays false so the first real `layoutSubviews` still
+      // performs the initial viewport sync.
+    }
+```
+
+New helper, next to `loadTarget`:
+
+```swift
+  /// Park a load until a real viewport arrives, with a deadline so it cannot
+  /// stall forever (F27).
+  private func stashPendingLoad(_ target: ExpoLynxLoadTarget, generation: Int) {
+    assertMain()
+    pendingLoadTarget = (target, generation)
+    guard pendingLoadDeadline == nil else { return }
+
+    let deadline = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.pendingLoadDeadline = nil
+      guard let pending = self.pendingLoadTarget else { return }
+      self.pendingLoadTarget = nil
+      self.viewportGateWaived = true
+      // Amended during implementation: `NSLog`, not `assertionFailure`. See
+      // the note under the diff.
+      NSLog(
+        """
+        [expo-lynx] View still had zero bounds %.0fs after a load was requested; \
+        loading against Lynx's default viewport. Give the view an explicit size \
+        — it will otherwise pay a duplicate layout pass when a real size arrives.
+        """,
+        Self.viewportGateTimeout
+      )
+      self.loadTarget(pending.target, generation: pending.generation)
+    }
+    pendingLoadDeadline = deadline
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + Self.viewportGateTimeout,
+      execute: deadline
+    )
+  }
+```
+
+Cancel the deadline at the two points that already clear `pendingLoadTarget`, plus `deinit`:
+
+```swift
+  // in layoutSubviews, in the existing resume block, immediately after
+  //   pendingLoadTarget = nil
+  pendingLoadDeadline?.cancel()
+  pendingLoadDeadline = nil
+
+  // in scheduleLoad, beside the existing `pendingLoadTarget = nil`
+  pendingLoadDeadline?.cancel()
+  pendingLoadDeadline = nil
+  viewportGateWaived = false
+
+  // in deinit, beside the existing deliveryTask / watchdogWorkItem cancels
+  pendingLoadDeadline?.cancel()
+```
+
+`viewportGateWaived` resets in `scheduleLoad` and nowhere else: the waiver applies to the load that stalled, and every subsequent load re-enters the gate from a clean state.
+
+**Amended during implementation.** The proposal originally used a debug-only `assertionFailure` here. That is wrong for this path: a view can legitimately sit at zero bounds for a second — a collapsed bottom sheet, an inactive tab, a container mid-animation — so trapping the debug build would punish a real layout for being slow rather than for being wrong, and it is a false positive the host cannot always fix. The recovery is already correct; the diagnostic should inform, not halt. `NSLog` with the `[expo-lynx]` prefix matches the convention already used in `ImageUtils.swift` / `ImageCacheType.swift` for exactly this "unusual but handled" case, and it ships in release too, where the stall is just as worth knowing about. `assertionFailure` stays reserved for genuine invariant violations, as in the F6 URL-mismatch check.
+
+### 12.2 F26 — fence `drain()` against an in-flight build
+
+#### Design
+
+The constraint carried over from the F9 correction: **do not split the `warm` / `building` writes across two lock acquisitions.** Whatever fences the build must live inside the same single critical section that already closes the block.
+
+An epoch counter does that. `drain()` bumps it under the lock; the build captures its value at dispatch time and, in the closing critical section, assigns `warm` only if the epoch still matches. `building = false` stays unconditional, so the invariant a concurrent `take()` relies on — never `warm == nil && !building` with a refill pending — is preserved on both branches.
+
+A discarded runtime is simply released when the closure returns. The next `take()` finds `warm == nil, !building` and refills normally, which is correct: `drain()`'s contract is "release and do not refill *from here*", not "stay empty".
+
+#### Diff
+
+```swift
+  private var building = false
+  /// Bumped by `drain()` so a build already in flight can tell that its result
+  /// is no longer wanted (F26). Without it a memory warning that lands
+  /// mid-build completes anyway, allocating a fresh JSC VM immediately after
+  /// the warning that was supposed to release one.
+  private var epoch = 0
+```
+
+```swift
+  func drain() {
+    lock.lock()
+    warm = nil
+    epoch &+= 1
+    lock.unlock()
+  }
+```
+
+```swift
+  private func refillIfNeeded() {
+    lock.lock()
+    guard warm == nil, !building else {
+      lock.unlock()
+      return
+    }
+    building = true
+    let builtFor = epoch
+    lock.unlock()
+
+    // … existing comment on the strong `self` capture stays as-is …
+    queue.async {
+      let options = self.makeOptions()
+      #if DEBUG
+        let runtime = LynxBackgroundRuntime(options: options, debuggable: true)
+      #else
+        let runtime = LynxBackgroundRuntime(options: options)
+      #endif
+      self.lock.lock()
+      // `building` clears unconditionally — a concurrent `take()` must never
+      // observe `warm == nil && !building` with a refill still pending. The
+      // runtime itself is kept only if no `drain()` intervened; otherwise it is
+      // released here and the next `take()` refills.
+      self.building = false
+      if builtFor == self.epoch {
+        self.warm = runtime
+      }
+      self.lock.unlock()
+    }
+  }
+```
+
+`&+=` rather than `+=`: the counter is monotonic for the process lifetime and wrapping is harmless (a collision needs 2⁶⁴ drains between one build's dispatch and its completion), but an overflow trap in a release-path lock would not be.
+
+### 12.3 Verification
+
+Neither fix is covered by the existing fixture tests, and both live on paths that are hard to reach from a normal mount — which is the same reason they survived review until now.
+
+| Check | How |
+| --- | --- |
+| F27 fallback fires | Mount `ExpoLynxView` inside a zero-height container in `apps/lynx-example`. Before: no events at all. After: `onLoadStart` within ~1s, then the normal load result, plus the debug assertion. |
+| F27 self-correction | Same view, then give the container a real height. Expect one `applyLayout` → `updateViewport` and a correct render, not a stalled view. |
+| F27 fast path untouched | Normal mount with `LYNX_IFR_METRICS` on: `sourceSelected` → `loadFinished` → `firstScreen` timings unchanged, and the deadline must never fire. This doubles as the F11/F12 before/after that §10 still lists as outstanding. |
+| F26 fence | Call `prewarmRuntime`, then trigger *Debug → Simulate Memory Warning* while the build is in flight (a breakpoint on the `queue.async` body makes the window reachable). Expect the built runtime to be discarded, `warm == nil`, and the next mount to take the stock path. |
+| No regression in warmer liveness | After the drain above, call `prewarmRuntime` again and confirm a warm runtime is produced — i.e. the epoch fence did not wedge the warmer, which is the failure mode the F9 correction was guarding against. |
+
+Both changes are main-thread-only or lock-guarded, so they add nothing new for TSan to see; the sanitizer runs still outstanding from Phase 0 cover them incidentally.
+
+### 12.4 Risk
+
+| | F27 | F26 |
+| --- | --- | --- |
+| Blast radius | `loadTarget` gate + `layoutSubviews` resume | `ExpoLynxRuntimeWarmer` only |
+| Worst case if wrong | A healthy view loads 1s late at a default viewport — visible, recoverable, and loud in debug | The warmer stays empty; every mount takes the stock path, which is the pre-optimisation behaviour |
+| Reversibility | Delete the deadline and the waiver; the gate returns to its current form | Delete the epoch; `drain()` returns to its current form |
+
+Neither can produce a state worse than the code that preceded the phase it belongs to, which is the property that makes them safe to land together.
+
+---
+
+### 2026-09-10 — F26 + F27 landed (§12)
+
+Implemented as proposed in §12, with one deliberate deviation.
+
+- **F27** — `loadTarget`'s viewport gate now stashes through `stashPendingLoad`, which arms a 1s `pendingLoadDeadline`. On expiry the load proceeds with `viewportGateWaived = true`, falling through the gate without calling `applyLayout`, so `hasViewport` stays false and the first real `layoutSubviews` still performs the initial viewport sync. The deadline is cancelled at all three points that already clear `pendingLoadTarget` (`layoutSubviews` resume, `scheduleLoad`, `deinit`); `scheduleLoad` also resets the waiver so every subsequent load re-enters the gate clean.
+  - **Deviation:** the debug-only `assertionFailure` became an unconditional `NSLog`. Reasoning recorded inline in §12.1.
+- **F26** — `drain()` bumps an `epoch` under the lock; `refillIfNeeded` captures it at dispatch and assigns `warm` only on a match. `building = false` stays unconditional, preserving the invariant the F9 correction established — a concurrent `take()` can never observe `warm == nil && !building` with a refill pending.
+
+Verified `swiftc -parse` clean. **Not yet run:** the §12.3 device checks — the zero-height container repro, the mid-build memory warning, and the re-prime-after-drain liveness check that guards against re-introducing the F9 wedge.
