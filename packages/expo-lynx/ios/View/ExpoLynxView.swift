@@ -1249,13 +1249,19 @@ extension ExpoLynxView {
     // via loadSource's setSource path.
     lynxView.isHidden = true
 
+    // F28: the Lynx engine's own numeric NSError code has no cross-platform
+    // meaning (Android's equivalent is a different numeric space), so the
+    // engine stage always reports the stable "ERR_LYNX_RENDER" identifier in
+    // `code` and demotes the raw SDK value to the diagnostic-only
+    // `nativeCode` — mirroring Android finding B6/#17.
     let payload = ExpoLynxView.errorPayload(for: error)
     emitError(
       url: target.url,
       feature: target.feature,
       stage: .lynx,
-      code: payload.code,
-      message: payload.message
+      code: "ERR_LYNX_RENDER",
+      message: payload.message,
+      nativeCode: payload.code
     )
   }
 
@@ -1403,15 +1409,25 @@ extension ExpoLynxView {
     feature: String,
     stage: LynxDeliveryStage,
     code: String,
-    message: String
+    message: String,
+    nativeCode: String? = nil
   ) {
-    onError([
+    var payload: [String: Any] = [
       "url": url,
       "feature": feature,
       "stage": stage.rawValue,
       "code": code,
       "message": ExpoLynxView.redactedEventMessage(message),
-    ])
+    ]
+    // F28: `nativeCode` is optional in the JS type (`nativeCode?: string`)
+    // and its value space differs per platform, so a caller with nothing
+    // diagnostic to add (manifest/resource/delivery stages, whose `code` is
+    // already canonical) omits the key entirely rather than sending an
+    // empty placeholder.
+    if let nativeCode {
+      payload["nativeCode"] = nativeCode
+    }
+    onError(payload)
   }
 
   /// Native errors can contain a failed request URL. Events cross the RN
@@ -1701,13 +1717,16 @@ extension ExpoLynxView {
     }
 
     let url = lynxView.url ?? currentTarget?.url ?? ""
+    // F28: same engine-stage split as finishWithError — stable identifier in
+    // `code`, raw SDK value demoted to diagnostic-only `nativeCode`.
     let payload = ExpoLynxView.errorPayload(for: error)
     emitError(
       url: url,
       feature: target?.feature ?? "",
       stage: .lynx,
-      code: payload.code,
-      message: payload.message
+      code: "ERR_LYNX_RENDER",
+      message: payload.message,
+      nativeCode: payload.code
     )
   }
 }

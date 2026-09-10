@@ -165,9 +165,9 @@ the Lynx Android SDK has no equivalent of an iOS capability.
 | `prewarmRuntime()` | No-op on Android (resolves, does nothing). | A background Lynx runtime/shell is coupled to Android's threading model; deferred to separate performance work. |
 | `<image>` (Lynx built-in element) | **iOS only.** On Android use `<x-lynx-fast-image>`. | No `ILynxImageService` is registered — Lynx's default (Fresco) conflicts with host dependencies. A per-view Glide-backed `LynxImageFetcher` is the planned path. |
 | First-screen metrics (`first_screen_ms`) | On Android this equals `load_finished_ms`. | The Lynx Android SDK has no separate first-screen callback; iOS has `lynxViewDidFirstScreen`. Do not compare the two platforms' first-screen numbers directly. |
-| Render-error `code` | Android emits `code: "ERR_LYNX_RENDER"` with the SDK's numeric code in `nativeCode`; iOS still emits the numeric code as `code`. | iOS-side alignment is tracked against the F-series. Switch on `code`; treat `nativeCode` as diagnostic only. |
 | Prop-update batching | Android has no `OnViewDidUpdateProps`; `scheduleLoad`'s `post {}` coalescing achieves the same "apply the final prop set once" behavior. | Implementation detail — no observable difference. |
 
 Everything else — `manifest` / `resource` / delivery error `stage` and `code`
-values, `onUpdate` phases and their order, path containment for
-bundle-relative resources — matches iOS.
+values, the Lynx engine render-error `code`/`nativeCode` split, `onUpdate`
+phases and their order, path containment for bundle-relative resources —
+matches iOS.
