@@ -35,7 +35,11 @@ class LynxTemplateProvider(context: Context) : AbsTemplateProvider() {
   override fun loadTemplate(uri: String, callback: Callback) {
     if (uri.startsWith("http://") || uri.startsWith("https://")) {
       loadFromNetwork(uri, callback)
-    } else if (uri.startsWith("file://")) {
+    } else if (uri.startsWith("file:")) {
+      // `File.toURI()` (used for managed-release bundles) yields a single-slash
+      // `file:/data/...`, not `file://...`. `java.net.URI` -> `File` handles
+      // both forms; the old `startsWith("file://")` check missed the common one
+      // and dropped every managed release into the asset branch below.
       loadFromFile(File(java.net.URI(uri)), callback)
     } else {
       // B4 (#17): bundle-relative resource names come from template content.

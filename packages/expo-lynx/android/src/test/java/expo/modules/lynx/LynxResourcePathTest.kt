@@ -59,6 +59,18 @@ class LynxResourcePathTest {
   }
 
   @Test
+  fun `a single-slash file URI is rejected, not squashed to a relative path`() {
+    // `File.toURI()` produces `file:/data/...`; it must not slip through as the
+    // relative path `data/...`.
+    assertNull(LynxResourcePath.normalize("file:/data/user/0/app/main.lynx.bundle"))
+  }
+
+  @Test
+  fun `a mid-path colon in a plain relative name is allowed`() {
+    assertEquals("img/logo@2x:v3.png", LynxResourcePath.normalize("img/logo@2x:v3.png"))
+  }
+
+  @Test
   fun `an empty or slash-only path is rejected`() {
     assertNull(LynxResourcePath.normalize(""))
     assertNull(LynxResourcePath.normalize("///"))

@@ -135,27 +135,43 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
         // at and kick off a redundant fallback.
         if (renderingGeneration != loadGeneration) return
 
-        // Hide the previous render so a failed reload cannot leave stale UI on
-        // screen. Android's public LynxView API has no wipe-but-stay-alive call.
-        lynxView.visibility = View.GONE
-
-        // Mirror iOS's required payload shape while retaining SDK details useful
-        // to callers that want to diagnose a failed bundle load.
         val current = renderingTarget
-        current?.candidateReleaseId?.let { releaseId ->
-          current.managedRuntime?.let { runtime ->
-            ManagedDeploymentState.get(context).fail(current.feature, runtime, releaseId)
-            forceReloadCompletion?.let { completion ->
-              forceReloadCompletion = null
-              completion(Result.failure(ManagedDeliveryException("lynx", "ERR_LYNX_CANDIDATE", "The downloaded Lynx release failed to render.")))
+
+        // B6 (#17): Lynx buckets errors by behavior code — `LynxError.getErrorCode()`
+        // returns `1xx` for AppBundle failures (load / reload / verify:
+        // `LynxErrorBehavior.EB_APP_BUNDLE_*` = 102/105/107) that genuinely blank
+        // the page, and `3xx` for resource failures (image, font, external
+        // resource, resource module) that Lynx renders around. iOS gates its
+        // fatal path on exactly this (`isMainBundleError`: `errorCode / 100 == 1`).
+        // Android was treating every `onReceivedError` as fatal, so a missing
+        // `ILynxImageService` (`sub_code` 32102, behavior 321) hid the view and
+        // marked a healthy managed release as failed — permanently, via
+        // `failedReleaseIds`. Only an AppBundle error is fatal now.
+        val fatal = error.errorCode / 100 == 1
+
+        if (fatal) {
+          // Hide the previous render so a failed reload cannot leave stale UI on
+          // screen. Android's public LynxView API has no wipe-but-stay-alive call.
+          lynxView.visibility = View.GONE
+
+          current?.candidateReleaseId?.let { releaseId ->
+            current.managedRuntime?.let { runtime ->
+              ManagedDeploymentState.get(context).fail(current.feature, runtime, releaseId)
+              forceReloadCompletion?.let { completion ->
+                forceReloadCompletion = null
+                completion(Result.failure(ManagedDeliveryException("lynx", "ERR_LYNX_CANDIDATE", "The downloaded Lynx release failed to render.")))
+              }
+              loadBestLocalManagedSource(current.feature, runtime)
+              return
             }
-            loadBestLocalManagedSource(current.feature, runtime)
-            return
           }
         }
+
         // B6 (#17): emit the stable `ERR_LYNX_RENDER` identifier and carry the
         // Lynx SDK's numeric `errorCode` in `nativeCode`, so JS can switch on
-        // `code` without branching on `Platform.OS`.
+        // `code` without branching on `Platform.OS`. Non-fatal resource errors
+        // are still surfaced here — the caller decides what to do — but the view
+        // keeps whatever Lynx rendered.
         emitError(
           current?.feature ?: "",
           current?.source ?: "development",
@@ -258,7 +274,7 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
     renderingGeneration = loadGeneration
     lynxView.visibility = View.VISIBLE
     when {
-      current.url.startsWith("file://") -> templateProvider.setLocalResourceRoot(File(URI(current.url)).parentFile)
+      current.url.startsWith("file:") -> templateProvider.setLocalResourceRoot(File(URI(current.url)).parentFile)
       current.assetRoot != null -> templateProvider.setAssetResourceRoot(current.assetRoot)
       else -> templateProvider.setLocalResourceRoot(null)
     }
@@ -374,7 +390,7 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
    * development URLs always pass — Lynx owns their transport failures.
    */
   private fun localBundleExists(target: LynxLoadTarget): Boolean = when {
-    target.url.startsWith("file://") ->
+    target.url.startsWith("file:") ->
       runCatching { File(URI(target.url)).isFile }.getOrDefault(false)
     target.assetRoot != null ->
       runCatching {

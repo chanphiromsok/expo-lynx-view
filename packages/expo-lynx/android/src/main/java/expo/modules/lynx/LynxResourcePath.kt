@@ -13,7 +13,10 @@ import java.net.URLDecoder
  * unit-testable without a device.
  */
 internal object LynxResourcePath {
-  private val SCHEME = Regex("^[a-zA-Z][a-zA-Z0-9+.\\-]*://")
+  // Any leading `scheme:` — with or without `//`. `file:/data/...` (from
+  // `File.toURI()`) has a single slash and must be rejected here too, not
+  // squashed into a bogus relative path.
+  private val SCHEME = Regex("^[a-zA-Z][a-zA-Z0-9+.\\-]*:")
 
   /**
    * Strip a `bundle://` prefix, reject any other explicit scheme, percent-decode
