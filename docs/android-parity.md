@@ -129,8 +129,15 @@ settles the promise.
 
 Related, same function: a single view whose `forceReloadManagedRelease` mismatches
 completes with failure immediately, which sets `finished` and reports the whole
-batch as failed even when the other views would have rendered fine. Decide whether
-a mismatched view should abort the batch or be skipped.
+batch as failed even when the other views would have rendered fine.
+
+**Decided (2026-09-10): the batch aborts on the first failure**, matching iOS
+`ReloadCompletion` (`resume(throwing:)` on the first `.failure`). A forced reload
+is atomic across every mounted view of a feature; a partial reload leaves siblings
+on different releases. A *superseded* or *unmounted* completion is now
+distinguished from a render failure (`CancellationException` →
+`ERR_LYNX_FORCE_SUPERSEDED`, no state write) so it cannot poison the release the
+succeeding batch confirms.
 
 **B3. `ManagedDeploymentState(context)` is constructed per call site** — five of
 them, each opening MMKV. iOS holds one instance. Make it a singleton or inject one.
@@ -271,8 +278,9 @@ These need an answer before the work they gate can start:
 - **`<image>` support** (C1): ship a Glide-backed `ILynxImageService`, or document
   the limitation? Gates criterion 14, and the answer changes whether Glide becomes
   load-bearing for core rendering rather than one custom element.
-- **Batch semantics in `reloadOrStage`** (B2): does one mismatched view abort the
-  batch, or is it skipped? Gates criterion 5.
+- ~~**Batch semantics in `reloadOrStage`** (B2): does one mismatched view abort the
+  batch, or is it skipped?~~ **Decided: abort on first failure** (see B2 above),
+  matching iOS.
 - **Effective `minSdk`** (C2): needs measuring before the annotation can be fixed
   in either direction.
 
