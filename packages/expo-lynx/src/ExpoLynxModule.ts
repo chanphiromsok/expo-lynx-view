@@ -35,6 +35,14 @@ const ExpoLynxModule = {
    * No-op on platforms other than iOS.
    */
   prewarmRuntime(): Promise<void> {
+    // Enforce the documented "no-op on platforms other than iOS" contract. The
+    // Android module registers only `checkForUpdate` and the view-scoped
+    // `reload`, so an unconditional call rejects with
+    // "nativeModule.prewarmRuntime is not a function". A capability check (not
+    // a Platform check) stays correct if Android later gains the function.
+    if (typeof nativeModule.prewarmRuntime !== 'function') {
+      return Promise.resolve();
+    }
     return nativeModule.prewarmRuntime();
   },
 };

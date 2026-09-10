@@ -26,7 +26,7 @@ export type LynxSource =
 export type LynxLoadEvent = {
   feature: string;
   version: string;
-  source: 'embedded' | 'cache' | 'download' | 'development';
+  source: 'embedded' | 'cache' | 'development';
   durationMs: number;
 };
 

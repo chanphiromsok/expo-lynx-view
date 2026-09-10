@@ -8,7 +8,7 @@ export type LynxLoadEventPayload = {
   url: string;
   feature: string;
   version: string;
-  source: 'embedded' | 'cache' | 'download' | 'development';
+  source: 'embedded' | 'cache' | 'development';
   durationMs: number;
 };
 

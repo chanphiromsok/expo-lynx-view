@@ -55,7 +55,7 @@ Publishing an ordinary remote release does not need a native rebuild.
 
 :::
 
-## 4. Render the managed feature
+## 3. Render the managed feature
 
 ```tsx
 <ExpoLynxView source={{ kind: 'managed', feature: 'delivery' }} style={{ flex: 1 }} />
@@ -68,7 +68,7 @@ the background.
 See the [ExpoLynxView reference](/reference/expo-lynx-view/) for props and
 events.
 
-## 5. Warm the runtime before the first mount
+## 4. Warm the runtime before the first mount
 
 The first `ExpoLynxView` mount starts a background JS engine. Do that work
 early, once the app is interactive:
