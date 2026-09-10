@@ -30,6 +30,14 @@ Pod::Spec.new do |s|
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
+    # Surface actor-isolation violations at the Lynx callback boundary. Lynx
+    # delivers two of the three LynxViewLifecycle callbacks on its own threads
+    # (see docs/ios-concurrency-lifecycle-remediation.md, F1/F3), which Swift 5
+    # mode does not diagnose. `targeted` checks only code that already opts into
+    # Sendable/actors; `complete` would bury the signal under noise from the
+    # un-annotated Lynx Objective-C surface. Revisit `complete` once the Lynx
+    # import can be wrapped with `@preconcurrency`.
+    'SWIFT_STRICT_CONCURRENCY' => 'targeted',
   }
 
   s.module_name = 'ExpoLynx'

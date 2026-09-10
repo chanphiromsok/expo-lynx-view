@@ -1,12 +1,15 @@
 // Vendored from expo-image 57.0.4 — upstream/expo-image/ios/AnimatedImage.swift (MIT).
-// Local changes vs upstream: `internal import SDWebImage` -> `import SDWebImage`.
+// Local changes vs upstream:
+//   - `internal import SDWebImage` -> `import SDWebImage`.
+//   - restate `@unchecked Sendable` (inherited from `SDAnimatedImage`) — required
+//     once ExpoLynx.podspec sets SWIFT_STRICT_CONCURRENCY = targeted.
 
 import SDWebImage
 
 /**
  Custom `SDAnimatedImage` that fixes issues with `images` and `duration` not being available.
  */
-final class AnimatedImage: SDAnimatedImage {
+final class AnimatedImage: SDAnimatedImage, @unchecked Sendable {
   var frames: [SDImageFrame]?
 
   // MARK: - UIImage
