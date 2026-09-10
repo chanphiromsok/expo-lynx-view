@@ -1372,13 +1372,21 @@ extension ExpoLynxView {
       return
     }
 
+    // F28: the non-`LynxDeliveryError` fallback used to put a raw `NSError`
+    // code in `code`, which breaks the same contract the engine stage just
+    // fixed — `code` is meant to be a stable `ERR_LYNX_*` identifier callers
+    // can switch on. Android's equivalent catch-all is
+    // `ManagedDeliveryException("download", "ERR_LYNX_DELIVERY", ...)`
+    // (ManagedDeliveryCoordinator.kt), so match it exactly and demote the
+    // numeric value to `nativeCode`.
     let payload = ExpoLynxView.errorPayload(for: error)
     emitError(
       url: fallbackURL,
       feature: feature,
       stage: .download,
-      code: payload.code,
-      message: payload.message
+      code: "ERR_LYNX_DELIVERY",
+      message: payload.message,
+      nativeCode: payload.code
     )
   }
 
