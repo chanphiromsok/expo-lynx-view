@@ -111,15 +111,20 @@ internal object ManagedDeliveryCoordinator {
           },
           onFailure = { cause ->
             when (cause) {
+              // A4 (#16): branch ORDER is load-bearing -- `ManagedReloadBatch.
+              // TimeoutException` extends `CancellationException`, so it must
+              // be matched before the `is CancellationException` branch below
+              // or every timeout would silently be reported as a supersession
+              // instead of a timeout. Do not reorder these two branches.
+              is ManagedReloadBatch.TimeoutException -> {
+                stateStore.fail(feature, runtime, releaseId)
+                post(onError, ManagedDeliveryException("lynx", "ERR_LYNX_CANDIDATE_TIMEOUT", cause.message ?: "The forced Lynx release timed out."))
+              }
               // Superseded by a newer forced reload, or the view unmounted
               // (`ExpoLynxView.destroy`). The batch that supersedes this one —
               // or `destroy()` — owns the release outcome; recording a failure
               // here would poison the `attemptingReleaseId` the newer batch is
               // about to confirm (B1). Settle the promise, touch no state.
-              is ManagedReloadBatch.TimeoutException -> {
-                stateStore.fail(feature, runtime, releaseId)
-                post(onError, ManagedDeliveryException("lynx", "ERR_LYNX_CANDIDATE_TIMEOUT", cause.message ?: "The forced Lynx release timed out."))
-              }
               is CancellationException ->
                 post(onError, ManagedDeliveryException("lynx", "ERR_LYNX_FORCE_SUPERSEDED", "The forced Lynx reload was superseded before it rendered."))
               else -> {

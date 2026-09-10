@@ -82,6 +82,17 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
   private var loadGeneration = 0
   private var renderingGeneration = -1
   private var renderingTarget: LynxLoadTarget? = null
+
+  // A1 (#16): `startManagedDelivery`'s callbacks used to guard on
+  // `loadGeneration`, but the delivery's own forced reload
+  // (`forceReloadManagedRelease` -> `loadManagedRelease` -> `scheduleLoad`)
+  // advances that same counter on every successful update, so the guard
+  // silently dropped the one payload that carries `revision`. `deliveryEpoch`
+  // is a second, coarser counter that only user-initiated loads (`setSource`,
+  // `setSourceJSON`, `setInitialDataJSON`, `reload()`) advance -- see
+  // `scheduleLoad(deliveryOwned)`. Delivery-internal loads leave it untouched,
+  // so a forced reload's own result still matches.
+  private var deliveryEpoch = 0
   private var sourceSelectionStartedAt = SystemClock.elapsedRealtime()
   private var loadStartedAt = sourceSelectionStartedAt
 
@@ -102,6 +113,12 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
 
     lynxView.addLynxViewClient(object : LynxViewClient() {
       override fun onLoadSuccess() {
+        // A3 (#16): a Lynx callback queued before `destroy()` can still fire
+        // after it -- `LynxView.destroy()` gives no guarantee that in-flight
+        // callbacks are dropped. Without this guard a late `onLoadSuccess`
+        // would `confirm(...)` against process-wide delivery state and
+        // `invoke` an `EventDispatcher` backed by a torn-down view.
+        if (destroyed) return
         // B1: a newer load has been scheduled since this render was dispatched.
         // Its own `onLoadSuccess` will run against `renderingTarget`; applying
         // this one would confirm the wrong release.
@@ -130,6 +147,9 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
       }
 
       override fun onReceivedError(error: LynxError) {
+        // A3 (#16): same reasoning as `onLoadSuccess` -- a Lynx callback
+        // queued before `destroy()` can still fire after it.
+        if (destroyed) return
         // B1: same guard as `onLoadSuccess`. Without it a superseded load's
         // failure would call `fail(...)` on the release the newest load points
         // at and kick off a redundant fallback.
@@ -234,11 +254,34 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
     lynxView.destroy()
   }
 
-  private fun scheduleLoad() {
+  private fun scheduleLoad(deliveryOwned: Boolean = false) {
     // B1: every scheduled load supersedes whatever was in flight. Bump before
     // the coalescing early-return so a stale SDK callback that lands between
     // now and `loadSource()` sees `renderingGeneration != loadGeneration`.
     loadGeneration += 1
+
+    // A1/A2 (#16): `deliveryOwned` is true only for the `scheduleLoad` calls
+    // reached via `loadManagedRelease` (both the plain delivery-selection path
+    // and the forced-reload path) and via `loadBestLocalManagedSource`'s
+    // embedded-fallback branch -- i.e. the delivery machinery choosing what to
+    // render, not the user changing props. For those, `loadGeneration` above
+    // is still bumped (the Lynx SDK callback guard must still see it), but
+    // `deliveryEpoch` is left alone and any `forceReloadCompletion` is left
+    // for its own caller to resolve. A user-initiated load (`setSource`,
+    // `setSourceJSON`, `setInitialDataJSON`, `reload()`) supersedes any
+    // forced reload in flight: bump `deliveryEpoch` so `startManagedDelivery`
+    // (which now keys off it instead of `loadGeneration`) still sees its own
+    // result, and resolve `forceReloadCompletion` the way iOS's `scheduleLoad`
+    // does -- otherwise the completion is only ever settled by the 15s
+    // watchdog, which wrongly fails a release that would have rendered fine.
+    if (!deliveryOwned) {
+      deliveryEpoch += 1
+      forceReloadCompletion?.let { completion ->
+        forceReloadCompletion = null
+        completion(Result.failure(CancellationException()))
+      }
+    }
+
     if (loadScheduled) return
 
     // Props may arrive in either order during one React commit. Posting the
@@ -325,7 +368,9 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
       target = LynxLoadTarget("expo-lynx-embedded/$feature/main.lynx.bundle", feature, "embedded", "embedded", runtime, assetRoot = "expo-lynx-embedded/$feature")
       source = target!!.url
       LynxIFRLogger.log(context, "source_selection_ms", elapsedSinceSelection(), target!!)
-      scheduleLoad()
+      // A1/A2 (#16): delivery-internal -- no local release to try, falling
+      // back to the embedded bundle. See `scheduleLoad`.
+      scheduleLoad(deliveryOwned = true)
     }
   }
 
@@ -333,7 +378,14 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
     target = LynxLoadTarget(release.bundle.toURI().toString(), release.feature, release.version, "cache", runtime, if (candidate) release.releaseId else null)
     source = target!!.url
     LynxIFRLogger.log(context, "source_selection_ms", elapsedSinceSelection(), target!!)
-    scheduleLoad()
+    // A1/A2 (#16): delivery-internal for both callers -- the plain
+    // delivery-selection path (`loadBestLocalManagedSource`) and the forced
+    // reload path (`forceReloadManagedRelease`). The latter is why this must
+    // propagate `deliveryOwned = true`: `forceReloadManagedRelease` installs
+    // `forceReloadCompletion` immediately before calling in here, and a
+    // `deliveryOwned = false` bump would cancel the very completion it just
+    // set. See `scheduleLoad`.
+    scheduleLoad(deliveryOwned = true)
   }
 
   internal fun forceReloadManagedRelease(release: ManagedRelease, completion: (Result<Unit>) -> Unit) {
@@ -350,20 +402,22 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
 
   private fun startManagedDelivery(feature: String) {
     if (destroyed || managedFeature != feature) return
-    // B1: capture the generation that triggered this check. A reload or source
-    // change while the delivery request is in flight advances `loadGeneration`;
-    // the stale result must not emit `onUpdate` against the newer load.
-    val generation = loadGeneration
+    // A1 (#16): capture `deliveryEpoch`, not `loadGeneration` -- a *user*
+    // reload or source change while the delivery request is in flight should
+    // still drop the stale result, but the delivery's own forced reload also
+    // routes through `scheduleLoad` and must not invalidate its own check.
+    // `deliveryEpoch` only advances for the former. See `scheduleLoad`.
+    val epoch = deliveryEpoch
     val start = SystemClock.elapsedRealtime()
     onUpdate.invoke(mapOf("feature" to feature, "phase" to "checking"))
     ManagedDeliveryCoordinator.checkForUpdate(
       context,
       feature,
-      onResult = { result -> if (!destroyed && managedFeature == feature && generation == loadGeneration) {
+      onResult = { result -> if (!destroyed && managedFeature == feature && epoch == deliveryEpoch) {
         LynxIFRLogger.logDelivery(context, SystemClock.elapsedRealtime() - start, feature)
         onUpdate.invoke(result.payload())
       } },
-      onError = { error -> if (!destroyed && managedFeature == feature && generation == loadGeneration) emitDeliveryError(feature, error) },
+      onError = { error -> if (!destroyed && managedFeature == feature && epoch == deliveryEpoch) emitDeliveryError(feature, error) },
     )
   }
 
