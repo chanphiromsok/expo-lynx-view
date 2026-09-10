@@ -153,13 +153,17 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
             return
           }
         }
+        // B6 (#17): emit the stable `ERR_LYNX_RENDER` identifier and carry the
+        // Lynx SDK's numeric `errorCode` in `nativeCode`, so JS can switch on
+        // `code` without branching on `Platform.OS`.
         emitError(
           current?.feature ?: "",
           current?.source ?: "development",
           "lynx",
-          error.errorCode.toString(),
+          "ERR_LYNX_RENDER",
           error.summaryMessage.ifEmpty { error.msg },
           source,
+          error.errorCode.toString(),
         )
       }
     })
@@ -180,14 +184,15 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
   fun setSourceJSON(value: String?) {
     if (value.isNullOrBlank()) return
     val sourceObject = try { JSONObject(value) } catch (_: Exception) {
-      emitError("", "", "manifest", "ERR_LYNX_SOURCE", "The Lynx source is invalid.", "")
+      // B6 (#17): match iOS `ERR_LYNX_SOURCE_INVALID`.
+      emitError("", "", "manifest", "ERR_LYNX_SOURCE_INVALID", "The Lynx source is invalid.", "")
       return
     }
     when (sourceObject.optString("kind")) {
       "development" -> setSource(sourceObject.optString("url"))
       "embedded" -> loadEmbedded(sourceObject.optString("feature"))
       "managed" -> loadManaged(sourceObject.optString("feature"))
-      else -> emitError("", "", "manifest", "ERR_LYNX_SOURCE", "The Lynx source is invalid.", "")
+      else -> emitError("", "", "manifest", "ERR_LYNX_SOURCE_INVALID", "The Lynx source is invalid.", "")
     }
   }
 
@@ -234,6 +239,16 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
     val current = target ?: return
     if (current.url.isEmpty()) return
 
+    // B6 (#17): match iOS's `resolveLocalURL` guard — a missing local bundle
+    // reports `stage: resource, code: ERR_LYNX_SOURCE_NOT_FOUND` instead of
+    // surfacing later as an opaque Lynx render error. Scoped to non-candidate
+    // loads: a missing *candidate* bundle must still flow through
+    // `onReceivedError` so the release is failed and the view falls back.
+    if (current.candidateReleaseId == null && !localBundleExists(current)) {
+      emitError(current.feature, current.source, "resource", "ERR_LYNX_SOURCE_NOT_FOUND", "Could not find the Lynx bundle at the resolved local path.", current.url)
+      return
+    }
+
     hasLoadedTemplate = false
     deliveryStarted = false
     loadStartedAt = SystemClock.elapsedRealtime()
@@ -253,7 +268,9 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
 
   private fun loadEmbedded(feature: String) {
     if (!feature.matches(Regex("[a-z][a-z0-9-]{0,63}"))) {
-      emitError(feature, "embedded", "manifest", "ERR_LYNX_MANAGED_FEATURE", "A managed Lynx source requires a feature name.", "")
+      // B6 (#17): match iOS `ERR_LYNX_EMBEDDED_FEATURE` (distinct from the
+      // managed-source code below).
+      emitError(feature, "embedded", "manifest", "ERR_LYNX_EMBEDDED_FEATURE", "An embedded Lynx source requires a feature name.", "")
       return
     }
     ManagedDeliveryRegistry.unregister(this)
@@ -351,11 +368,45 @@ class ExpoLynxView(context: Context, appContext: AppContext) : ExpoView(context,
 
   private fun emitDeliveryError(feature: String, error: ManagedDeliveryException) = emitError(feature, "cache", error.stage, error.code, error.message, "")
 
+  /**
+   * B6 (#17): true unless this is a local source (`cache` file URL or an
+   * `embedded` asset) whose bundle is demonstrably absent. Remote and
+   * development URLs always pass — Lynx owns their transport failures.
+   */
+  private fun localBundleExists(target: LynxLoadTarget): Boolean = when {
+    target.url.startsWith("file://") ->
+      runCatching { File(URI(target.url)).isFile }.getOrDefault(false)
+    target.assetRoot != null ->
+      runCatching {
+        val slash = target.url.lastIndexOf('/')
+        val dir = if (slash > 0) target.url.substring(0, slash) else ""
+        val name = target.url.substring(slash + 1)
+        context.assets.list(dir)?.contains(name) == true
+      }.getOrDefault(false)
+    else -> true
+  }
+
   private fun elapsedSinceSelection() = SystemClock.elapsedRealtime() - sourceSelectionStartedAt
   private fun elapsedSinceLoad() = SystemClock.elapsedRealtime() - loadStartedAt
 
-  private fun emitError(feature: String, source: String, stage: String, code: String, message: String, url: String) {
-    onError.invoke(mapOf("url" to url, "feature" to feature, "source" to source, "stage" to stage, "code" to code, "message" to message))
+  private fun emitError(
+    feature: String,
+    source: String,
+    stage: String,
+    code: String,
+    message: String,
+    url: String,
+    nativeCode: String? = null,
+  ) {
+    onError.invoke(buildMap {
+      put("url", url)
+      put("feature", feature)
+      put("source", source)
+      put("stage", stage)
+      put("code", code)
+      put("message", message)
+      nativeCode?.let { put("nativeCode", it) }
+    })
   }
 
 }

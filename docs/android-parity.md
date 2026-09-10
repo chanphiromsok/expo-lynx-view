@@ -152,33 +152,44 @@ current inputs are trusted.
 **B5. Thread-per-resource-load.** The provider starts a bare `Thread` per load in
 all three branches. Move to a bounded executor.
 
-**B6. Error payload divergence.** Android emits `error.errorCode.toString()` as
-`code`; iOS emits structured `ERR_LYNX_*` values. Anything in JS switching on
-`code` is platform-specific today. Align on the iOS vocabulary and keep the SDK
-code in a separate field.
+**B6. Error payload divergence.** Android emitted `error.errorCode.toString()` as
+`code`; iOS emits structured `ERR_LYNX_*` values.
+
+**Done (2026-09-10).** `LynxErrorEventPayload` gains an optional `nativeCode`
+(the SDK number). Android now emits: `ERR_LYNX_SOURCE_INVALID` (was
+`ERR_LYNX_SOURCE`), `ERR_LYNX_EMBEDDED_FEATURE` vs `ERR_LYNX_MANAGED_FEATURE`
+(was one code for both), `ERR_LYNX_SOURCE_NOT_FOUND` at `stage: resource` for a
+missing local bundle (a pre-render existence check mirroring iOS
+`resolveLocalURL`), and `ERR_LYNX_RENDER` + `nativeCode` for a Lynx engine
+error. The `manifest` / `resource` / delivery `stage`+`code` pairs now match
+iOS. Remaining divergence: iOS still emits the numeric code as `code` for a
+render error — file iOS-side against the F-series. Table on the docs-site
+reference page.
 
 ### Tier C — feature gaps and hygiene
 
 **C1. No `ILynxImageService`,** so Lynx's built-in `<image>` does not render;
-only `<x-lynx-fast-image>` works. `android/build.gradle` records the reason
-(Fresco conflicts with host dependencies). Either ship a Glide-backed
-`ILynxImageService` — the Glide dependency is already there — or document
-`<image>` as iOS-only.
+only `<x-lynx-fast-image>` works.
 
-**C2. `@RequiresApi(Build.VERSION_CODES.P)` sits on the whole `definition()`**,
-i.e. API 28, while the module declares no `minSdk` of its own and inherits the
-Expo/RN default (24 at RN 0.86). If that is real, the module is annotated for a
-floor it does not enforce. **[verify]** the effective merged `minSdk`, then either
-raise it, narrow the annotation to the call that needs it, or drop it.
+**Decided (2026-09-10): documented as iOS-only.** Shipping an image loader blind
+(no device, no `<image>` test bundles) is the wrong risk here. Lynx 4.0 exposes
+a *per-view* `LynxViewBuilder.setImageFetcher(LynxImageFetcher)` seam — no global
+`ILynxImageService`, so no Fresco conflict — which is the recommended
+implementation path when this is picked up. Listed on the docs-site reference
+page's platform-differences table.
+
+**C2. `@RequiresApi(Build.VERSION_CODES.P)` sat on the whole `definition()`.**
+
+**Done (2026-09-10): dropped.** The `ExpoRootProject` version block prints
+`minSdk: 24`; nothing in the module or `definition()` calls an API above it, and
+`./gradlew :expo-lynx:lintDebug` reports no `NewApi` findings after removal.
 
 **C3. `OnViewDidUpdateProps` is not used on Android** — `scheduleLoad`'s `post {}`
-coalescing achieves the same batching. This is a legitimate divergence; document
-it rather than "fixing" it.
+coalescing achieves the same batching. Documented on the reference page.
 
 **C4. `first_screen_ms` is logged equal to `load_finished_ms`,** because the
-Android SDK has no separate first-screen callback. Already commented in code.
-Surface it wherever IFR metrics are documented so the two platforms' numbers are
-not compared naively.
+Android SDK has no separate first-screen callback. Documented on the reference
+page's platform-differences table.
 
 ### Out of scope
 
@@ -275,14 +286,13 @@ These need an answer before the work they gate can start:
 - ~~**`prewarmRuntime` on Android** (A2): implement, or document as iOS-only?~~
   **Decided: documented no-op** (see A2 above). Acceptance criterion 2 met by
   the docstring + docs-site caution.
-- **`<image>` support** (C1): ship a Glide-backed `ILynxImageService`, or document
-  the limitation? Gates criterion 14, and the answer changes whether Glide becomes
-  load-bearing for core rendering rather than one custom element.
+- ~~**`<image>` support** (C1): ship a Glide-backed `ILynxImageService`, or document
+  the limitation?~~ **Decided: documented as iOS-only** (see C1 above).
 - ~~**Batch semantics in `reloadOrStage`** (B2): does one mismatched view abort the
   batch, or is it skipped?~~ **Decided: abort on first failure** (see B2 above),
   matching iOS.
-- **Effective `minSdk`** (C2): needs measuring before the annotation can be fixed
-  in either direction.
+- ~~**Effective `minSdk`** (C2): needs measuring before the annotation can be fixed
+  in either direction.~~ **Measured: 24. Annotation dropped** (see C2 above).
 
 ### Ordering
 

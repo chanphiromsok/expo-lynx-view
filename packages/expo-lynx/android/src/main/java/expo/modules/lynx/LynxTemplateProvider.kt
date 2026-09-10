@@ -6,6 +6,8 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -36,22 +38,34 @@ class LynxTemplateProvider(context: Context) : AbsTemplateProvider() {
     } else if (uri.startsWith("file://")) {
       loadFromFile(File(java.net.URI(uri)), callback)
     } else {
+      // B4 (#17): bundle-relative resource names come from template content.
+      // iOS sandboxes each one in `existingFileURL` / `normalizedComponents`;
+      // Android resolved `File(localResourceRoot, uri)` with no check that the
+      // result stayed inside the root and no rejection of `..`. Reject a
+      // traversal outright, then confirm the resolved file is still contained.
+      val relative = LynxResourcePath.normalize(uri)
+      if (relative == null) {
+        callback.onFailed("Rejected Lynx resource path that escapes its root: $uri")
+        return
+      }
+
       localResourceRoot?.let { root ->
-        val file = File(root, uri)
-        if (file.isFile) {
+        val file = File(root, relative)
+        if (LynxResourcePath.isContained(root, file) && file.isFile) {
           loadFromFile(file, callback)
           return
         }
       }
+
       val asset = assetResourceRoot?.let { root ->
-        if (uri == root || uri.startsWith("$root/")) uri else "$root/$uri"
-      } ?: uri
+        if (relative == root || relative.startsWith("$root/")) relative else "$root/$relative"
+      } ?: relative
       loadFromAssets(asset, callback)
     }
   }
 
   private fun loadFromNetwork(uri: String, callback: Callback) {
-    Thread {
+    loadExecutor.execute {
       try {
         val request = Request.Builder().url(uri).build()
         httpClient.newCall(request).execute().use { response ->
@@ -65,11 +79,11 @@ class LynxTemplateProvider(context: Context) : AbsTemplateProvider() {
       } catch (e: IOException) {
         callback.onFailed(e.message)
       }
-    }.start()
+    }
   }
 
   private fun loadFromAssets(uri: String, callback: Callback) {
-    Thread {
+    loadExecutor.execute {
       try {
         appContext.assets.open(uri).use { input ->
           ByteArrayOutputStream().use { output ->
@@ -84,11 +98,11 @@ class LynxTemplateProvider(context: Context) : AbsTemplateProvider() {
       } catch (e: IOException) {
         callback.onFailed(e.message)
       }
-    }.start()
+    }
   }
 
   private fun loadFromFile(file: File, callback: Callback) {
-    Thread {
+    loadExecutor.execute {
       try {
         FileInputStream(file).use { input ->
           ByteArrayOutputStream().use { output ->
@@ -99,6 +113,18 @@ class LynxTemplateProvider(context: Context) : AbsTemplateProvider() {
       } catch (e: IOException) {
         callback.onFailed(e.message)
       }
-    }.start()
+    }
+  }
+
+  private companion object {
+    // B5 (#17): the provider spawned a bare `Thread` per load in all three
+    // branches, so thread count scaled with in-flight resource requests. A
+    // Lynx page pulling many sub-resources at once could fan out to dozens of
+    // threads. iOS runs local reads on one `DispatchQueue.global` and remote
+    // fetches through `URLSession.shared`; this bounded pool is the analogue,
+    // shared across every provider instance in the process.
+    private val loadExecutor: ExecutorService = Executors.newFixedThreadPool(4) { runnable ->
+      Thread(runnable, "ExpoLynxResource").apply { isDaemon = true }
+    }
   }
 }

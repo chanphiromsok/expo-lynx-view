@@ -16,8 +16,21 @@ export type LynxErrorEventPayload = {
   url: string;
   feature: string;
   stage: LynxErrorStage;
+  /**
+   * Stable, platform-independent error identifier (`ERR_LYNX_*`). Switch on
+   * this. For a Lynx engine render failure it is `ERR_LYNX_RENDER`; the raw
+   * SDK code is then in `nativeCode`.
+   */
   code: string;
   message: string;
+  /**
+   * The underlying SDK error code when one exists — the Lynx engine's numeric
+   * `errorCode` on Android, the `NSError` code on iOS. Present only for engine
+   * and transport failures; absent for `manifest` / `resource` / delivery
+   * errors, whose `code` is already the canonical identifier. Diagnostic only:
+   * its value space differs by platform, so do not branch on it.
+   */
+  nativeCode?: string;
   version?: string;
   source?: LynxLoadEventPayload['source'];
   durationMs?: number;

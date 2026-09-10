@@ -1,8 +1,6 @@
 package expo.modules.lynx
 
 import android.app.Application
-import android.os.Build
-import androidx.annotation.RequiresApi
 import com.lynx.service.http.LynxHttpService
 import com.lynx.service.log.LynxLogService
 import com.lynx.tasm.LynxEnv
@@ -13,7 +11,11 @@ import expo.modules.kotlin.Promise
 import expo.modules.lynx.delivery.ManagedDeliveryCoordinator
 
 class ExpoLynxModule : Module() {
-  @RequiresApi(Build.VERSION_CODES.P)
+  // C2 (#17): no `@RequiresApi`. The effective merged `minSdk` is 24 (RN 0.86
+  // default, per the `ExpoRootProject` version block); nothing in this module
+  // or `definition()` calls an API above it. The previous
+  // `@RequiresApi(Build.VERSION_CODES.P)` annotated a floor the module did not
+  // enforce.
   override fun definition() = ModuleDefinition {
     Name("ExpoLynx")
 

@@ -45,6 +45,7 @@ export type LynxErrorEvent = {
   stage: LynxErrorStage;
   code: string;
   message: string;
+  nativeCode?: string;
 };
 
 export type LynxUpdatePhase =
