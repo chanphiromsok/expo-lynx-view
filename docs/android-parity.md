@@ -38,6 +38,26 @@ against.
 The Android module is not a stub. The work is closing specific holes, not
 building the platform out from nothing.
 
+### Found while debugging (2026-09-10)
+
+An end-to-end managed-delivery repro surfaced two bugs the source review missed —
+together they meant **a forced managed release never rendered on Android** and,
+once attempted, was recorded in `failedReleaseIds` so every later check returned
+`no-update`:
+
+- **`file:` single-slash.** `ManagedRelease.bundle.toURI().toString()` produces
+  `file:/data/...` (one slash). `ExpoLynxView.loadSource` / `localBundleExists`
+  and `LynxTemplateProvider.loadTemplate` matched only `file://`, so every
+  managed bundle fell into the asset branch → `errCode:102` (AppBundle, fatal).
+- **All `onReceivedError` treated as fatal.** iOS's `isMainBundleError`
+  (`errorCode / 100 == 1`) means only AppBundle `1xx` errors blank the page;
+  resource `3xx` errors (image/font) are rendered around. Android hid the view
+  and failed the candidate for any error — so the missing `ILynxImageService`
+  (`errCode:321`) killed a healthy release.
+
+Both fixed in commit `872558e`, verified on-device. Fold these into the B6
+scope.
+
 ---
 
 ## Goal
