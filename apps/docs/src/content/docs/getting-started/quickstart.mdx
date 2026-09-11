@@ -1,0 +1,129 @@
+---
+title: Quickstart
+description: Install, stand up the Console, wire up the host app, then ship one mini-app release — end to end.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+Four steps, in order: install the module, stand up the Console (Worker + D1 + R2), wire the host app to it, then build and ship one mini-app release. Each step only needs what came before it — nothing else.
+
+## 1. Install
+
+<Steps>
+
+1. Add the module and CLI to the Expo host app:
+
+   ```sh
+   pnpm add expo-lynx-view
+   pnpm add -D expo-lynx-bundle-cli
+   ```
+
+2. Add the Expo config plugin. Leave `deliveryEndpoints` as a placeholder for now — it gets its real value in [step 3](#3-set-up-the-host-app):
+
+   ```json title="app.json"
+   {
+     "expo": {
+       "plugins": [["expo-lynx-view", {
+         "embeddedBundlesPath": "./generated/expo-lynx/embedded",
+         "publicKeyPath": "./keys/lynx/updates.public.pem",
+         "deliveryEndpoints": {
+           "delivery": "https://placeholder.workers.dev/v1/default/delivery"
+         }
+       }]]
+     }
+   }
+   ```
+
+</Steps>
+
+## 2. Set up the Console
+
+One Worker, one D1 database, one R2 bucket — created once, shared by every mini-app your team ships.
+
+<Steps>
+
+1. Create the signing key pair (public half goes to the app, private half goes to the Worker):
+
+   ```sh
+   pnpm lynx keys generate
+   ```
+
+2. In the Cloudflare dashboard, under **R2 → Manage R2 API Tokens**, create an **Object Read & Write** token scoped to one bucket. Keep the access-key ID and secret — setup asks for them next.
+
+3. Run setup. The first run writes an ignored `.env.lynx` and stops; fill in the placeholders it created, then run the same command again:
+
+   ```sh
+   pnpm lynx console setup
+   ```
+
+   Setup deploys the Worker, creates D1/R2, applies migrations, and writes the deployed Worker URL, database ID, and CLI API key back into `.env.lynx`.
+
+</Steps>
+
+<Aside type="tip">
+`.env.lynx` now has your real Worker URL. That's the value `deliveryEndpoints` needs in the next step.
+</Aside>
+
+## 3. Set up the host app
+
+<Steps>
+
+1. Replace the placeholder URL from step 1 with the real Worker URL from `.env.lynx`:
+
+   ```json title="app.json"
+   {
+     "deliveryEndpoints": {
+       "delivery": "https://your-worker.workers.dev/v1/default/delivery"
+     }
+   }
+   ```
+
+2. Embed the mini-app once, then prepare and register the native compatibility record for both platforms:
+
+   ```sh
+   pnpm lynx host embed ../delivery
+   pnpm lynx host prepare --register
+   ```
+
+3. Render the managed feature:
+
+   ```tsx
+   <ExpoLynxView source={{ kind: 'managed', feature: 'delivery' }} style={{ flex: 1 }} />
+   ```
+
+4. Build the native app as usual. Don't change native dependencies or the plugin config between `host prepare` and this build — it invalidates the registration from step 2.
+
+</Steps>
+
+## 4. Mini app
+
+In the mini-app's own repository (no Expo checkout, no signing key):
+
+<Steps>
+
+1. Declare its identity — the Console operator must already have registered this exact `appId`/`feature` pair:
+
+   ```ts title="lynx-miniapp.config.ts"
+   import { defineMiniApp } from 'expo-lynx-bundle-cli';
+
+   export default defineMiniApp({
+     appId: 'default',
+     feature: 'delivery',
+   });
+   ```
+
+2. Build and upload a release:
+
+   ```sh
+   pnpm lynx release
+   ```
+
+3. Open the Console, select the verified release, and enable it. Uploading never enables a bundle by itself — that's a deliberate, separate step.
+
+</Steps>
+
+That's the whole loop: a device with the host app installed now fetches, verifies, and renders that release the next time it checks in.
+
+---
+
+**Next**: [Lifecycle](../../managed-delivery/lifecycle/) for how embedded vs. remote selection actually works, [Local development](../local-development/) to test all of this on your Mac before touching Cloudflare, or [Troubleshooting](../../troubleshooting/local-delivery/) if a step above didn't behave as described.

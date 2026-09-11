@@ -21,6 +21,7 @@ export default defineConfig({
           label: "Start here",
           items: [
             { label: "Overview", slug: "" },
+            { label: "Quickstart", slug: "getting-started/quickstart" },
             { label: "Team onboarding", slug: "getting-started/team-onboarding" },
             { label: "Installation", slug: "getting-started/installation" },
             {
