@@ -78,7 +78,16 @@ One Worker, one D1 database, one R2 bucket — created once, shared by every min
    }
    ```
 
-2. Embed the mini-app once, then prepare and register the native compatibility record for both platforms:
+2. `host prepare --register` authenticates to the Worker, so set these two variables first (in `.env.lynx` next to the host app's `package.json`, or in CI):
+
+   | Variable | Needed for |
+   | --- | --- |
+   | `LYNX_DELIVERY_SERVER` | The Worker URL to register against |
+   | `LYNX_DELIVERY_API_KEY` | Authenticates the registration call |
+
+   That's the full list — the host app never needs R2 credentials or the Worker's signing private key.
+
+   Embed the mini-app once, then prepare and register the native compatibility record for both platforms:
 
    ```sh
    pnpm lynx host embed ../delivery
@@ -112,7 +121,20 @@ In the mini-app's own repository (no Expo checkout, no signing key):
    });
    ```
 
-2. Build and upload a release:
+2. `lynx release` needs more than the host app — it uploads the archive too, not just an API call. Set these (again in `.env.lynx`, or CI secrets):
+
+   | Variable | Needed for |
+   | --- | --- |
+   | `LYNX_DELIVERY_SERVER` | The Worker URL to upload to |
+   | `LYNX_DELIVERY_API_KEY` | Authenticates the upload |
+   | `CLOUDFLARE_ACCOUNT_ID` | R2 account for the direct upload |
+   | `LYNX_DELIVERY_R2_BUCKET` | Target R2 bucket name |
+   | `R2_ACCESS_KEY_ID` | R2 S3 credential (Object Read & Write) |
+   | `R2_SECRET_ACCESS_KEY` | R2 S3 credential (Object Read & Write) |
+
+   The last four are only read when uploading straight to a deployed Worker. Testing locally against `pnpm lynx console` skips them — the local Worker hands back a same-origin upload URL instead.
+
+   Build and upload a release:
 
    ```sh
    pnpm lynx release
