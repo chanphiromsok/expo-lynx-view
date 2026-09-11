@@ -19,6 +19,17 @@
       ],
       "port": 5173,
       "url": "http://127.0.0.1:5173"
+    },
+    {
+      "name": "docs",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@expo-lynx/docs",
+        "preview"
+      ],
+      "port": 4321,
+      "url": "http://localhost:4321"
     }
   ]
 }

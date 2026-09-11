@@ -15,6 +15,10 @@ export default defineConfig({
       title: "Expo Lynx",
       description:
         "Embed, deliver, and operate signed Lynx mini-app bundles in Expo.",
+      logo: {
+        src: "./src/assets/lynx-logo.png",
+        alt: "Expo Lynx",
+      },
       customCss: ["./src/styles/custom.css"],
       sidebar: [
         {
