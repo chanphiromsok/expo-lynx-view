@@ -4,6 +4,11 @@ import starlight from "@astrojs/starlight";
 import starlightThemeBlack from "starlight-theme-black";
 
 export default defineConfig({
+  // Served as a GitHub Pages *project* site (this repo isn't the
+  // <user>.github.io root repo), so every internal link/asset needs the
+  // /expo-lynx-view prefix baked in at build time.
+  site: "https://chanphiromsok.github.io",
+  base: "/expo-lynx-view",
   integrations: [
     starlight({
       plugins: [starlightThemeBlack({ docs: { showMarkdownActions: false } })],
