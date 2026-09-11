@@ -48,6 +48,10 @@ function resource(value, name) {
   return result;
 }
 
+function workerUploadsEnabled(environment) {
+  return environment.LYNX_DELIVERY_WORKER_UPLOADS === 'true';
+}
+
 function credentials(username, password) {
   return {
     username: required(username, 'LYNX_CONSOLE_USERNAME'),
@@ -178,11 +182,17 @@ export function setupConsole({ cwd = process.cwd(), environmentPath, dryRun = fa
   const values = valuesFromEnvironment(environment);
   const key = signingKey(cwd);
   const admin = credentials(environment.LYNX_CONSOLE_USERNAME, environment.LYNX_CONSOLE_PASSWORD);
-  required(environment.R2_ACCESS_KEY_ID, 'R2_ACCESS_KEY_ID');
-  required(environment.R2_SECRET_ACCESS_KEY, 'R2_SECRET_ACCESS_KEY');
+  const workerUploads = workerUploadsEnabled(environment);
+  if (!workerUploads) {
+    required(environment.R2_ACCESS_KEY_ID, 'R2_ACCESS_KEY_ID');
+    required(environment.R2_SECRET_ACCESS_KEY, 'R2_SECRET_ACCESS_KEY');
+  }
   if (!environmentPath) throw new Error('Missing .env.lynx. Run `lynx console setup` once to create it.');
   if (dryRun) {
     process.stdout.write(`Configuration is valid. Would create or reuse D1 ${values.databaseName}, R2 ${values.bucketName}, and deploy ${values.workerName}.\n`);
+    process.stdout.write(workerUploads
+      ? 'Uploads: Worker-proxied (LYNX_DELIVERY_WORKER_UPLOADS=true) — no R2 S3 credential needed by the release CLI.\n'
+      : 'Uploads: direct to R2 with the configured R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY.\n');
     return;
   }
 
@@ -211,6 +221,9 @@ export function setupConsole({ cwd = process.cwd(), environmentPath, dryRun = fa
       INITIAL_ADMIN_API_KEY: admin.apiKey,
       AUTH_SESSION_SECRET: admin.sessionSecret,
       DELIVERY_SIGNING_PRIVATE_KEY: key,
+      // Re-synced every run from LYNX_DELIVERY_WORKER_UPLOADS, so flipping
+      // that value in .env.lynx and re-running setup toggles it live.
+      WORKER_PROXIED_UPLOADS: workerUploads ? 'true' : 'false',
     })) runWrangler(['secret', 'put', name, '--config', temporary.path], cwd, { ...runOptions, input: value });
     runWrangler(['d1', 'migrations', 'apply', 'DB', '--remote', '--config', temporary.path], cwd, runOptions);
     upsertEnvironment(environmentPath, {
@@ -219,7 +232,9 @@ export function setupConsole({ cwd = process.cwd(), environmentPath, dryRun = fa
       LYNX_DELIVERY_SERVER: url,
       LYNX_DELIVERY_API_KEY: admin.apiKey,
     });
-    process.stdout.write(`Cloudflare delivery is ready: ${url}\nSource .env.lynx before \`lynx release upload\`.\n`);
+    process.stdout.write(workerUploads
+      ? `Cloudflare delivery is ready: ${url}\nWorker-proxied uploads are on — \`lynx release\` needs no R2 credentials.\n`
+      : `Cloudflare delivery is ready: ${url}\nSource .env.lynx before \`lynx release upload\`.\n`);
   } finally {
     rmSync(temporary.directory, { recursive: true, force: true });
   }

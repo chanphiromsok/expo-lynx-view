@@ -122,19 +122,30 @@ This leaves the private half only at
 `.local-lynx-keys/updates.private.pem`. Setup verifies it against the host's
 configured public key before it sets the Worker secret.
 
-2. Create an R2 S3 API credential with **Object Read & Write**, scoped to your
-   delivery bucket. The Worker never receives this credential.
+2. Choose how `lynx release` will upload archives — this decides whether you
+   need an R2 credential at all:
+
+   - **Direct to R2** (default): create an R2 S3 API credential with
+     **Object Read & Write**, scoped to your delivery bucket. The Worker
+     never receives this credential.
+   - **Worker-proxied**: skip the R2 credential entirely. Set
+     `LYNX_DELIVERY_WORKER_UPLOADS="true"` in the `.env.lynx` template
+     (step 3) — the Worker verifies a short-lived signed capability and
+     writes the archive itself via its own R2 binding. The tradeoff: the
+     Worker gains R2 write access, which the direct-to-R2 path deliberately
+     avoids. Flip it later by editing `.env.lynx` and re-running setup.
 3. Run setup once to create the ignored configuration template:
 
 ```sh
 lynx console setup
 ```
 
-Fill the resource names, Console username/password, and R2 credential in the
-new `.env.lynx`, then run the same command again. Wrangler opens browser login
-and account selection when needed. Setup creates or reuses D1/R2 by name,
-deploys the Worker, stores secrets, applies migrations, and writes the D1 ID,
-Worker URL, and CLI API key back to `.env.lynx`.
+Fill the resource names, Console username/password, and (if using direct-to-R2
+uploads) the R2 credential in the new `.env.lynx`, then run the same command
+again. Wrangler opens browser login and account selection when needed. Setup
+creates or reuses D1/R2 by name, deploys the Worker, stores secrets, applies
+migrations, and writes the D1 ID, Worker URL, and CLI API key back to
+`.env.lynx`.
 
 4. Keep `.env.lynx` private. It contains the Console password, CLI API key, R2
    credential, Worker URL, and Cloudflare account ID. It is ignored by Git and

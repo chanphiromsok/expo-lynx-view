@@ -1,6 +1,6 @@
 {
   "name": "expo-lynx-bundle-cli",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Lynx managed delivery.\n\nSTART HERE\n  Mini-app repository: lynx doctor, then lynx release\n  Expo host repository: lynx keys generate, lynx doctor, lynx host embed <mini-app>, lynx host prepare, then lynx host register --platform <platform>\n  Cloudflare owner: lynx console setup\n\nRun lynx <command> --help for details.",
   "type": "module",
   "bin": {

@@ -43,19 +43,31 @@ the operator machine until setup sends it directly to the Worker secret store.
 It is never written to `.env.lynx`, R2, Git, a mini-app repository, or the
 mobile app. Setup stops if the two keys do not match.
 
-### 2. Create the R2 S3 upload credential
+### 2. Create the R2 S3 upload credential — or skip it
 
-In Cloudflare Dashboard, open **R2 → Manage R2 API Tokens**, or use the URL
-printed by setup. Create an **R2 S3 API token** with:
+`lynx release` can upload archives two ways; pick one before running setup:
 
-| Setting | Value |
-| --- | --- |
-| Permission | **Object Read & Write** |
-| Bucket | The value you choose for `LYNX_DELIVERY_R2_BUCKET` |
-| Use | CLI upload from developer machines |
+- **Direct to R2** (default). In Cloudflare Dashboard, open **R2 → Manage R2
+  API Tokens**, or use the URL printed by setup. Create an **R2 S3 API
+  token** with:
 
-Keep its access-key ID and secret access key private. This is an S3 credential,
-not a general Cloudflare API token. The Worker does not receive it.
+  | Setting | Value |
+  | --- | --- |
+  | Permission | **Object Read & Write** |
+  | Bucket | The value you choose for `LYNX_DELIVERY_R2_BUCKET` |
+  | Use | CLI upload from developer machines |
+
+  Keep its access-key ID and secret access key private. This is an S3
+  credential, not a general Cloudflare API token. The Worker does not
+  receive it.
+
+- **Worker-proxied** — no credential to create. Set
+  `LYNX_DELIVERY_WORKER_UPLOADS="true"` in `.env.lynx` (next step) instead.
+  The Worker verifies a short-lived signed capability and writes the
+  archive itself through its own R2 binding, so `lynx release` never needs
+  an S3 credential. The tradeoff: the Worker gains R2 write access, which
+  the direct-to-R2 path deliberately avoids. You can flip this later by
+  editing `.env.lynx` and re-running `lynx console setup`.
 
 ### 3. Create `.env.lynx`, then run setup
 

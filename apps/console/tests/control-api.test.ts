@@ -696,5 +696,118 @@ assert.equal(storage.deployments.get('shop/delivery/android/android-runtime')?.b
   assert.equal(rejectedUnknownMiniApp.status, 404);
 }
 
+{
+  // WORKER_PROXIED_UPLOADS is the opt-in production equivalent of
+  // LOCAL_UPLOADS: the signed-capability mechanism is identical, but it must
+  // work from a real (non-loopback) hostname, and must stay off unless a
+  // deployed Worker explicitly opts in.
+  const prodStorage = createDatabase();
+  const prodObjects = new Map<string, Uint8Array>();
+  const prodEnvironment: ControlEnv = {
+    DB: prodStorage.database,
+    ARTIFACTS: {
+      async head(key: string) {
+        const bytes = prodObjects.get(key);
+        return bytes ? { size: bytes.byteLength, checksums: { sha256: undefined } } : null;
+      },
+      async get(key: string) {
+        const bytes = prodObjects.get(key);
+        return bytes ? { body: new Blob([bytes]).stream(), size: bytes.byteLength } : null;
+      },
+      async put(key: string, value: ArrayBuffer | ArrayBufferView) {
+        const bytes = value instanceof ArrayBuffer
+          ? new Uint8Array(value)
+          : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        prodObjects.set(key, new Uint8Array(bytes));
+        return { key, size: bytes.byteLength } as R2Object;
+      },
+    } as R2Bucket,
+    AUTH_SESSION_SECRET: environment.AUTH_SESSION_SECRET,
+    DELIVERY_SIGNING_PRIVATE_KEY: environment.DELIVERY_SIGNING_PRIVATE_KEY,
+    INITIAL_ADMIN_USERNAME: 'operator',
+    INITIAL_ADMIN_PASSWORD: 'production-password',
+    INITIAL_ADMIN_API_KEY: apiKeyAuthorization.Authorization.replace('Bearer ', ''),
+  };
+  const prodLogin = await login(
+    prodEnvironment,
+    new Request('https://lynx-delivery.example.workers.dev/api/auth/login', { method: 'POST' }),
+    { username: 'operator', password: 'production-password' },
+  );
+  assert.equal(prodLogin.status, 200);
+  const prodCookie = prodLogin.headers.get('Set-Cookie')?.split(';')[0];
+  assert.ok(prodCookie);
+  const prodSession = { Cookie: prodCookie };
+  assert.equal((await createApp(
+    prodEnvironment,
+    new Request('https://lynx-delivery.example.workers.dev/api/apps', { headers: prodSession }),
+    { id: 'prodapp', name: 'Prod App' },
+  )).status, 201);
+  assert.equal((await createMiniApp(
+    prodEnvironment,
+    new Request('https://lynx-delivery.example.workers.dev/api/apps/prodapp/mini-apps', { headers: prodSession }),
+    'prodapp',
+    { id: 'delivery', name: 'Delivery' },
+  )).status, 201);
+  const prodReleaseBase = {
+    schemaVersion: 4 as const,
+    appId: 'prodapp',
+    feature: 'delivery',
+    version: '2026.09.11',
+    archiveSha256: release.archiveSha256,
+    archiveBytes: release.archiveBytes,
+  };
+
+  {
+    // Default (no WORKER_PROXIED_UPLOADS set): a real hostname never gets a
+    // proxied-upload instruction, so the CLI would fall back to direct R2.
+    const registered = await registerUpload(
+      prodEnvironment,
+      new Request('https://lynx-delivery.example.workers.dev/api/uploads', { headers: apiKeyAuthorization }),
+      { ...prodReleaseBase, releaseId: 'delivery-20260911T000000Z-prod01' },
+    );
+    assert.equal(registered.status, 200);
+    const body = await registered.json() as { upload?: unknown };
+    assert.equal(body.upload, undefined);
+  }
+
+  {
+    // Opted in: the same non-localhost request now gets a signed
+    // proxied-upload URL, and PUTting to it writes through the R2 binding.
+    const prodRelease: MiniAppRelease = { ...prodReleaseBase, releaseId: 'delivery-20260911T000000Z-prod02' };
+    const registered = await registerUpload(
+      { ...prodEnvironment, WORKER_PROXIED_UPLOADS: 'true' },
+      new Request('https://lynx-delivery.example.workers.dev/api/uploads', { headers: apiKeyAuthorization }),
+      prodRelease,
+    );
+    assert.equal(registered.status, 200);
+    const registration = await registered.json() as {
+      upload: { method: 'PUT'; url: string; headers: Record<string, string> };
+    };
+    assert.equal(registration.upload.method, 'PUT');
+    assert.match(registration.upload.url, /^https:\/\/lynx-delivery\.example\.workers\.dev\/__local-r2\//);
+
+    const uploaded = await handleLocalUpload(
+      { ...prodEnvironment, WORKER_PROXIED_UPLOADS: 'true' },
+      new Request(registration.upload.url, {
+        method: 'PUT',
+        headers: registration.upload.headers,
+        body: archive,
+      }),
+      prodRelease.appId,
+      prodRelease.feature,
+      prodRelease.releaseId,
+    );
+    assert.equal(uploaded.status, 200);
+
+    const completed = await completeUpload(
+      { ...prodEnvironment, WORKER_PROXIED_UPLOADS: 'true' },
+      new Request(`https://lynx-delivery.example.workers.dev/api/uploads/${prodRelease.releaseId}/complete`, { headers: apiKeyAuthorization }),
+      prodRelease.releaseId,
+      prodRelease,
+    );
+    assert.equal(completed.status, 201);
+  }
+}
+
 assert.equal(hexToBase64(release.archiveSha256).length, 44);
 console.log('Cloudflare control API tests passed.');
