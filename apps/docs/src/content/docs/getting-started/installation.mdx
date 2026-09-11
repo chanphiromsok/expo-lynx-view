@@ -17,7 +17,7 @@ pnpm add -D expo-lynx-bundle-cli
 ## 2. Configure the host plugin
 
 Before replacing the example URL below, provision the shared Worker and
-register the app/mini-app IDs with the [Cloudflare Console](/managed-delivery/cloudflare-worker/#first-time-cloudflare-setup).
+register the app/mini-app IDs with the [Cloudflare Console](../managed-delivery/cloudflare-worker/#first-time-cloudflare-setup).
 
 ```json
 {
@@ -45,7 +45,7 @@ pnpm lynx host prepare --register
 
 Then run the normal native build without changing native dependencies or the
 Expo Lynx configuration between preparation and the build. See [Host app
-integration](/managed-delivery/host-app-integration/) for the complete flow.
+integration](../managed-delivery/host-app-integration/) for the complete flow.
 
 :::note[When a new native build is needed]
 
@@ -65,7 +65,7 @@ The first launch renders the embedded baseline. Later launches synchronously
 render a compatible verified cache when one exists, then check the Worker in
 the background.
 
-See the [ExpoLynxView reference](/reference/expo-lynx-view/) for props and
+See the [ExpoLynxView reference](../reference/expo-lynx-view/) for props and
 events.
 
 ## 4. Warm the runtime before the first mount
@@ -83,4 +83,4 @@ InteractionManager.runAfterInteractions(() => {
 ```
 
 Calling it when the user opens the screen that contains the Lynx view is even
-better. See [First-render performance](/managed-delivery/performance/).
+better. See [First-render performance](../managed-delivery/performance/).

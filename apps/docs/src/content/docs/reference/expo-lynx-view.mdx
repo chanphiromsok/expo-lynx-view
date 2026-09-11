@@ -25,7 +25,7 @@ Exactly one of `source` or the deprecated `url` prop must be set.
 
 | `source`                                 | Meaning                                                                                   |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `{ kind: 'managed', feature }`           | Verified local cache when present, otherwise the embedded baseline; checks the Worker after first render. See [lifecycle](/managed-delivery/lifecycle/). |
+| `{ kind: 'managed', feature }`           | Verified local cache when present, otherwise the embedded baseline; checks the Worker after first render. See [lifecycle](../managed-delivery/lifecycle/). |
 | `{ kind: 'embedded', feature }`          | Always the embedded baseline for that feature. No remote check.                          |
 | `{ kind: 'development', url }`           | Loads directly from a dev-server URL. Debug builds only.                                 |
 
@@ -144,7 +144,7 @@ that cost while the user waits. Runs off the main thread; a second call while
 one is already building is a no-op; on web it resolves silently.
 
 Call it once the app is interactive, and ideally when the user is heading
-toward the Lynx screen. See [Performance](/managed-delivery/performance/).
+toward the Lynx screen. See [Performance](../managed-delivery/performance/).
 
 :::caution[iOS only]
 On Android `prewarmRuntime()` resolves immediately and does nothing — the
