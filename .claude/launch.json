@@ -1,0 +1,24 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "start",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "run",
+        "start"
+      ],
+      "port": 3000
+    },
+    {
+      "name": "console",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "lynx",
+        "console"
+      ],
+      "port": 5173,
+      "url": "http://127.0.0.1:5173"
+    }
+  ]
+}

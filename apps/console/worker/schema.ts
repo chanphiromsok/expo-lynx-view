@@ -34,15 +34,27 @@ export const AppLocalUploadParametersSchema = Type.Object({
   bundleId: Type.String({ pattern: bundlePattern }),
 });
 
+export const ReleaseGitProvenanceSchema = Type.Object(
+  {
+    commit: Type.String({ pattern: '^[0-9a-f]{7,40}$' }),
+    branch: Type.String({ minLength: 1, maxLength: 255, pattern: '^[\\u0020-\\u007e]+$' }),
+    subject: Type.String({ minLength: 1, maxLength: 512, pattern: '^[\\u0020-\\u007e]+$' }),
+    dirty: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+
 export const MiniAppReleaseSchema = Type.Object(
   {
-    schemaVersion: Type.Literal(3),
+    schemaVersion: Type.Literal(4),
     appId: Type.String({ pattern: appPattern }),
     feature: Type.String({ pattern: featurePattern }),
     releaseId: Type.String({ pattern: bundlePattern }),
     version: Type.String({ minLength: 1, maxLength: 128 }),
     archiveSha256: Type.String({ pattern: sha256Pattern }),
     archiveBytes: Type.Integer({ minimum: 1, maximum: 64 * 1024 * 1024 }),
+    // Omitted entirely when the mini-app directory is not a git work tree.
+    git: Type.Optional(ReleaseGitProvenanceSchema),
   },
   { additionalProperties: false },
 );

@@ -1,15 +1,26 @@
 import { type FormEvent, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import {
+  ArrowRight,
   AppWindow,
   Box,
-  Check,
+  ChevronRight,
+  CircleCheck,
+  CircleDot,
   FileArchive,
+  GitBranch,
+  GitCommitHorizontal,
+  GitCompareArrows,
+  Info,
   LoaderCircle,
   LogOut,
   Plus,
+  PowerOff,
+  Radio,
   RefreshCw,
+  ShieldAlert,
+  TriangleAlert,
   X,
 } from 'lucide-react';
 
@@ -46,7 +57,7 @@ import {
   type Bundle,
   type DeliveryScope,
   type Deployment,
-  type DeliveryOverview,
+  type HostRuntimeSummary,
   type RegisteredApp,
   type UpdateDeployment,
 } from './delivery-api';
@@ -58,13 +69,9 @@ function initialScope() {
   const params = new URLSearchParams(window.location.search);
   const appId = params.get('app') ?? '';
   const feature = params.get('feature') ?? 'delivery';
-  const platform = params.get('platform') ?? 'ios';
-  const runtimeVersion = params.get('runtime') ?? '';
   return {
     appId: identifier.test(appId) ? appId : '',
     feature: identifier.test(feature) ? feature : 'delivery',
-    platform: platform === 'android' ? 'android' : 'ios',
-    runtimeVersion,
   };
 }
 
@@ -81,16 +88,6 @@ function formatDate(value: string) {
 
 function shortHash(value: string) {
   return `${value.slice(0, 8)}…${value.slice(-6)}`;
-}
-
-function statusBadge(status: Bundle['status']) {
-  return status === 'active' ? (
-    <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300">
-      Active
-    </Badge>
-  ) : (
-    <Badge variant="secondary">Ready</Badge>
-  );
 }
 
 function LoginScreen({
@@ -495,7 +492,7 @@ function EmptyMiniAppBundlesScreen({
           </Card>
           {bundles.length > 0 ? (
             <div className="mt-4 max-w-5xl">
-              <BundleTable bundles={bundles} selectedId={null} />
+              <ReleaseTable bundles={bundles} onAction={() => {}} pendingKey={null} scopes={[]} />
             </div>
           ) : null}
           <div className="mt-4 max-w-5xl">
@@ -542,159 +539,145 @@ function ConsoleHeader({
   );
 }
 
-function ScopePicker({
-  scopes,
-  selectedScope,
-  onChange,
-}: {
-  scopes: DeliveryScope[];
-  selectedScope: DeliveryScope;
-  onChange: (scope: DeliveryScope) => void;
-}) {
-  const platforms = [...new Set(scopes.map((scope) => scope.platform))];
-  const platformScopes = scopes.filter(
-    (scope) => scope.platform === selectedScope.platform,
-  );
+type ScopeDeployment = {
+  platform: 'ios' | 'android';
+  runtimeVersion: string;
+  deployment: Deployment;
+};
 
+type RowActionKind = 'stage' | 'enable' | 'disable' | 'promote';
+
+type RowAction = {
+  kind: RowActionKind;
+  label: string;
+  /** True when this action changes what is served to devices immediately. */
+  guarded: boolean;
+};
+
+/**
+ * Every scope's state collapses to one of three displayed statuses per
+ * release row, and exactly one valid next action from that status:
+ *   off    -> stage   (bundleId change while nothing is enabled: instant)
+ *          -> promote (bundleId change while something IS enabled: immediate swap, guarded)
+ *   staged -> enable  (turns delivery on for the already-selected bundle: guarded)
+ *   live   -> disable (stops delivery, keeps the bundle selected: guarded)
+ * "Off" is never a click target: it's just how a non-selected row renders.
+ */
+function rowStatus(deployment: Deployment, bundleId: string): 'live' | 'staged' | 'off' {
+  if (deployment.bundleId !== bundleId) return 'off';
+  return deployment.enabled ? 'live' : 'staged';
+}
+
+function resolveRowAction(deployment: Deployment, bundleId: string): RowAction {
+  const status = rowStatus(deployment, bundleId);
+  if (status === 'live') return { kind: 'disable', label: 'Disable', guarded: true };
+  if (status === 'staged') return { kind: 'enable', label: 'Enable', guarded: true };
+  return deployment.enabled
+    ? { kind: 'promote', label: 'Replace live', guarded: true }
+    : { kind: 'stage', label: 'Stage', guarded: false };
+}
+
+function shortSha(commit: string) {
+  return commit.slice(0, 7);
+}
+
+function RuntimeChips({ hostRuntimes }: { hostRuntimes: HostRuntimeSummary[] }) {
+  if (hostRuntimes.length === 0) {
+    return (
+      <section className="mx-auto max-w-7xl px-4 pt-5 sm:px-7">
+        <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+          No native runtime is registered for this app yet. Run{' '}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">lynx host prepare --register</code> from
+          the Expo host app.
+        </p>
+      </section>
+    );
+  }
   return (
-    <section className="mx-auto max-w-7xl px-4 pt-5 sm:px-7">
-      <div className="grid gap-4 rounded-xl border bg-card p-4 shadow-sm sm:grid-cols-2">
-        <label className="grid content-start gap-2 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
-          Platform
-          <select
-            aria-label="Choose platform"
-            className="h-9 rounded-lg border bg-background px-3 text-sm font-normal normal-case tracking-normal text-foreground"
-            onChange={(event) => onChange(scopes.find((scope) => scope.platform === event.target.value) ?? selectedScope)}
-            value={selectedScope.platform}
-          >
-            {platforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
-          </select>
-        </label>
-        <label className="grid content-start gap-2 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
-          Runtime
-          <select
-            aria-label="Choose runtime"
-            className="h-9 rounded-lg border bg-background px-3 text-sm font-normal normal-case tracking-normal text-foreground"
-            onChange={(event) =>
-              onChange(
-                platformScopes.find(
-                  (scope) => scope.runtimeVersion === event.target.value,
-                ) ?? selectedScope,
-              )
-            }
-            value={selectedScope.runtimeVersion}
-          >
-            {platformScopes.map((scope) => (
-              <option key={scope.runtimeVersion} value={scope.runtimeVersion}>
-                {scope.runtimeVersion}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+    <section className="mx-auto grid max-w-7xl gap-3 px-4 pt-5 sm:grid-cols-2 sm:px-7">
+      {hostRuntimes.map((runtime) => (
+        <Card className="shadow-sm" key={runtime.platform} size="sm">
+          <CardContent className="pt-4">
+            <p className="text-xs font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+              {runtime.platform} · current runtime
+            </p>
+            <p className="mt-1.5 break-all font-mono text-xs">{runtime.runtimeVersion}</p>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              host <span className="font-medium text-foreground">{runtime.appVersion}</span> (build{' '}
+              <span className="font-medium text-foreground">{runtime.buildNumber}</span>) · registered{' '}
+              {formatDate(runtime.updatedAt)}
+            </p>
+          </CardContent>
+        </Card>
+      ))}
     </section>
   );
 }
 
-function DeploymentCard({
-  activeBundle,
+function PlatformCell({
+  platform,
+  runtimeVersion,
   deployment,
-  pending,
-  onToggle,
+  bundleId,
+  pendingKey,
+  onAction,
 }: {
-  activeBundle: Bundle | undefined;
+  platform: 'ios' | 'android';
+  runtimeVersion: string;
   deployment: Deployment;
-  pending: boolean;
-  onToggle: () => void;
+  bundleId: string;
+  pendingKey: string | null;
+  onAction: (action: RowAction, platform: 'ios' | 'android', runtimeVersion: string, bundleId: string, deployment: Deployment) => void;
 }) {
-  const disabledWithoutBundle = !deployment.enabled && !deployment.bundleId;
-  const state =
-    deployment.status === 'active'
-      ? 'Enabled'
-      : deployment.status === 'disabled'
-        ? 'Disabled'
-        : 'No selected bundle';
-
+  const status = rowStatus(deployment, bundleId);
+  const action = resolveRowAction(deployment, bundleId);
+  const pending = pendingKey === `${platform}|${runtimeVersion}`;
   return (
-    <Card className="shadow-sm" size="sm">
-      <CardHeader className="border-b">
-        <div>
-          <CardDescription>Remote deployment</CardDescription>
-          <CardTitle className="mt-1 flex items-center gap-2">
-            {state}
-            <Badge variant={deployment.enabled ? 'default' : 'secondary'}>
-              {deployment.enabled ? 'enabled' : 'disabled'}
-            </Badge>
-          </CardTitle>
-        </div>
-        <CardAction>
-          <Button
-            disabled={pending || disabledWithoutBundle}
-            onClick={onToggle}
-            size="sm"
-            variant={deployment.enabled ? 'outline' : 'default'}
-          >
-            {pending ? <LoaderCircle className="animate-spin" /> : null}
-            {deployment.enabled ? 'Disable' : 'Enable'}
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="space-y-4 pt-1">
-        {activeBundle ? (
-          <div>
-            <p className="font-mono text-xs text-muted-foreground">
-              {activeBundle.id}
-            </p>
-            <div className="mt-1.5 flex flex-wrap items-center gap-2">
-              <span className="font-semibold">{activeBundle.version}</span>
-              <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300">
-                <Check aria-hidden="true" /> Verified
-              </Badge>
-            </div>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              {formatBytes(activeBundle.archiveBytes)} · SHA-256{' '}
-              {shortHash(activeBundle.archiveSha256)}
-            </p>
-          </div>
-        ) : deployment.bundleId ? (
-          <div>
-            <p className="font-mono text-xs text-muted-foreground">
-              {deployment.bundleId}
-            </p>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              This verified bundle remains selected while delivery is disabled.
-            </p>
-          </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Select a verified bundle from the table to prepare the deployment.
-          </p>
-        )}
-        <p className="border-t pt-3 text-xs leading-5 text-muted-foreground">
-          Standard promotions activate on the next feature open. Force reload is
-          available only while selecting a bundle.
-        </p>
-      </CardContent>
-    </Card>
+    <div className="flex flex-col items-center gap-1.5">
+      <Badge
+        className={
+          status === 'live'
+            ? 'gap-1 border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300'
+            : status === 'staged'
+              ? 'gap-1 border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/60 dark:text-amber-300'
+              : 'gap-1'
+        }
+        variant={status === 'off' ? 'secondary' : undefined}
+      >
+        {status === 'live' ? <CircleCheck aria-hidden="true" /> : status === 'staged' ? <CircleDot aria-hidden="true" /> : null}
+        {status === 'live' ? 'Live' : status === 'staged' ? 'Staged' : 'Off'}
+      </Badge>
+      <Button
+        disabled={pending}
+        onClick={() => onAction(action, platform, runtimeVersion, bundleId, deployment)}
+        size="sm"
+        variant={action.kind === 'disable' ? 'outline' : status === 'off' ? 'outline' : 'default'}
+      >
+        {pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : action.guarded ? <ShieldAlert aria-hidden="true" /> : null}
+        {action.label}
+      </Button>
+    </div>
   );
 }
 
-function BundleTable({
+function ReleaseTable({
   bundles,
-  selectedId,
-  onSelect,
+  scopes,
+  pendingKey,
+  onAction,
 }: {
   bundles: Bundle[];
-  selectedId: string | null;
-  onSelect?: (bundle: Bundle) => void;
+  scopes: ScopeDeployment[];
+  pendingKey: string | null;
+  onAction: (action: RowAction, platform: 'ios' | 'android', runtimeVersion: string, bundleId: string, deployment: Deployment) => void;
 }) {
   return (
-    <Card className="min-h-[28rem] shadow-sm">
+    <Card className="shadow-sm">
       <CardHeader className="border-b">
         <div>
-          <CardTitle>Verified bundles</CardTitle>
+          <CardTitle>Verified releases</CardTitle>
           <CardDescription>
-            Choose the next deployment from CLI-uploaded releases.
+            Newest first. Off &amp; Staged apply instantly — Live and disabling ask first.
           </CardDescription>
         </div>
         <CardAction>
@@ -710,57 +693,82 @@ function BundleTable({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-5">Bundle</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead className="pl-5">Release</TableHead>
                 <TableHead className="hidden md:table-cell">Archive</TableHead>
                 <TableHead className="hidden lg:table-cell">Created</TableHead>
-                {onSelect ? <TableHead className="w-36 text-right">Action</TableHead> : null}
+                {scopes.map((scope) => (
+                  <TableHead className="text-center capitalize" key={scope.platform}>
+                    {scope.platform}
+                  </TableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {bundles.map((bundle) => (
-                <TableRow
-                  className={
-                    bundle.id === selectedId
-                      ? 'bg-primary/[0.045] hover:bg-primary/[0.07]'
-                      : undefined
-                  }
-                  key={bundle.id}
-                >
-                  <TableCell className="pl-5">
-                    <div className="flex items-center gap-3">
-                      <div className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground">
-                        <FileArchive className="size-4" aria-hidden="true" />
+              {bundles.map((bundle) => {
+                const liveOn = scopes.filter((scope) => scope.deployment.bundleId === bundle.id && scope.deployment.enabled);
+                const divergentFrom = liveOn.length > 0
+                  ? scopes.filter((scope) => scope.deployment.enabled && scope.deployment.bundleId !== bundle.id)
+                  : [];
+                return (
+                  <TableRow className={liveOn.length > 0 ? 'bg-primary/[0.045]' : undefined} key={bundle.id}>
+                    <TableCell className="pl-5 align-top">
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground">
+                          <FileArchive className="size-4" aria-hidden="true" />
+                        </div>
+                        <div>
+                          <p className="font-medium">{bundle.version}</p>
+                          <p className="mt-0.5 max-w-52 truncate font-mono text-xs text-muted-foreground sm:max-w-80">
+                            {bundle.id}
+                          </p>
+                          {bundle.git ? (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                              <span className="inline-flex items-center gap-1">
+                                <GitBranch className="size-3" aria-hidden="true" />
+                                {bundle.git.branch}
+                              </span>
+                              <span className="inline-flex items-center gap-1 font-mono">
+                                <GitCommitHorizontal className="size-3" aria-hidden="true" />
+                                {shortSha(bundle.git.commit)}
+                              </span>
+                              <span className="max-w-64 truncate italic">{bundle.git.subject}</span>
+                              {bundle.git.dirty ? (
+                                <Badge className="gap-1" variant="destructive">
+                                  <TriangleAlert className="size-3" aria-hidden="true" /> BUILT DIRTY
+                                </Badge>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {divergentFrom.length > 0 ? (
+                            <p className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700 dark:border-amber-900 dark:bg-amber-950/60 dark:text-amber-300">
+                              <GitCompareArrows className="size-3" aria-hidden="true" />
+                              {divergentFrom.map((scope) => scope.platform).join(', ')} live on a different release
+                            </p>
+                          ) : null}
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium">{bundle.version}</p>
-                        <p className="mt-0.5 max-w-44 truncate font-mono text-xs text-muted-foreground sm:max-w-72">
-                          {bundle.id}
-                        </p>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>{statusBadge(bundle.status)}</TableCell>
-                  <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">
-                    {formatBytes(bundle.archiveBytes)} ·{' '}
-                    {shortHash(bundle.archiveSha256)}
-                  </TableCell>
-                  <TableCell className="hidden text-muted-foreground lg:table-cell">
-                    {formatDate(bundle.createdAt)}
-                  </TableCell>
-                  {onSelect ? (
-                    <TableCell className="pr-4 text-right">
-                      {bundle.id === selectedId ? (
-                        <Badge variant="outline">Selected</Badge>
-                      ) : (
-                        <Button onClick={() => onSelect(bundle)} size="sm" variant="outline">
-                          Select
-                        </Button>
-                      )}
                     </TableCell>
-                  ) : null}
-                </TableRow>
-              ))}
+                    <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">
+                      {formatBytes(bundle.archiveBytes)} · {shortHash(bundle.archiveSha256)}
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground lg:table-cell">
+                      {formatDate(bundle.createdAt)}
+                    </TableCell>
+                    {scopes.map((scope) => (
+                      <TableCell className="text-center" key={scope.platform}>
+                        <PlatformCell
+                          bundleId={bundle.id}
+                          deployment={scope.deployment}
+                          onAction={onAction}
+                          pendingKey={pendingKey}
+                          platform={scope.platform}
+                          runtimeVersion={scope.runtimeVersion}
+                        />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}
@@ -769,132 +777,156 @@ function BundleTable({
   );
 }
 
-function SelectionDialog({
-  bundle,
-  pending,
-  onClose,
-  onSelect,
+function OlderRuntimesSection({
+  groups,
+  bundles,
+  pendingKey,
+  onAction,
 }: {
-  bundle: Bundle | null;
+  groups: ScopeDeployment[];
+  bundles: Bundle[];
+  pendingKey: string | null;
+  onAction: (action: RowAction, platform: 'ios' | 'android', runtimeVersion: string, bundleId: string, deployment: Deployment) => void;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <section className="mx-auto mt-5 max-w-7xl px-4 sm:px-7">
+      <details className="group overflow-hidden rounded-xl border bg-card shadow-sm">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium">
+          <ChevronRight aria-hidden="true" className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />
+          Older runtimes still in the wild
+          <span className="font-normal text-muted-foreground">
+            — {groups.length} runtime{groups.length === 1 ? '' : 's'} from a prior build
+          </span>
+        </summary>
+        <div className="space-y-4 border-t p-4">
+          {groups.map((group) => (
+            <div key={`${group.platform}|${group.runtimeVersion}`}>
+              <p className="mb-2 break-all font-mono text-xs text-muted-foreground">
+                {group.platform} · {group.runtimeVersion}
+              </p>
+              <ReleaseTable bundles={bundles} onAction={onAction} pendingKey={pendingKey} scopes={[group]} />
+            </div>
+          ))}
+        </div>
+      </details>
+    </section>
+  );
+}
+
+type ConfirmAction =
+  | { kind: 'enable'; platform: 'ios' | 'android'; runtimeVersion: string; bundle: Bundle; revision: number }
+  | { kind: 'disable'; platform: 'ios' | 'android'; runtimeVersion: string; bundle: Bundle | undefined; revision: number }
+  | { kind: 'promote'; platform: 'ios' | 'android'; runtimeVersion: string; fromBundle: Bundle | undefined; toBundle: Bundle; revision: number };
+
+function ConfirmDialog({
+  action,
+  crossPlatformNote,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  action: ConfirmAction | null;
+  crossPlatformNote: string | null;
   pending: boolean;
-  onClose: () => void;
-  onSelect: (force: boolean) => void;
+  onCancel: () => void;
+  onConfirm: (force: boolean) => void;
 }) {
   const [force, setForce] = useState(false);
+  const bundle = action?.kind === 'promote' ? action.toBundle : action?.bundle;
+  const title = action?.kind === 'disable' ? 'Disable delivery?' : action?.kind === 'promote' ? 'Replace the live release?' : 'Enable delivery?';
   return (
-    <Dialog open={bundle !== null} onOpenChange={(open) => !open && onClose()}>
+    <Dialog onOpenChange={(open) => !open && onCancel()} open={action !== null}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Select verified bundle</DialogTitle>
-          <DialogDescription>
-            This changes the deployment selection. It does not enable delivery
-            by itself.
-          </DialogDescription>
+          <DialogTitle className="flex items-center gap-2">
+            {action?.kind === 'disable' ? <PowerOff aria-hidden="true" /> : <ShieldAlert aria-hidden="true" />}
+            {title}
+          </DialogTitle>
+          {action && (
+            <DialogDescription className="break-all font-mono text-xs">
+              {action.platform.toUpperCase()} · {action.runtimeVersion}
+            </DialogDescription>
+          )}
         </DialogHeader>
-        {bundle && (
-          <div className="space-y-4">
+        {action && bundle && (
+          <div className="space-y-3">
+            {action.kind === 'promote' && (
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge variant="outline">{action.fromBundle?.version ?? 'no bundle'}</Badge>
+                <ArrowRight aria-hidden="true" className="size-4 text-muted-foreground" />
+                <Badge>{bundle.version}</Badge>
+              </div>
+            )}
             <div className="rounded-xl bg-muted p-4 font-mono text-xs leading-6">
               <p>{bundle.id}</p>
               <p>version: {bundle.version}</p>
-              <p>
-                archive: {formatBytes(bundle.archiveBytes)} ·{' '}
-                {shortHash(bundle.archiveSha256)}
-              </p>
+              {bundle.git && (
+                <p className="flex flex-wrap items-center gap-x-3">
+                  <span className="inline-flex items-center gap-1"><GitBranch className="size-3" aria-hidden="true" />{bundle.git.branch}</span>
+                  <span className="inline-flex items-center gap-1"><GitCommitHorizontal className="size-3" aria-hidden="true" />{shortSha(bundle.git.commit)}</span>
+                </p>
+              )}
             </div>
-            <label className="flex cursor-pointer items-start gap-3 rounded-xl border p-3 text-sm">
-              <input
-                aria-label="Force mounted-view reload"
-                checked={force}
-                className="mt-0.5 size-4"
-                onChange={(event) => setForce(event.target.checked)}
-                type="checkbox"
-              />
-              <span>
-                <span className="font-medium">Force mounted-view reload</span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Use only when an installed, verified update should ask an
-                  already open feature to reload now.
+            <p className="text-xs text-muted-foreground">revision {action.revision} → {action.revision + 1}</p>
+            {action.kind === 'disable' ? (
+              <div className="flex items-start gap-2 rounded-xl border bg-muted/50 p-3 text-sm text-muted-foreground">
+                <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  Stops new downloads. Devices that already verified this bundle keep running it; devices without
+                  one fall back to the embedded baseline.
                 </span>
-              </span>
-            </label>
+              </div>
+            ) : (
+              <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm">
+                <Radio aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
+                <span>
+                  Every device reporting {action.platform.toUpperCase()} runtime {shortHash(action.runtimeVersion)}
+                  {' '}gets this bundle on the next feature open. Polling, not push.
+                  {bundle.git?.dirty ? <b> This bundle was built from a dirty working tree.</b> : null}
+                </span>
+              </div>
+            )}
+            {crossPlatformNote && (
+              <div className="flex items-start gap-2 rounded-xl border bg-muted/50 p-3 text-sm text-muted-foreground">
+                <GitCompareArrows aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+                <span>{crossPlatformNote}</span>
+              </div>
+            )}
+            {action.kind === 'promote' && (
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border p-3 text-sm">
+                <input
+                  aria-label="Force mounted-view reload"
+                  checked={force}
+                  className="mt-0.5 size-4"
+                  onChange={(event) => setForce(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <span className="font-medium">Force mounted-view reload</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Ask features that are already open to reload as soon as the new bundle verifies.
+                  </span>
+                </span>
+              </label>
+            )}
           </div>
         )}
         <DialogFooter>
-          <Button onClick={onClose} variant="outline">
+          <Button onClick={onCancel} variant="outline">
             <X aria-hidden="true" /> Cancel
           </Button>
-          <Button disabled={!bundle || pending} onClick={() => onSelect(force)}>
-            {pending ? <LoaderCircle className="animate-spin" /> : null}Select
-            bundle
+          <Button
+            disabled={pending}
+            onClick={() => onConfirm(force)}
+            variant={action?.kind === 'disable' ? 'outline' : 'default'}
+          >
+            {pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+            {action?.kind === 'disable' ? 'Disable' : action?.kind === 'promote' ? 'Replace' : 'Enable'}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function ConsoleContent({
-  appId,
-  feature,
-  overview,
-  pending,
-  onToggle,
-  onSelect,
-}: {
-  appId: string;
-  feature: string;
-  overview: DeliveryOverview;
-  pending: boolean;
-  onToggle: () => void;
-  onSelect: (bundle: Bundle) => void;
-}) {
-  const activeBundle = overview.bundles.find(
-    (bundle) => bundle.status === 'active',
-  );
-  const deploymentState = overview.deployment.enabled
-    ? 'Remote delivery is enabled'
-    : 'Remote delivery is disabled';
-  return (
-    <section className="mx-auto max-w-7xl px-4 py-5 sm:px-7 lg:py-7">
-      <div className="mb-5 flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
-            {appId} / {feature}
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-            Release delivery
-          </h1>
-          <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-            runtime {overview.deployment.runtimeVersion}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <Badge
-            variant={overview.deployment.enabled ? 'default' : 'secondary'}
-          >
-            {deploymentState}
-          </Badge>
-          <Badge variant="outline">
-            Revision {overview.deployment.revision}
-          </Badge>
-        </div>
-      </div>
-      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <BundleTable
-          bundles={overview.bundles}
-          onSelect={onSelect}
-          selectedId={overview.deployment.bundleId}
-        />
-        <aside className="lg:sticky lg:top-20">
-          <DeploymentCard
-            activeBundle={activeBundle}
-            deployment={overview.deployment}
-            onToggle={onToggle}
-            pending={pending}
-          />
-        </aside>
-      </div>
-    </section>
   );
 }
 
@@ -913,7 +945,8 @@ export function DeliveryConsoleDashboard({
   const [password, setPassword] = useState('');
   const [sessionRevision, setSessionRevision] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
-  const [selectedBundle, setSelectedBundle] = useState<Bundle | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
   const sessionQuery = useQuery({
     queryKey: deliveryQueryKeys.session,
     queryFn: deliveryApi.getCurrentUser,
@@ -939,38 +972,42 @@ export function DeliveryConsoleDashboard({
   const selectedMiniScopes = routeMiniAppId
     ? scopes.filter((item) => item.appId === selectedAppId && item.feature === routeMiniAppId)
     : [];
-  const selectedScope =
-    selectedMiniScopes.find(
-      (item) =>
-        item.platform === scope.platform &&
-        item.runtimeVersion === scope.runtimeVersion,
-    ) ??
-    selectedMiniScopes.find((item) => item.platform === scope.platform) ??
-    selectedMiniScopes[0] ?? {
-      appId: selectedAppId,
-      feature: routeMiniAppId ?? '',
-      platform: scope.platform,
-      runtimeVersion: '',
-    };
-  const queryKey = deliveryQueryKeys.overview(
-    selectedScope.appId,
-    selectedScope.feature,
-    selectedScope.platform,
-    selectedScope.runtimeVersion,
-    sessionRevision,
-  );
-  const overviewQuery = useQuery({
-    queryKey,
-    queryFn: () =>
-      deliveryApi.getOverview(
-        selectedScope.appId,
-        selectedScope.feature,
-        selectedScope.platform,
-        selectedScope.runtimeVersion,
-      ),
-    enabled: Boolean(sessionQuery.data && selectedMiniApp && selectedScope.runtimeVersion),
-    retry: false,
+
+  // The current runtime per platform — the source of truth for which scope
+  // is "current" — comes from host_runtimes (registered by `lynx host
+  // register`), not from hand-picking a platform/runtime in a dropdown.
+  const currentRuntimes = selectedApp?.hostRuntimes ?? [];
+  const currentRuntimeKeys = new Set(currentRuntimes.map((runtime) => `${runtime.platform}|${runtime.runtimeVersion}`));
+  const olderMiniScopes = selectedMiniScopes.filter((item) => !currentRuntimeKeys.has(`${item.platform}|${item.runtimeVersion}`));
+  const fetchScopes = [
+    ...currentRuntimes.map((runtime) => ({ platform: runtime.platform, runtimeVersion: runtime.runtimeVersion })),
+    ...olderMiniScopes.map((item) => ({ platform: item.platform, runtimeVersion: item.runtimeVersion })),
+  ];
+
+  const overviewResults = useQueries({
+    queries: fetchScopes.map((fetchScope) => ({
+      queryKey: deliveryQueryKeys.overview(selectedAppId, routeMiniAppId ?? '', fetchScope.platform, fetchScope.runtimeVersion, sessionRevision),
+      queryFn: () => deliveryApi.getOverview(selectedAppId, routeMiniAppId ?? '', fetchScope.platform, fetchScope.runtimeVersion),
+      enabled: Boolean(sessionQuery.data && selectedMiniApp && fetchScope.runtimeVersion),
+      retry: false,
+    })),
   });
+  const overviewByKey = new Map(
+    fetchScopes.map((fetchScope, index) => [`${fetchScope.platform}|${fetchScope.runtimeVersion}`, overviewResults[index]?.data]),
+  );
+  const bundles = overviewResults.find((result) => result.data)?.data?.bundles ?? [];
+  const bundlesById = new Map(bundles.map((bundle) => [bundle.id, bundle]));
+  const currentScopeDeployments: ScopeDeployment[] = currentRuntimes.flatMap((runtime) => {
+    const overview = overviewByKey.get(`${runtime.platform}|${runtime.runtimeVersion}`);
+    return overview ? [{ platform: runtime.platform, runtimeVersion: runtime.runtimeVersion, deployment: overview.deployment }] : [];
+  });
+  const olderScopeDeployments: ScopeDeployment[] = olderMiniScopes.flatMap((item) => {
+    const overview = overviewByKey.get(`${item.platform}|${item.runtimeVersion}`);
+    return overview ? [{ platform: item.platform, runtimeVersion: item.runtimeVersion, deployment: overview.deployment }] : [];
+  });
+  const overviewsPending = fetchScopes.length > 0 && overviewResults.some((result) => result.isPending);
+  const erroredOverview = overviewResults.find((result) => result.isError);
+
   const uploadedBundlesQuery = useQuery({
     queryKey: deliveryQueryKeys.bundles(selectedAppId, routeMiniAppId ?? '', sessionRevision),
     queryFn: () => deliveryApi.getMiniAppBundles(selectedAppId, routeMiniAppId ?? ''),
@@ -990,21 +1027,20 @@ export function DeliveryConsoleDashboard({
     onSettled: () => {
       queryClient.removeQueries({ queryKey: deliveryQueryKeys.session });
       queryClient.removeQueries({ queryKey: ['delivery'] });
-      setSelectedBundle(null);
+      setConfirmAction(null);
       setNotice(null);
       setSessionRevision((revision) => revision + 1);
     },
   });
   const updateDeployment = useMutation({
-    mutationFn: (update: UpdateDeployment) =>
-      deliveryApi.updateDeployment(
-        selectedScope.appId,
-        selectedScope.feature,
-        selectedScope.platform,
-        selectedScope.runtimeVersion,
-        update,
-      ),
-    onSuccess: (overview) => queryClient.setQueryData(queryKey, overview),
+    mutationFn: ({ platform, runtimeVersion, update }: { platform: 'ios' | 'android'; runtimeVersion: string; update: UpdateDeployment }) =>
+      deliveryApi.updateDeployment(selectedAppId, routeMiniAppId ?? '', platform, runtimeVersion, update),
+    onSuccess: (overview, variables) => {
+      queryClient.setQueryData(
+        deliveryQueryKeys.overview(selectedAppId, routeMiniAppId ?? '', variables.platform, variables.runtimeVersion, sessionRevision),
+        overview,
+      );
+    },
   });
   const createAppMutation = useMutation({
     mutationFn: deliveryApi.createApp,
@@ -1023,28 +1059,16 @@ export function DeliveryConsoleDashboard({
     onError: (error) => setNotice(error instanceof Error ? error.message : 'Could not create the mini app.'),
   });
 
-  function changeScope(appId: string, feature: string, platform: 'ios' | 'android', runtimeVersion: string) {
-    window.history.replaceState(
-      null,
-      '',
-      `?app=${encodeURIComponent(appId)}&feature=${encodeURIComponent(feature)}&platform=${encodeURIComponent(platform)}&runtime=${encodeURIComponent(runtimeVersion)}`,
-    );
-    setScope({ appId, feature, platform, runtimeVersion });
-    setNotice(null);
-    setSelectedBundle(null);
-  }
-
   function openApp(appId: string) {
     setNotice(null);
-    setSelectedBundle(null);
+    setConfirmAction(null);
     void navigate({ to: '/apps/$appId', params: { appId } });
   }
 
   function openMiniApp(appId: string, miniAppId: string) {
-    const firstScope = scopes.find((item) => item.appId === appId && item.feature === miniAppId);
     setNotice(null);
-    setSelectedBundle(null);
-    if (firstScope) setScope(firstScope);
+    setConfirmAction(null);
+    setScope({ appId, feature: miniAppId });
     void navigate({ to: '/apps/$appId/$miniAppId', params: { appId, miniAppId } });
   }
 
@@ -1057,20 +1081,73 @@ export function DeliveryConsoleDashboard({
     loginMutation.mutate();
   }
 
-  function apply(update: UpdateDeployment, successMessage: string) {
-    updateDeployment.mutate(update, {
-      onSuccess: () => {
-        setNotice(successMessage);
-        setSelectedBundle(null);
+  function applyDeployment(platform: 'ios' | 'android', runtimeVersion: string, update: UpdateDeployment, successMessage: string) {
+    const key = `${platform}|${runtimeVersion}`;
+    setPendingKey(key);
+    updateDeployment.mutate(
+      { platform, runtimeVersion, update },
+      {
+        onSuccess: () => {
+          setNotice(successMessage);
+          setPendingKey((current) => (current === key ? null : current));
+        },
+        onError: (error) => {
+          setNotice(error instanceof Error ? error.message : 'Request failed.');
+          setPendingKey((current) => (current === key ? null : current));
+        },
       },
-      onError: (error) =>
-        setNotice(error instanceof Error ? error.message : 'Request failed.'),
+    );
+  }
+
+  function onRowAction(action: RowAction, platform: 'ios' | 'android', runtimeVersion: string, bundleId: string, deployment: Deployment) {
+    const bundle = bundlesById.get(bundleId);
+    if (!bundle) return;
+    if (action.kind === 'stage') {
+      applyDeployment(platform, runtimeVersion, { bundleId, force: false }, `${bundle.version} staged for the next feature open.`);
+      return;
+    }
+    if (action.kind === 'enable') {
+      setConfirmAction({ kind: 'enable', platform, runtimeVersion, bundle, revision: deployment.revision });
+      return;
+    }
+    if (action.kind === 'disable') {
+      setConfirmAction({ kind: 'disable', platform, runtimeVersion, bundle, revision: deployment.revision });
+      return;
+    }
+    setConfirmAction({
+      kind: 'promote',
+      platform,
+      runtimeVersion,
+      fromBundle: deployment.bundleId ? bundlesById.get(deployment.bundleId) : undefined,
+      toBundle: bundle,
+      revision: deployment.revision,
     });
+  }
+
+  function confirmDialogSubmit(force: boolean) {
+    if (!confirmAction) return;
+    const { kind, platform, runtimeVersion } = confirmAction;
+    if (kind === 'enable') {
+      applyDeployment(platform, runtimeVersion, { enabled: true }, 'Remote delivery enabled for the selected bundle.');
+    } else if (kind === 'disable') {
+      applyDeployment(platform, runtimeVersion, { enabled: false }, 'Remote delivery disabled. Existing installed bundles stay on devices.');
+    } else {
+      applyDeployment(
+        platform,
+        runtimeVersion,
+        { bundleId: confirmAction.toBundle.id, force },
+        force
+          ? `${confirmAction.toBundle.version} replaced the live release with a forced reload request.`
+          : `${confirmAction.toBundle.version} replaced the live release for the next feature open.`,
+      );
+    }
+    setConfirmAction(null);
   }
 
   function refresh() {
     void scopesQuery.refetch();
-    if (selectedScope.runtimeVersion) void overviewQuery.refetch();
+    void appsQuery.refetch();
+    overviewResults.forEach((result) => void result.refetch());
     if (selectedMiniScopes.length === 0) void uploadedBundlesQuery.refetch();
   }
 
@@ -1166,24 +1243,34 @@ export function DeliveryConsoleDashboard({
         username={sessionQuery.data.user.username}
       />
     );
-  if (overviewQuery.isPending)
+  if (overviewsPending)
     return (
       <main className="grid min-h-screen place-items-center gap-3 bg-background text-sm text-muted-foreground">
         <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />
         Loading deployment…
       </main>
     );
-  if (overviewQuery.isError || !overviewQuery.data)
+  if (erroredOverview)
     return (
       <FailureScreen
-        error={overviewQuery.error}
+        error={erroredOverview.error}
         onSignOut={() => logoutMutation.mutate()}
-        onRetry={() => void overviewQuery.refetch()}
+        onRetry={() => void erroredOverview.refetch()}
       />
     );
 
-  const overview = overviewQuery.data;
-  const currentScope: DeliveryScope = selectedScope;
+  const crossPlatformNote = (() => {
+    if (!confirmAction || confirmAction.kind === 'disable') return null;
+    const targetBundleId = confirmAction.kind === 'promote' ? confirmAction.toBundle.id : confirmAction.bundle.id;
+    const divergent = currentRuntimes.filter((runtime) => {
+      if (runtime.platform === confirmAction.platform) return false;
+      const overview = overviewByKey.get(`${runtime.platform}|${runtime.runtimeVersion}`);
+      return !overview || overview.deployment.bundleId !== targetBundleId || !overview.deployment.enabled;
+    });
+    if (divergent.length === 0) return null;
+    return `${divergent.map((runtime) => runtime.platform).join(', ')} will stay on a different release until you enable it there too.`;
+  })();
+
   return (
     <main className="min-h-screen bg-muted/35 text-foreground">
       <ConsoleHeader
@@ -1203,7 +1290,7 @@ export function DeliveryConsoleDashboard({
                 {selectedMiniApp.name}
               </h1>
               <p className="mt-2 font-mono text-xs text-muted-foreground">
-                {selectedMiniApp.id} · Bundles
+                {selectedMiniApp.id} · Release delivery
               </p>
             </div>
           </section>
@@ -1219,51 +1306,31 @@ export function DeliveryConsoleDashboard({
               </button>
             </output>
           )}
-          <ScopePicker
-            onChange={(nextScope) =>
-              changeScope(
-                nextScope.appId,
-                nextScope.feature,
-                nextScope.platform,
-                nextScope.runtimeVersion,
-              )
-            }
-            scopes={selectedMiniScopes}
-            selectedScope={currentScope}
-          />
+          <RuntimeChips hostRuntimes={currentRuntimes} />
           <div className="mx-auto mt-6 max-w-7xl px-4 sm:px-7">
             <MiniAppConfigCards appId={selectedApp.id} feature={selectedMiniApp.id} />
           </div>
-          <ConsoleContent
-            appId={selectedScope.appId}
-            feature={selectedScope.feature}
-            onSelect={(bundle) => setSelectedBundle(bundle)}
-            onToggle={() =>
-              apply(
-                { enabled: !overview.deployment.enabled },
-                overview.deployment.enabled
-                  ? 'Remote delivery disabled. Existing installed bundles stay on devices.'
-                  : 'Remote delivery enabled for the selected bundle.',
-              )
-            }
-            overview={overview}
-            pending={updateDeployment.isPending}
+          <section className="mx-auto mt-6 max-w-7xl px-4 sm:px-7">
+            <ReleaseTable
+              bundles={bundles}
+              onAction={onRowAction}
+              pendingKey={pendingKey}
+              scopes={currentScopeDeployments}
+            />
+          </section>
+          <OlderRuntimesSection
+            bundles={bundles}
+            groups={olderScopeDeployments}
+            onAction={onRowAction}
+            pendingKey={pendingKey}
           />
         </div>
       </div>
-      <SelectionDialog
-        bundle={selectedBundle}
-        key={selectedBundle?.id ?? 'empty'}
-        onClose={() => setSelectedBundle(null)}
-        onSelect={(force) =>
-          selectedBundle &&
-          apply(
-            { bundleId: selectedBundle.id, force },
-            force
-              ? `${selectedBundle.version} selected with a forced reload request.`
-              : `${selectedBundle.version} selected for the next feature open.`,
-          )
-        }
+      <ConfirmDialog
+        action={confirmAction}
+        crossPlatformNote={crossPlatformNote}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={confirmDialogSubmit}
         pending={updateDeployment.isPending}
       />
     </main>

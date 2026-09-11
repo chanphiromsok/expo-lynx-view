@@ -5073,11 +5073,11 @@ var init_source = __esm({
         }
       }
       /**
-      Scan check MPEG 1 or 2 Layer 3 header, or 'layer 0' for ADTS (MPEG sync-word 0xFFE).
-
-      @param offset - Offset to scan for sync-preamble.
-      @returns {{ext: string, mime: string}}
-      */
+      	Scan check MPEG 1 or 2 Layer 3 header, or 'layer 0' for ADTS (MPEG sync-word 0xFFE).
+      
+      	@param offset - Offset to scan for sync-preamble.
+      	@returns {{ext: string, mime: string}}
+      	*/
       scanMpeg(offset) {
         if (this.check([255, 224], { offset, mask: [255, 224] })) {
           if (this.check([16], { offset: offset + 1, mask: [22] })) {
@@ -27070,15 +27070,12 @@ __export(schema_exports, {
 var apps = sqliteTable("apps", {
   id: text("id").primaryKey().notNull(),
   name: text("name").notNull(),
-  currentRuntimeVersion: text("current_runtime_version"),
-  currentAppVersion: text("current_app_version"),
-  currentBuildNumber: text("current_build_number"),
   createdAt: text("created_at").notNull()
 });
 var miniApps = sqliteTable(
   "mini_apps",
   {
-    appId: text("app_id").notNull(),
+    appId: text("app_id").notNull().references(() => apps.id, { onDelete: "cascade" }),
     id: text("id").notNull(),
     name: text("name").notNull(),
     createdAt: text("created_at").notNull()
@@ -27088,7 +27085,7 @@ var miniApps = sqliteTable(
 var hostRuntimes = sqliteTable(
   "host_runtimes",
   {
-    appId: text("app_id").notNull(),
+    appId: text("app_id").notNull().references(() => apps.id, { onDelete: "cascade" }),
     platform: text("platform").notNull(),
     runtimeVersion: text("runtime_version").notNull(),
     appVersion: text("app_version").notNull(),
@@ -27100,7 +27097,7 @@ var hostRuntimes = sqliteTable(
 var bundles = sqliteTable(
   "bundles",
   {
-    appId: text("app_id").notNull(),
+    appId: text("app_id").notNull().references(() => apps.id, { onDelete: "cascade" }),
     id: text("id").notNull(),
     featureId: text("feature_id").notNull(),
     version: text("version").notNull(),
@@ -27108,7 +27105,14 @@ var bundles = sqliteTable(
     archiveSha256: text("archive_sha256").notNull(),
     archiveBytes: integer("archive_bytes").notNull(),
     verifiedAt: text("verified_at"),
-    createdAt: text("created_at").notNull()
+    createdAt: text("created_at").notNull(),
+    // Git provenance the release was built from. Nullable: older bundles
+    // predate this column, and a mini-app repository need not be a git work
+    // tree at all.
+    gitCommit: text("git_commit"),
+    gitBranch: text("git_branch"),
+    gitSubject: text("git_subject"),
+    gitDirty: integer("git_dirty", { mode: "boolean" }).notNull().default(false)
   },
   (table) => [
     primaryKey({ columns: [table.appId, table.id] }),
@@ -27118,7 +27122,7 @@ var bundles = sqliteTable(
 var deployments = sqliteTable(
   "deployments",
   {
-    appId: text("app_id").notNull(),
+    appId: text("app_id").notNull().references(() => apps.id, { onDelete: "cascade" }),
     featureId: text("feature_id").notNull(),
     platform: text("platform").notNull(),
     runtimeVersion: text("runtime_version").notNull(),
@@ -27161,33 +27165,40 @@ async function ensureInitialAdmin(environment) {
   const [existing] = await database.select({ id: users.id }).from(users).limit(1);
   if (existing) return;
   if (!username && !password && !apiKey) {
-    throw new Error("No console user exists. Configure INITIAL_ADMIN_USERNAME, INITIAL_ADMIN_PASSWORD, and INITIAL_ADMIN_API_KEY once.");
+    throw new Error(
+      "No console user exists. Configure INITIAL_ADMIN_USERNAME, INITIAL_ADMIN_PASSWORD, and INITIAL_ADMIN_API_KEY once."
+    );
   }
   if (!username || !password || !apiKey) {
-    throw new Error("Initial admin setup requires INITIAL_ADMIN_USERNAME, INITIAL_ADMIN_PASSWORD, and INITIAL_ADMIN_API_KEY.");
+    throw new Error(
+      "Initial admin setup requires INITIAL_ADMIN_USERNAME, INITIAL_ADMIN_PASSWORD, and INITIAL_ADMIN_API_KEY."
+    );
   }
   if (!usernamePattern.test(username)) {
-    throw new Error("INITIAL_ADMIN_USERNAME must contain 2-64 letters, numbers, dots, dashes, or underscores.");
+    throw new Error(
+      "INITIAL_ADMIN_USERNAME must contain 2-64 letters, numbers, dots, dashes, or underscores."
+    );
   }
-  if (!localDefaults && password.length < 12) throw new Error("INITIAL_ADMIN_PASSWORD must be at least 12 characters.");
-  if (apiKey.length < 24) throw new Error("INITIAL_ADMIN_API_KEY must be at least 24 characters.");
+  if (!localDefaults && password.length < 12)
+    throw new Error("INITIAL_ADMIN_PASSWORD must be at least 12 characters.");
+  if (apiKey.length < 24)
+    throw new Error("INITIAL_ADMIN_API_KEY must be at least 24 characters.");
   const id = crypto.randomUUID();
-  await database.insert(users).values(
-    {
-      id,
-      username,
-      passwordHash: await hashPassword(password),
-      apiKeyHash: await sha256Hex2(apiKey),
-      enabled: true,
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
-    }
-  );
+  await database.insert(users).values({
+    id,
+    username,
+    passwordHash: await hashPassword(password),
+    apiKeyHash: await sha256Hex2(apiKey),
+    enabled: true,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
 }
 async function authenticatePassword(environment, username, password) {
   await ensureInitialAdmin(environment);
   const database = createDeliveryDatabase(environment.DB);
   const [user] = await database.select().from(users).where(eq(users.username, username)).limit(1);
-  if (!user || !user.enabled || !await verifyPassword(password, user.passwordHash)) return null;
+  if (!user || !user.enabled || !await verifyPassword(password, user.passwordHash))
+    return null;
   return { id: user.id, username: user.username };
 }
 async function authenticateApiKey(environment, request) {
@@ -27214,7 +27225,8 @@ async function authenticateSession(environment, request) {
 }
 async function createSessionCookie(environment, user, secure) {
   const secret = environment.AUTH_SESSION_SECRET?.trim();
-  if (!secret) throw new Error("AUTH_SESSION_SECRET is required for console login.");
+  if (!secret)
+    throw new Error("AUTH_SESSION_SECRET is required for console login.");
   const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1e3;
   const payload = { ...user, expiresAt, version: 1 };
   const encoded = base64UrlEncode(JSON.stringify(payload));
@@ -27233,11 +27245,15 @@ async function readSession(secret, token) {
   if (separator < 1) return null;
   const encoded = token.slice(0, separator);
   const signature = token.slice(separator + 1);
-  if (!await constantTimeEqual2(signature, await sign(secret, encoded))) return null;
+  if (!await constantTimeEqual2(signature, await sign(secret, encoded)))
+    return null;
   try {
-    const value = JSON.parse(base64UrlDecode(encoded));
+    const value = JSON.parse(
+      base64UrlDecode(encoded)
+    );
     const expiresAt = value.expiresAt;
-    if (value.version !== 1 || typeof value.id !== "string" || typeof value.username !== "string" || typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return null;
+    if (value.version !== 1 || typeof value.id !== "string" || typeof value.username !== "string" || typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now())
+      return null;
     return value;
   } catch {
     return null;
@@ -27251,7 +27267,8 @@ async function hashPassword(password) {
 async function verifyPassword(password, stored) {
   const [algorithm, iterations, encodedSalt, encodedHash] = stored.split(":");
   const count = Number(iterations);
-  if (algorithm !== "pbkdf2-sha256" || !Number.isSafeInteger(count) || count < 1e5 || !encodedSalt || !encodedHash) return false;
+  if (algorithm !== "pbkdf2-sha256" || !Number.isSafeInteger(count) || count < 1e5 || !encodedSalt || !encodedHash)
+    return false;
   try {
     return constantTimeEqualBytes(
       base64UrlDecodeBytes(encodedHash),
@@ -27262,20 +27279,42 @@ async function verifyPassword(password, stored) {
   }
 }
 async function derivePassword(password, salt, iterations) {
-  const key = await crypto.subtle.importKey("raw", encoder2.encode(password), "PBKDF2", false, ["deriveBits"]);
-  return new Uint8Array(await crypto.subtle.deriveBits(
-    { name: "PBKDF2", hash: "SHA-256", salt, iterations },
-    key,
-    256
-  ));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder2.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  return new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: "PBKDF2", hash: "SHA-256", salt, iterations },
+      key,
+      256
+    )
+  );
 }
 async function sha256Hex2(value) {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder2.encode(value)));
-  return Array.from(digest, (byte2) => byte2.toString(16).padStart(2, "0")).join("");
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", encoder2.encode(value))
+  );
+  return Array.from(digest, (byte2) => byte2.toString(16).padStart(2, "0")).join(
+    ""
+  );
 }
 async function sign(secret, value) {
-  const key = await crypto.subtle.importKey("raw", encoder2.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return base64UrlEncodeBytes(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder2.encode(value))));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder2.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  return base64UrlEncodeBytes(
+    new Uint8Array(
+      await crypto.subtle.sign("HMAC", key, encoder2.encode(value))
+    )
+  );
 }
 function readCookie(header, name) {
   if (!header) return null;
@@ -27306,7 +27345,8 @@ async function constantTimeEqual2(left, right) {
 function constantTimeEqualBytes(left, right) {
   let difference = left.length ^ right.length;
   const length = Math.max(left.length, right.length);
-  for (let index2 = 0; index2 < length; index2 += 1) difference |= (left[index2] ?? 0) ^ (right[index2] ?? 0);
+  for (let index2 = 0; index2 < length; index2 += 1)
+    difference |= (left[index2] ?? 0) ^ (right[index2] ?? 0);
   return difference === 0;
 }
 
@@ -27338,15 +27378,26 @@ var AppLocalUploadParametersSchema = Type.Object({
   feature: Type.String({ pattern: featurePattern }),
   bundleId: Type.String({ pattern: bundlePattern })
 });
+var ReleaseGitProvenanceSchema = Type.Object(
+  {
+    commit: Type.String({ pattern: "^[0-9a-f]{7,40}$" }),
+    branch: Type.String({ minLength: 1, maxLength: 255, pattern: "^[\\u0020-\\u007e]+$" }),
+    subject: Type.String({ minLength: 1, maxLength: 512, pattern: "^[\\u0020-\\u007e]+$" }),
+    dirty: Type.Boolean()
+  },
+  { additionalProperties: false }
+);
 var MiniAppReleaseSchema = Type.Object(
   {
-    schemaVersion: Type.Literal(3),
+    schemaVersion: Type.Literal(4),
     appId: Type.String({ pattern: appPattern }),
     feature: Type.String({ pattern: featurePattern }),
     releaseId: Type.String({ pattern: bundlePattern }),
     version: Type.String({ minLength: 1, maxLength: 128 }),
     archiveSha256: Type.String({ pattern: sha256Pattern }),
-    archiveBytes: Type.Integer({ minimum: 1, maximum: 64 * 1024 * 1024 })
+    archiveBytes: Type.Integer({ minimum: 1, maximum: 64 * 1024 * 1024 }),
+    // Omitted entirely when the mini-app directory is not a git work tree.
+    git: Type.Optional(ReleaseGitProvenanceSchema)
   },
   { additionalProperties: false }
 );
@@ -27414,35 +27465,95 @@ async function getDeploymentOverview(environment, request, appOrFeature, request
     const [app2, feature] = deploymentScope(appOrFeature, requestedFeature);
     assertApp(app2);
     assertFeature(feature);
-    return jsonResponse(200, await readOverview(environment, app2, feature, requestPlatform(request), requestRuntimeVersion(request)));
+    return jsonResponse(
+      200,
+      await readOverview(
+        environment,
+        app2,
+        feature,
+        requestPlatform(request),
+        requestRuntimeVersion(request)
+      )
+    );
   });
 }
 async function getDeploymentScopes(environment, request) {
   return handleConsoleRequest(environment, request, async () => {
     const database = createDeliveryDatabase(environment.DB);
-    const deploymentScopes = await database.select({ appId: deployments.appId, feature: deployments.featureId, platform: deployments.platform, runtimeVersion: deployments.runtimeVersion }).from(deployments).groupBy(deployments.appId, deployments.featureId, deployments.platform, deployments.runtimeVersion);
+    const deploymentScopes = await database.select({
+      appId: deployments.appId,
+      feature: deployments.featureId,
+      platform: deployments.platform,
+      runtimeVersion: deployments.runtimeVersion
+    }).from(deployments).groupBy(
+      deployments.appId,
+      deployments.featureId,
+      deployments.platform,
+      deployments.runtimeVersion
+    );
     const scopes = /* @__PURE__ */ new Map();
     for (const scope of deploymentScopes) {
-      scopes.set(`${scope.appId}/${scope.feature}/${scope.platform}/${scope.runtimeVersion}`, scope);
+      scopes.set(
+        `${scope.appId}/${scope.feature}/${scope.platform}/${scope.runtimeVersion}`,
+        scope
+      );
     }
-    return jsonResponse(200, [...scopes.values()].sort(
-      (left, right) => left.appId.localeCompare(right.appId) || left.feature.localeCompare(right.feature) || left.platform.localeCompare(right.platform)
-    ));
+    return jsonResponse(
+      200,
+      [...scopes.values()].sort(
+        (left, right) => left.appId.localeCompare(right.appId) || left.feature.localeCompare(right.feature) || left.platform.localeCompare(right.platform)
+      )
+    );
+  });
+}
+async function getMiniAppBundles(environment, request, app2, feature) {
+  return handleConsoleRequest(environment, request, async () => {
+    assertApp(app2);
+    assertFeature(feature);
+    if (!await readMiniApp(environment, app2, feature)) {
+      throw new ApiError(
+        404,
+        "mini-app-not-found",
+        "This mini app is not registered."
+      );
+    }
+    const rows = await createDeliveryDatabase(environment.DB).select().from(bundles).where(
+      and(
+        eq(bundles.appId, app2),
+        eq(bundles.featureId, feature),
+        isNotNull(bundles.verifiedAt)
+      )
+    ).orderBy(desc(bundles.createdAt)).limit(50);
+    return jsonResponse(
+      200,
+      rows.map((bundle) => ({ ...publicBundle(bundle), status: "ready" }))
+    );
   });
 }
 async function getApps(environment, request) {
   return handleConsoleRequest(environment, request, async () => {
     const database = createDeliveryDatabase(environment.DB);
-    const [registeredApps, registeredMiniApps] = await Promise.all([
+    const [registeredApps, registeredMiniApps, registeredHostRuntimes] = await Promise.all([
       database.select().from(apps).orderBy(apps.name),
-      database.select().from(miniApps).orderBy(miniApps.name)
+      database.select().from(miniApps).orderBy(miniApps.name),
+      database.select().from(hostRuntimes)
     ]);
-    return jsonResponse(200, registeredApps.map((app2) => ({
-      id: app2.id,
-      name: app2.name,
-      currentHostBuild: app2.currentRuntimeVersion ? { appVersion: app2.currentAppVersion, buildNumber: app2.currentBuildNumber } : null,
-      miniApps: registeredMiniApps.filter((miniApp) => miniApp.appId === app2.id).map((miniApp) => ({ id: miniApp.id, name: miniApp.name }))
-    })));
+    return jsonResponse(
+      200,
+      registeredApps.map((app2) => ({
+        id: app2.id,
+        name: app2.name,
+        // One row per platform — the source of truth for "which runtime is current".
+        hostRuntimes: registeredHostRuntimes.filter((runtime) => runtime.appId === app2.id).map((runtime) => ({
+          platform: runtime.platform,
+          runtimeVersion: runtime.runtimeVersion,
+          appVersion: runtime.appVersion,
+          buildNumber: runtime.buildNumber,
+          updatedAt: runtime.updatedAt
+        })),
+        miniApps: registeredMiniApps.filter((miniApp) => miniApp.appId === app2.id).map((miniApp) => ({ id: miniApp.id, name: miniApp.name }))
+      }))
+    );
   });
 }
 async function createApp(environment, request, input) {
@@ -27453,8 +27564,13 @@ async function createApp(environment, request, input) {
     const database = createDeliveryDatabase(environment.DB);
     const existing = await readApp(environment, input.id);
     if (existing) {
-      if (existing.name === input.name) return jsonResponse(200, { app: publicApp(existing), created: false });
-      throw new ApiError(409, "app-conflict", "An app with this ID already exists. IDs cannot be renamed.");
+      if (existing.name === input.name)
+        return jsonResponse(200, { app: publicApp(existing), created: false });
+      throw new ApiError(
+        409,
+        "app-conflict",
+        "An app with this ID already exists. IDs cannot be renamed."
+      );
     }
     const createdAt = (/* @__PURE__ */ new Date()).toISOString();
     await database.insert(apps).values({ id: input.id, name: input.name, createdAt }).run();
@@ -27467,56 +27583,106 @@ async function createMiniApp(environment, request, app2, input) {
   return handleConsoleRequest(environment, request, async () => {
     assertApp(app2);
     if (!value_exports2.Check(MiniAppCreateSchema, input) || !isDisplayName(input.name)) {
-      throw new ApiError(400, "invalid-request", "Mini-app ID or name is invalid.");
+      throw new ApiError(
+        400,
+        "invalid-request",
+        "Mini-app ID or name is invalid."
+      );
     }
-    if (!await readApp(environment, app2)) throw new ApiError(404, "app-not-found", "This app is not registered. Create it in the Console first.");
+    if (!await readApp(environment, app2))
+      throw new ApiError(
+        404,
+        "app-not-found",
+        "This app is not registered. Create it in the Console first."
+      );
     const existing = await readMiniApp(environment, app2, input.id);
     if (existing) {
-      if (existing.name === input.name) return jsonResponse(200, { miniApp: publicMiniApp(existing), created: false });
-      throw new ApiError(409, "mini-app-conflict", "A mini app with this ID already exists. IDs cannot be renamed.");
+      if (existing.name === input.name)
+        return jsonResponse(200, {
+          miniApp: publicMiniApp(existing),
+          created: false
+        });
+      throw new ApiError(
+        409,
+        "mini-app-conflict",
+        "A mini app with this ID already exists. IDs cannot be renamed."
+      );
     }
     const createdAt = (/* @__PURE__ */ new Date()).toISOString();
     await createDeliveryDatabase(environment.DB).insert(miniApps).values({ appId: app2, id: input.id, name: input.name, createdAt }).run();
     const miniApp = await readMiniApp(environment, app2, input.id);
     if (!miniApp) throw new Error("Created mini app could not be read.");
-    return jsonResponse(201, { miniApp: publicMiniApp(miniApp), created: true });
+    return jsonResponse(201, {
+      miniApp: publicMiniApp(miniApp),
+      created: true
+    });
   });
 }
 async function registerHostRuntime(environment, request, app2, input) {
   return handleApiKeyRequest(environment, request, async () => {
     assertApp(app2);
     if (!value_exports2.Check(HostRuntimeRegistrationSchema, input) || !hasPrintableText(input.runtimeVersion) || !hasPrintableText(input.appVersion) || !hasPrintableText(input.buildNumber)) {
-      throw new ApiError(400, "invalid-request", "Host runtime registration is invalid.");
+      throw new ApiError(
+        400,
+        "invalid-request",
+        "Host runtime registration is invalid."
+      );
     }
     const registeredApp = await readApp(environment, app2);
-    if (!registeredApp) throw new ApiError(404, "app-not-found", "This app is not registered. Ask the Console operator to create it first.");
+    if (!registeredApp)
+      throw new ApiError(
+        404,
+        "app-not-found",
+        "This app is not registered. Ask the Console operator to create it first."
+      );
     const registeredMiniApps = await createDeliveryDatabase(environment.DB).select({ id: miniApps.id }).from(miniApps).where(eq(miniApps.appId, app2));
     const expected = registeredMiniApps.map(({ id }) => id).sort();
     const supplied = [...input.features].sort();
     if (expected.length !== supplied.length || expected.some((id, index2) => id !== supplied[index2])) {
-      throw new ApiError(409, "mini-app-mismatch", "The host feature list does not match this app\u2019s registered mini apps. Update the Console registration before registering the host build.");
+      throw new ApiError(
+        409,
+        "mini-app-mismatch",
+        "The host feature list does not match this app\u2019s registered mini apps. Update the Console registration before registering the host build."
+      );
     }
-    const currentRuntime = await readHostRuntime(environment, app2, input.platform);
+    const currentRuntime = await readHostRuntime(
+      environment,
+      app2,
+      input.platform
+    );
     if (currentRuntime?.runtimeVersion === input.runtimeVersion) {
       if (currentRuntime.appVersion !== input.appVersion || currentRuntime.buildNumber !== input.buildNumber) {
-        throw new ApiError(409, "host-runtime-conflict", "This runtime is already registered with a different app version or build number.");
+        throw new ApiError(
+          409,
+          "host-runtime-conflict",
+          "This runtime is already registered with a different app version or build number."
+        );
       }
-      return jsonResponse(200, { app: publicApp(registeredApp), created: false });
+      return jsonResponse(200, {
+        app: publicApp(registeredApp),
+        created: false
+      });
     }
     const updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     const statements = [
       environment.DB.prepare(
         "INSERT INTO host_runtimes (app_id, platform, runtime_version, app_version, build_number, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(app_id, platform) DO UPDATE SET runtime_version = excluded.runtime_version, app_version = excluded.app_version, build_number = excluded.build_number, updated_at = excluded.updated_at"
-      ).bind(app2, input.platform, input.runtimeVersion, input.appVersion, input.buildNumber, updatedAt),
-      ...input.platform === "ios" ? [environment.DB.prepare(
-        "UPDATE apps SET current_runtime_version = ?, current_app_version = ?, current_build_number = ? WHERE id = ?"
-      ).bind(input.runtimeVersion, input.appVersion, input.buildNumber, app2)] : [],
-      ...supplied.map((feature) => environment.DB.prepare(
-        // A missing runtime is represented publicly as signed disabled revision 1.
-        // Start the durable row after it so mobile never observes a changed
-        // document at the same revision after host registration.
-        "INSERT OR IGNORE INTO deployments (app_id, feature_id, platform, runtime_version, bundle_id, enabled, force, revision, updated_at) VALUES (?, ?, ?, ?, NULL, 0, 0, 2, ?)"
-      ).bind(app2, feature, input.platform, input.runtimeVersion, updatedAt))
+      ).bind(
+        app2,
+        input.platform,
+        input.runtimeVersion,
+        input.appVersion,
+        input.buildNumber,
+        updatedAt
+      ),
+      ...supplied.map(
+        (feature) => environment.DB.prepare(
+          // A missing runtime is represented publicly as signed disabled revision 1.
+          // Start the durable row after it so mobile never observes a changed
+          // document at the same revision after host registration.
+          "INSERT OR IGNORE INTO deployments (app_id, feature_id, platform, runtime_version, bundle_id, enabled, force, revision, updated_at) VALUES (?, ?, ?, ?, NULL, 0, 0, 2, ?)"
+        ).bind(app2, feature, input.platform, input.runtimeVersion, updatedAt)
+      )
     ];
     await environment.DB.batch(statements);
     const updated = await readApp(environment, app2);
@@ -27526,14 +27692,23 @@ async function registerHostRuntime(environment, request, app2, input) {
 }
 async function updateDeployment(environment, request, appOrFeature, requestedFeatureOrInput, maybeInput) {
   return handleConsoleRequest(environment, request, async () => {
-    const [app2, feature] = deploymentScope(appOrFeature, typeof requestedFeatureOrInput === "string" ? requestedFeatureOrInput : void 0);
+    const [app2, feature] = deploymentScope(
+      appOrFeature,
+      typeof requestedFeatureOrInput === "string" ? requestedFeatureOrInput : void 0
+    );
     const input = maybeInput ?? requestedFeatureOrInput;
     assertApp(app2);
     assertFeature(feature);
     const selectedPlatform = requestPlatform(request);
     const selectedRuntimeVersion = requestRuntimeVersion(request);
     const update = normalizeUpdate(input);
-    const current = await readDeployment(environment, app2, feature, selectedPlatform, selectedRuntimeVersion);
+    const current = await readDeployment(
+      environment,
+      app2,
+      feature,
+      selectedPlatform,
+      selectedRuntimeVersion
+    );
     const enabled = current?.enabled ?? false;
     const currentBundleId = current?.bundleId ?? null;
     const currentRevision = current?.revision ?? 0;
@@ -27541,17 +27716,55 @@ async function updateDeployment(environment, request, appOrFeature, requestedFea
     let nextBundleId = currentBundleId;
     let nextForce = false;
     if ("enabled" in update) {
-      if (update.enabled === enabled) return jsonResponse(200, await readOverview(environment, app2, feature, selectedPlatform, selectedRuntimeVersion));
+      if (update.enabled === enabled)
+        return jsonResponse(
+          200,
+          await readOverview(
+            environment,
+            app2,
+            feature,
+            selectedPlatform,
+            selectedRuntimeVersion
+          )
+        );
       if (update.enabled && !currentBundleId) {
-        throw new ApiError(409, "deployment-empty", "Select a bundle before enabling delivery.");
+        throw new ApiError(
+          409,
+          "deployment-empty",
+          "Select a bundle before enabling delivery."
+        );
       }
       nextEnabled = update.enabled;
     } else {
-      const bundle = await readBundle(environment, app2, feature, update.bundleId);
-      if (!bundle) throw new ApiError(404, "bundle-not-found", "Registered bundle was not found.");
-      if (!bundle.verifiedAt) throw new ApiError(409, "bundle-not-ready", "Wait for the R2 upload to be verified before selecting this bundle.");
+      const bundle = await readBundle(
+        environment,
+        app2,
+        feature,
+        update.bundleId
+      );
+      if (!bundle)
+        throw new ApiError(
+          404,
+          "bundle-not-found",
+          "Registered bundle was not found."
+        );
+      if (!bundle.verifiedAt)
+        throw new ApiError(
+          409,
+          "bundle-not-ready",
+          "Wait for the R2 upload to be verified before selecting this bundle."
+        );
       if (currentBundleId === bundle.id && !update.force) {
-        return jsonResponse(200, await readOverview(environment, app2, feature, selectedPlatform, selectedRuntimeVersion));
+        return jsonResponse(
+          200,
+          await readOverview(
+            environment,
+            app2,
+            feature,
+            selectedPlatform,
+            selectedRuntimeVersion
+          )
+        );
       }
       nextBundleId = bundle.id;
       nextForce = update.force;
@@ -27569,7 +27782,12 @@ async function updateDeployment(environment, request, appOrFeature, requestedFea
       revision,
       updatedAt
     }).onConflictDoUpdate({
-      target: [deployments.appId, deployments.featureId, deployments.platform, deployments.runtimeVersion],
+      target: [
+        deployments.appId,
+        deployments.featureId,
+        deployments.platform,
+        deployments.runtimeVersion
+      ],
       set: {
         bundleId: nextBundleId,
         enabled: nextEnabled,
@@ -27580,9 +27798,22 @@ async function updateDeployment(environment, request, appOrFeature, requestedFea
       where: eq(deployments.revision, currentRevision)
     }).run();
     if (Number(result.meta.changes ?? 0) !== 1) {
-      throw new ApiError(409, "deployment-conflict", "Deployment changed concurrently; refresh and try again.");
+      throw new ApiError(
+        409,
+        "deployment-conflict",
+        "Deployment changed concurrently; refresh and try again."
+      );
     }
-    return jsonResponse(200, await readOverview(environment, app2, feature, selectedPlatform, selectedRuntimeVersion));
+    return jsonResponse(
+      200,
+      await readOverview(
+        environment,
+        app2,
+        feature,
+        selectedPlatform,
+        selectedRuntimeVersion
+      )
+    );
   });
 }
 async function registerUpload(environment, request, input) {
@@ -27593,17 +27824,40 @@ async function registerUpload(environment, request, input) {
     assertFeature(release.feature);
     const registeredApp = await readApp(environment, app2);
     if (!registeredApp) {
-      throw new ApiError(404, "app-not-found", "This app is not registered. Ask the Console operator to create it first.");
+      throw new ApiError(
+        404,
+        "app-not-found",
+        "This app is not registered. Ask the Console operator to create it first."
+      );
     }
     if (registeredApp && !await readMiniApp(environment, app2, release.feature)) {
-      throw new ApiError(404, "mini-app-not-found", "This mini app is not registered. Ask the Console operator to create it first.");
+      throw new ApiError(
+        404,
+        "mini-app-not-found",
+        "This mini app is not registered. Ask the Console operator to create it first."
+      );
     }
-    const existing = await readBundle(environment, app2, release.feature, release.releaseId);
+    const existing = await readBundle(
+      environment,
+      app2,
+      release.feature,
+      release.releaseId
+    );
     if (existing) {
       if (sameBundle(existing, release)) {
-        return jsonResponse(200, uploadState(existing, await objectUploaded(environment, app2, release)));
+        return jsonResponse(
+          200,
+          uploadState(
+            existing,
+            await objectUploaded(environment, app2, release)
+          )
+        );
       }
-      throw new ApiError(409, "bundle-conflict", "Bundle ID is already assigned to different immutable metadata.");
+      throw new ApiError(
+        409,
+        "bundle-conflict",
+        "Bundle ID is already assigned to different immutable metadata."
+      );
     }
     const createdAt = (/* @__PURE__ */ new Date()).toISOString();
     const inserted = await createDeliveryDatabase(environment.DB).insert(bundles).values({
@@ -27611,36 +27865,68 @@ async function registerUpload(environment, request, input) {
       id: release.releaseId,
       featureId: release.feature,
       version: release.version,
-      archiveObjectKey: archiveObjectKey(app2, release.feature, release.releaseId),
+      archiveObjectKey: archiveObjectKey(
+        app2,
+        release.feature,
+        release.releaseId
+      ),
       archiveSha256: release.archiveSha256,
       archiveBytes: release.archiveBytes,
       verifiedAt: null,
-      createdAt
+      createdAt,
+      gitCommit: release.git?.commit ?? null,
+      gitBranch: release.git?.branch ?? null,
+      gitSubject: release.git?.subject ?? null,
+      gitDirty: release.git?.dirty ?? false
     }).onConflictDoNothing().run();
     if (Number(inserted.meta.changes ?? 0) !== 1) {
-      const raced = await readBundle(environment, app2, release.feature, release.releaseId);
+      const raced = await readBundle(
+        environment,
+        app2,
+        release.feature,
+        release.releaseId
+      );
       if (!raced || !sameBundle(raced, release)) {
-        throw new ApiError(409, "bundle-conflict", "Bundle ID is already assigned to different immutable metadata.");
+        throw new ApiError(
+          409,
+          "bundle-conflict",
+          "Bundle ID is already assigned to different immutable metadata."
+        );
       }
-      return jsonResponse(200, uploadState(raced, await objectUploaded(environment, app2, release)));
+      return jsonResponse(
+        200,
+        uploadState(raced, await objectUploaded(environment, app2, release))
+      );
     }
     const key = archiveObjectKey(app2, release.feature, release.releaseId);
     const uploaded = await objectUploaded(environment, app2, release);
     return jsonResponse(200, {
-      ...uploadState({
-        appId: app2,
-        id: release.releaseId,
-        featureId: release.feature,
-        version: release.version,
-        archiveObjectKey: key,
-        archiveSha256: release.archiveSha256,
-        archiveBytes: release.archiveBytes,
-        verifiedAt: null,
-        createdAt
-      }, uploaded),
+      ...uploadState(
+        {
+          appId: app2,
+          id: release.releaseId,
+          featureId: release.feature,
+          version: release.version,
+          archiveObjectKey: key,
+          archiveSha256: release.archiveSha256,
+          archiveBytes: release.archiveBytes,
+          verifiedAt: null,
+          createdAt,
+          gitCommit: release.git?.commit ?? null,
+          gitBranch: release.git?.branch ?? null,
+          gitSubject: release.git?.subject ?? null,
+          gitDirty: release.git?.dirty ?? false
+        },
+        uploaded
+      ),
       ...localUploadsEnabled(environment, request) && !uploaded ? {
         expiresIn: UPLOAD_EXPIRY_SECONDS,
-        upload: await createLocalUploadInstruction(environment, request, key, release.archiveSha256)
+        upload: await createLocalUploadInstruction(
+          environment,
+          request,
+          key,
+          release.archiveSha256
+        )
       } : {}
     });
   });
@@ -27654,52 +27940,116 @@ async function completeUpload(environment, request, routeBundleId, input) {
       throw new ApiError(400, "invalid-request", "Bundle ID is invalid.");
     }
     if (release.releaseId !== routeBundleId) {
-      throw new ApiError(409, "bundle-conflict", "Route bundle ID does not match release metadata.");
+      throw new ApiError(
+        409,
+        "bundle-conflict",
+        "Route bundle ID does not match release metadata."
+      );
     }
-    const existing = await readBundle(environment, app2, release.feature, routeBundleId);
-    if (!existing) throw new ApiError(404, "artifact-not-found", "This release was not reserved. Run lynx release upload again.");
-    if (!sameBundle(existing, release)) throw new ApiError(409, "bundle-conflict", "Bundle ID is already assigned to different immutable metadata.");
-    if (existing.verifiedAt) return jsonResponse(200, { bundle: publicBundle(existing), created: false });
+    const existing = await readBundle(
+      environment,
+      app2,
+      release.feature,
+      routeBundleId
+    );
+    if (!existing)
+      throw new ApiError(
+        404,
+        "artifact-not-found",
+        "This release was not reserved. Run lynx release upload again."
+      );
+    if (!sameBundle(existing, release))
+      throw new ApiError(
+        409,
+        "bundle-conflict",
+        "Bundle ID is already assigned to different immutable metadata."
+      );
+    if (existing.verifiedAt)
+      return jsonResponse(200, {
+        bundle: publicBundle(existing),
+        created: false
+      });
     await requireObject(
       environment.ARTIFACTS,
       existing.archiveObjectKey,
       release.archiveSha256,
       release.archiveBytes
     );
-    const result = await createDeliveryDatabase(environment.DB).update(bundles).set({ verifiedAt: (/* @__PURE__ */ new Date()).toISOString() }).where(and(eq(bundles.appId, app2), eq(bundles.id, release.releaseId), isNull(bundles.verifiedAt))).run();
+    const result = await createDeliveryDatabase(environment.DB).update(bundles).set({ verifiedAt: (/* @__PURE__ */ new Date()).toISOString() }).where(
+      and(
+        eq(bundles.appId, app2),
+        eq(bundles.id, release.releaseId),
+        isNull(bundles.verifiedAt)
+      )
+    ).run();
     if (Number(result.meta.changes ?? 0) !== 1) {
-      throw new ApiError(409, "bundle-conflict", "Bundle completion raced with another request; retry it.");
+      throw new ApiError(
+        409,
+        "bundle-conflict",
+        "Bundle completion raced with another request; retry it."
+      );
     }
-    const bundle = await readBundle(environment, app2, release.feature, release.releaseId);
+    const bundle = await readBundle(
+      environment,
+      app2,
+      release.feature,
+      release.releaseId
+    );
     if (!bundle) throw new Error("Inserted bundle could not be read.");
     return jsonResponse(201, { bundle: publicBundle(bundle), created: true });
   });
 }
 async function login(environment, request, credentials) {
   try {
-    const user = await authenticatePassword(environment, credentials.username, credentials.password);
+    const user = await authenticatePassword(
+      environment,
+      credentials.username,
+      credentials.password
+    );
     if (!user) return unauthorized("Invalid username or password.");
     const secure = new URL(request.url).protocol === "https:";
-    return jsonResponse(200, { user }, { "Set-Cookie": await createSessionCookie(environment, user, secure) });
+    return jsonResponse(
+      200,
+      { user },
+      { "Set-Cookie": await createSessionCookie(environment, user, secure) }
+    );
   } catch (error) {
-    if (error instanceof ApiError) return jsonResponse(error.status, { error: { code: error.code, message: error.message } });
-    return jsonResponse(503, { error: { code: "auth-not-configured", message: error instanceof Error ? error.message : "Console authentication is unavailable." } });
+    if (error instanceof ApiError)
+      return jsonResponse(error.status, {
+        error: { code: error.code, message: error.message }
+      });
+    return jsonResponse(503, {
+      error: {
+        code: "auth-not-configured",
+        message: error instanceof Error ? error.message : "Console authentication is unavailable."
+      }
+    });
   }
 }
 async function logout(environment, request) {
   const secure = new URL(request.url).protocol === "https:";
-  return jsonResponse(200, { ok: true }, { "Set-Cookie": clearSessionCookie(secure) });
+  return jsonResponse(
+    200,
+    { ok: true },
+    { "Set-Cookie": clearSessionCookie(secure) }
+  );
 }
 async function getCurrentUser(environment, request) {
   try {
     const user = await authenticateSession(environment, request);
     return user ? jsonResponse(200, { user }) : unauthorized();
   } catch (error) {
-    return jsonResponse(503, { error: { code: "auth-not-configured", message: error instanceof Error ? error.message : "Console authentication is unavailable." } });
+    return jsonResponse(503, {
+      error: {
+        code: "auth-not-configured",
+        message: error instanceof Error ? error.message : "Console authentication is unavailable."
+      }
+    });
   }
 }
 async function handleLocalUpload(environment, request, appOrFeature, featureOrReleaseId, releaseId) {
-  if (request.method !== "PUT" || !localUploadsEnabled(environment, request)) return notFound();
+  if (request.method !== "PUT" || !localUploadsEnabled(environment, request))
+    return notFound();
   try {
     const [app2, feature, bundle] = releaseId ? [appOrFeature, featureOrReleaseId, releaseId] : ["default", appOrFeature, featureOrReleaseId];
     assertApp(app2);
@@ -27709,26 +28059,54 @@ async function handleLocalUpload(environment, request, appOrFeature, featureOrRe
     const expires = Number(url.searchParams.get("expires"));
     const digest = url.searchParams.get("sha256") ?? "";
     const signature = url.searchParams.get("signature") ?? "";
-    if (!Number.isSafeInteger(expires) || expires < Date.now() || !sha256.test(digest)) return notFound();
+    if (!Number.isSafeInteger(expires) || expires < Date.now() || !sha256.test(digest))
+      return notFound();
     const key = archiveObjectKey(app2, feature, bundle);
-    if (!await matchesCapability(environment.AUTH_SESSION_SECRET, key, digest, expires, signature)) return notFound();
+    if (!await matchesCapability(
+      environment.AUTH_SESSION_SECRET,
+      key,
+      digest,
+      expires,
+      signature
+    ))
+      return notFound();
     if (request.headers.get("Content-Type")?.toLowerCase() !== "application/zip") {
-      throw new ApiError(400, "invalid-request", "Local upload must use application/zip.");
+      throw new ApiError(
+        400,
+        "invalid-request",
+        "Local upload must use application/zip."
+      );
     }
     if (request.headers.get("x-amz-checksum-sha256") !== hexToBase64(digest)) {
-      throw new ApiError(400, "checksum-mismatch", "Local upload checksum header is invalid.");
+      throw new ApiError(
+        400,
+        "checksum-mismatch",
+        "Local upload checksum header is invalid."
+      );
     }
     const bytes = await readBoundedBody(request, MAX_ARCHIVE_BYTES);
     if (await sha256Hex(bytes) !== digest) {
-      throw new ApiError(409, "checksum-mismatch", "Local upload bytes do not match the checksum.");
+      throw new ApiError(
+        409,
+        "checksum-mismatch",
+        "Local upload bytes do not match the checksum."
+      );
     }
     await environment.ARTIFACTS.put(key, bytes, {
       httpMetadata: { contentType: "application/zip" }
     });
     return new Response(null, { status: 200 });
   } catch (error) {
-    if (error instanceof ApiError) return jsonResponse(error.status, { error: { code: error.code, message: error.message } });
-    return jsonResponse(500, { error: { code: "internal-error", message: "Local upload could not be completed." } });
+    if (error instanceof ApiError)
+      return jsonResponse(error.status, {
+        error: { code: error.code, message: error.message }
+      });
+    return jsonResponse(500, {
+      error: {
+        code: "internal-error",
+        message: "Local upload could not be completed."
+      }
+    });
   }
 }
 async function createLocalUploadInstruction(environment, request, key, expectedSha256) {
@@ -27739,8 +28117,18 @@ async function createLocalUploadInstruction(environment, request, key, expectedS
   };
   const expires = Date.now() + UPLOAD_EXPIRY_SECONDS * 1e3;
   const secret = environment.AUTH_SESSION_SECRET?.trim();
-  if (!secret) throw new ApiError(503, "auth-not-configured", "AUTH_SESSION_SECRET is required to create a local upload capability.");
-  const signature = await createCapability(secret, key, expectedSha256, expires);
+  if (!secret)
+    throw new ApiError(
+      503,
+      "auth-not-configured",
+      "AUTH_SESSION_SECRET is required to create a local upload capability."
+    );
+  const signature = await createCapability(
+    secret,
+    key,
+    expectedSha256,
+    expires
+  );
   const url = new URL(request.url);
   url.pathname = `/__local-r2/${key}`;
   url.search = "";
@@ -27752,18 +28140,30 @@ async function createLocalUploadInstruction(environment, request, key, expectedS
 async function requireObject(bucket, key, expectedSha256, expectedBytes) {
   const head = await bucket.head(key);
   if (!head || head.size !== expectedBytes || head.size > MAX_ARCHIVE_BYTES) {
-    throw new ApiError(409, "upload-incomplete", "Uploaded ZIP is missing or has the wrong byte length.");
+    throw new ApiError(
+      409,
+      "upload-incomplete",
+      "Uploaded ZIP is missing or has the wrong byte length."
+    );
   }
   const checksum2 = head.checksums.sha256;
   const digest = checksum2 ? bytesToHex(new Uint8Array(checksum2)) : await hashStoredObject(bucket, key, expectedBytes);
   if (digest !== expectedSha256) {
-    throw new ApiError(409, "checksum-mismatch", "Uploaded ZIP does not match release metadata.");
+    throw new ApiError(
+      409,
+      "checksum-mismatch",
+      "Uploaded ZIP does not match release metadata."
+    );
   }
 }
 async function hashStoredObject(bucket, key, expectedBytes) {
   const object = await bucket.get(key);
   if (!object || !object.body || object.size !== expectedBytes || object.size > MAX_ARCHIVE_BYTES) {
-    throw new ApiError(409, "upload-incomplete", "Uploaded ZIP is unavailable.");
+    throw new ApiError(
+      409,
+      "upload-incomplete",
+      "Uploaded ZIP is unavailable."
+    );
   }
   const reader = object.body.getReader();
   const chunks = [];
@@ -27773,11 +28173,20 @@ async function hashStoredObject(bucket, key, expectedBytes) {
     if (done) break;
     length += value.byteLength;
     if (length > expectedBytes || length > MAX_ARCHIVE_BYTES) {
-      throw new ApiError(409, "upload-incomplete", "Uploaded ZIP exceeds its declared byte length.");
+      throw new ApiError(
+        409,
+        "upload-incomplete",
+        "Uploaded ZIP exceeds its declared byte length."
+      );
     }
     chunks.push(value);
   }
-  if (length !== expectedBytes) throw new ApiError(409, "upload-incomplete", "Uploaded ZIP has the wrong byte length.");
+  if (length !== expectedBytes)
+    throw new ApiError(
+      409,
+      "upload-incomplete",
+      "Uploaded ZIP has the wrong byte length."
+    );
   const bytes = new Uint8Array(length);
   let offset = 0;
   for (const chunk of chunks) {
@@ -27790,11 +28199,13 @@ async function readOverview(environment, app2, feature, platform3, runtimeVersio
   const database = createDeliveryDatabase(environment.DB);
   const [deployment, availableBundles] = await Promise.all([
     readDeployment(environment, app2, feature, platform3, runtimeVersion3),
-    database.select().from(bundles).where(and(
-      eq(bundles.appId, app2),
-      eq(bundles.featureId, feature),
-      isNotNull(bundles.verifiedAt)
-    )).orderBy(desc(bundles.createdAt)).limit(50)
+    database.select().from(bundles).where(
+      and(
+        eq(bundles.appId, app2),
+        eq(bundles.featureId, feature),
+        isNotNull(bundles.verifiedAt)
+      )
+    ).orderBy(desc(bundles.createdAt)).limit(50)
   ]);
   const selectedBundleId = deployment?.bundleId ?? null;
   const enabled = deployment?.enabled ?? false;
@@ -27818,7 +28229,14 @@ async function readOverview(environment, app2, feature, platform3, runtimeVersio
   };
 }
 async function readDeployment(environment, app2, feature, platform3, runtimeVersion3) {
-  const [deployment] = await createDeliveryDatabase(environment.DB).select().from(deployments).where(and(eq(deployments.appId, app2), eq(deployments.featureId, feature), eq(deployments.platform, platform3), eq(deployments.runtimeVersion, runtimeVersion3))).limit(1);
+  const [deployment] = await createDeliveryDatabase(environment.DB).select().from(deployments).where(
+    and(
+      eq(deployments.appId, app2),
+      eq(deployments.featureId, feature),
+      eq(deployments.platform, platform3),
+      eq(deployments.runtimeVersion, runtimeVersion3)
+    )
+  ).limit(1);
   return deployment ?? null;
 }
 async function readBundle(environment, app2, feature, id) {
@@ -27830,7 +28248,9 @@ async function readApp(environment, id) {
   return app2 ?? null;
 }
 async function readHostRuntime(environment, app2, platform3) {
-  const [runtime] = await createDeliveryDatabase(environment.DB).select().from(hostRuntimes).where(and(eq(hostRuntimes.appId, app2), eq(hostRuntimes.platform, platform3))).limit(1);
+  const [runtime] = await createDeliveryDatabase(environment.DB).select().from(hostRuntimes).where(
+    and(eq(hostRuntimes.appId, app2), eq(hostRuntimes.platform, platform3))
+  ).limit(1);
   return runtime ?? null;
 }
 async function readMiniApp(environment, app2, id) {
@@ -27840,8 +28260,7 @@ async function readMiniApp(environment, app2, id) {
 function publicApp(app2) {
   return {
     id: app2.id,
-    name: app2.name,
-    currentHostBuild: app2.currentRuntimeVersion ? { appVersion: app2.currentAppVersion, buildNumber: app2.currentBuildNumber } : null
+    name: app2.name
   };
 }
 function publicMiniApp(miniApp) {
@@ -27856,7 +28275,13 @@ function publicBundle(bundle) {
     archiveSha256: bundle.archiveSha256,
     archiveBytes: bundle.archiveBytes,
     verifiedAt: bundle.verifiedAt,
-    createdAt: bundle.createdAt
+    createdAt: bundle.createdAt,
+    git: bundle.gitCommit ? {
+      commit: bundle.gitCommit,
+      branch: bundle.gitBranch,
+      subject: bundle.gitSubject,
+      dirty: bundle.gitDirty
+    } : null
   };
 }
 function sameBundle(bundle, release) {
@@ -27865,16 +28290,29 @@ function sameBundle(bundle, release) {
 function parseUploadRelease(input) {
   if (value_exports2.Check(MiniAppReleaseSchema, input)) {
     const release = input;
-    if (!hasPrintableText(release.version)) throw new ApiError(400, "invalid-request", "Release version contains unsupported characters.");
+    if (!hasPrintableText(release.version))
+      throw new ApiError(
+        400,
+        "invalid-request",
+        "Release version contains unsupported characters."
+      );
     return release;
   }
-  throw new ApiError(400, "invalid-request", "Release metadata is invalid. Build it with the current Lynx CLI (schemaVersion 3).");
+  throw new ApiError(
+    400,
+    "invalid-request",
+    "Release metadata is invalid. Build it with the current Lynx CLI (schemaVersion 4)."
+  );
 }
 function releaseAppId(release) {
   return release.appId;
 }
 async function objectUploaded(environment, app2, release) {
-  return Boolean(await environment.ARTIFACTS.head(archiveObjectKey(app2, release.feature, release.releaseId)));
+  return Boolean(
+    await environment.ARTIFACTS.head(
+      archiveObjectKey(app2, release.feature, release.releaseId)
+    )
+  );
 }
 function uploadState(bundle, uploaded) {
   return {
@@ -27895,20 +28333,28 @@ function archiveObjectKey(app2, feature, id) {
 }
 function normalizeUpdate(input) {
   const keys = Object.keys(input);
-  if (keys.length === 1 && typeof input.enabled === "boolean") return { enabled: input.enabled };
+  if (keys.length === 1 && typeof input.enabled === "boolean")
+    return { enabled: input.enabled };
   if (keys.length === 2 && typeof input.bundleId === "string" && typeof input.force === "boolean") {
     return { bundleId: input.bundleId, force: input.force };
   }
   throw new ApiError(400, "invalid-request", "Deployment update is invalid.");
 }
 function assertFeature(feature) {
-  if (!featureId.test(feature)) throw new ApiError(400, "invalid-request", "Feature is invalid.");
+  if (!featureId.test(feature))
+    throw new ApiError(400, "invalid-request", "Feature is invalid.");
 }
 function assertApp(value) {
-  if (!appId.test(value)) throw new ApiError(400, "invalid-request", "App ID is invalid.");
+  if (!appId.test(value))
+    throw new ApiError(400, "invalid-request", "App ID is invalid.");
 }
 function assertPlatform(value) {
-  if (!platform.test(value)) throw new ApiError(400, "invalid-request", "platform must be ios or android.");
+  if (!platform.test(value))
+    throw new ApiError(
+      400,
+      "invalid-request",
+      "platform must be ios or android."
+    );
 }
 function requestPlatform(request) {
   const value = new URL(request.url).searchParams.get("platform") ?? "ios";
@@ -27927,20 +28373,38 @@ function deploymentScope(appOrFeature, requestedFeature) {
 }
 async function handleConsoleRequest(environment, request, operation) {
   try {
-    if (!await authenticateSession(environment, request)) return unauthorized();
+    if (!await authenticateSession(environment, request))
+      return unauthorized();
     return await operation();
   } catch (error) {
-    if (error instanceof ApiError) return jsonResponse(error.status, { error: { code: error.code, message: error.message } });
-    return jsonResponse(500, { error: { code: "internal-error", message: "Request could not be completed." } });
+    if (error instanceof ApiError)
+      return jsonResponse(error.status, {
+        error: { code: error.code, message: error.message }
+      });
+    return jsonResponse(500, {
+      error: {
+        code: "internal-error",
+        message: "Request could not be completed."
+      }
+    });
   }
 }
 async function handleApiKeyRequest(environment, request, operation) {
   try {
-    if (!await authenticateApiKey(environment, request)) return unauthorized("A valid delivery API key is required.");
+    if (!await authenticateApiKey(environment, request))
+      return unauthorized("A valid delivery API key is required.");
     return await operation();
   } catch (error) {
-    if (error instanceof ApiError) return jsonResponse(error.status, { error: { code: error.code, message: error.message } });
-    return jsonResponse(503, { error: { code: "auth-not-configured", message: error instanceof Error ? error.message : "CLI authentication is unavailable." } });
+    if (error instanceof ApiError)
+      return jsonResponse(error.status, {
+        error: { code: error.code, message: error.message }
+      });
+    return jsonResponse(503, {
+      error: {
+        code: "auth-not-configured",
+        message: error instanceof Error ? error.message : "CLI authentication is unavailable."
+      }
+    });
   }
 }
 function localUploadsEnabled(environment, request) {
@@ -27948,10 +28412,22 @@ function localUploadsEnabled(environment, request) {
   return (environment.LOCAL_UPLOADS === "true" || environment.LOCAL_UPLOADS === true) && (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1");
 }
 async function createCapability(token, key, digest, expires) {
-  const secret = await crypto.subtle.importKey("raw", new TextEncoder().encode(token), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", secret, new TextEncoder().encode(`${key}
+  const secret = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(token),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = new Uint8Array(
+    await crypto.subtle.sign(
+      "HMAC",
+      secret,
+      new TextEncoder().encode(`${key}
 ${digest}
-${expires}`)));
+${expires}`)
+    )
+  );
   let binary = "";
   for (const byte2 of signature) binary += String.fromCharCode(byte2);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
@@ -27960,15 +28436,25 @@ async function matchesCapability(token, key, digest, expires, signature) {
   const expected = await createCapability(token, key, digest, expires);
   if (expected.length !== signature.length) return false;
   let difference = 0;
-  for (let index2 = 0; index2 < expected.length; index2 += 1) difference |= expected.charCodeAt(index2) ^ signature.charCodeAt(index2);
+  for (let index2 = 0; index2 < expected.length; index2 += 1)
+    difference |= expected.charCodeAt(index2) ^ signature.charCodeAt(index2);
   return difference === 0;
 }
 async function readBoundedBody(request, maximum) {
   const contentLength = Number(request.headers.get("Content-Length"));
   if (Number.isFinite(contentLength) && (!Number.isSafeInteger(contentLength) || contentLength < 0 || contentLength > maximum)) {
-    throw new ApiError(413, "invalid-request", "Local upload exceeds the ZIP size limit.");
+    throw new ApiError(
+      413,
+      "invalid-request",
+      "Local upload exceeds the ZIP size limit."
+    );
   }
-  if (!request.body) throw new ApiError(400, "invalid-request", "Local upload body is required.");
+  if (!request.body)
+    throw new ApiError(
+      400,
+      "invalid-request",
+      "Local upload body is required."
+    );
   const reader = request.body.getReader();
   const chunks = [];
   let length = 0;
@@ -27976,7 +28462,12 @@ async function readBoundedBody(request, maximum) {
     const { done, value } = await reader.read();
     if (done) break;
     length += value.byteLength;
-    if (length > maximum) throw new ApiError(413, "invalid-request", "Local upload exceeds the ZIP size limit.");
+    if (length > maximum)
+      throw new ApiError(
+        413,
+        "invalid-request",
+        "Local upload exceeds the ZIP size limit."
+      );
     chunks.push(value);
   }
   const bytes = new Uint8Array(length);
@@ -27988,16 +28479,27 @@ async function readBoundedBody(request, maximum) {
   return bytes;
 }
 function bytesToHex(bytes) {
-  return Array.from(bytes, (byte2) => byte2.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes, (byte2) => byte2.toString(16).padStart(2, "0")).join(
+    ""
+  );
 }
 function notFound() {
-  return jsonResponse(404, { error: { code: "not-found", message: "Resource was not found." } });
+  return jsonResponse(404, {
+    error: { code: "not-found", message: "Resource was not found." }
+  });
 }
 function unauthorized(message = "Authentication is required.") {
   return jsonResponse(401, { error: { code: "unauthorized", message } });
 }
 function jsonResponse(status2, value, headers) {
-  return Response.json(value, { status: status2, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", ...headers } });
+  return Response.json(value, {
+    status: status2,
+    headers: {
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      ...headers
+    }
+  });
 }
 
 // worker/public-delivery.ts
@@ -28201,6 +28703,10 @@ var app = new Elysia({ adapter: CloudflareAdapter }).get(
   "/api/apps/:appId/mini-apps",
   ({ request, params, body }) => createMiniApp(bindings, request, params.appId, body),
   { params: AppParametersSchema, body: MiniAppCreateSchema }
+).get(
+  "/api/apps/:appId/mini-apps/:feature/bundles",
+  ({ request, params }) => getMiniAppBundles(bindings, request, params.appId, params.feature),
+  { params: AppFeatureParametersSchema }
 ).put(
   "/api/apps/:appId/runtime",
   ({ request, params, body }) => registerHostRuntime(bindings, request, params.appId, body),

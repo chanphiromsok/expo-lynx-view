@@ -4,6 +4,7 @@ import {
   completeUpload,
   createApp,
   createMiniApp,
+  getApps,
   getCurrentUser,
   getDeploymentOverview,
   getDeploymentScopes,
@@ -29,14 +30,15 @@ type StoredBundle = {
   archiveBytes: number;
   verifiedAt: string | null;
   createdAt: string;
+  gitCommit: string | null;
+  gitBranch: string | null;
+  gitSubject: string | null;
+  gitDirty: number;
 };
 
 type StoredApp = {
   id: string;
   name: string;
-  currentRuntimeVersion: string | null;
-  currentAppVersion: string | null;
-  currentBuildNumber: string | null;
   createdAt: string;
 };
 
@@ -123,6 +125,7 @@ function createDatabase() {
                 return { results: [...users.values()].slice(0, 1) };
               }
               if (query.includes('from "apps"')) {
+                if (!query.includes('where')) return { results: [...apps.values()] };
                 const app = apps.get(String(values[0]));
                 return { results: app ? [app] : [] };
               }
@@ -131,6 +134,7 @@ function createDatabase() {
                   const miniApp = miniApps.get(miniAppKey(String(values[0]), String(values[1])));
                   return { results: miniApp ? [miniApp] : [] };
                 }
+                if (!query.includes('where')) return { results: [...miniApps.values()] };
                 return { results: [...miniApps.values()].filter((miniApp) => miniApp.appId === String(values[0])) };
               }
               if (query.includes('from "deployments"')) {
@@ -141,6 +145,7 @@ function createDatabase() {
                 return { results: deployment ? [deployment] : [] };
               }
               if (query.includes('from "host_runtimes"')) {
+                if (!query.includes('where')) return { results: [...hostRuntimes.values()] };
                 const runtime = hostRuntimes.get(hostRuntimeKey(String(values[0]), String(values[1])));
                 return { results: runtime ? [runtime] : [] };
               }
@@ -172,20 +177,22 @@ function createDatabase() {
                     : [user.id, user.username, user.enabled]);
               }
               if (query.includes('from "apps"')) {
-                const app = apps.get(String(values[0]));
-                return app ? [[app.id, app.name, app.currentRuntimeVersion, app.currentAppVersion, app.currentBuildNumber, app.createdAt]] : [];
+                const rows = query.includes('where') ? [apps.get(String(values[0]))].filter(Boolean) as StoredApp[] : [...apps.values()];
+                return rows.map((app) => [app.id, app.name, app.createdAt]);
               }
               if (query.includes('from "mini_apps"')) {
                 const rows = query.includes('"mini_apps"."id" = ?')
                   ? [miniApps.get(miniAppKey(String(values[0]), String(values[1])))].filter(Boolean) as StoredMiniApp[]
-                  : [...miniApps.values()].filter((miniApp) => miniApp.appId === String(values[0]));
+                  : !query.includes('where')
+                    ? [...miniApps.values()]
+                    : [...miniApps.values()].filter((miniApp) => miniApp.appId === String(values[0]));
                 return rows.map((miniApp) => (query.includes('select "mini_apps"."id"') || query.includes('select "id"'))
                   ? [miniApp.id]
                   : [miniApp.appId, miniApp.id, miniApp.name, miniApp.createdAt]);
               }
               if (query.includes('from "host_runtimes"')) {
-                const runtime = hostRuntimes.get(hostRuntimeKey(String(values[0]), String(values[1])));
-                return runtime ? [[runtime.appId, runtime.platform, runtime.runtimeVersion, runtime.appVersion, runtime.buildNumber, runtime.updatedAt]] : [];
+                const rows = query.includes('where') ? [hostRuntimes.get(hostRuntimeKey(String(values[0]), String(values[1])))].filter(Boolean) as StoredHostRuntime[] : [...hostRuntimes.values()];
+                return rows.map((runtime) => [runtime.appId, runtime.platform, runtime.runtimeVersion, runtime.appVersion, runtime.buildNumber, runtime.updatedAt]);
               }
               if (query.includes('from "deployments"')) {
                 if (query.includes('group by')) {
@@ -221,6 +228,10 @@ function createDatabase() {
                   bundle.archiveBytes,
                   bundle.verifiedAt,
                   bundle.createdAt,
+                  bundle.gitCommit,
+                  bundle.gitBranch,
+                  bundle.gitSubject,
+                  bundle.gitDirty,
                 ]);
               }
               return [];
@@ -245,9 +256,6 @@ function createDatabase() {
                 apps.set(id, {
                   id,
                   name: String(values[1]),
-                  currentRuntimeVersion: null,
-                  currentAppVersion: null,
-                  currentBuildNumber: null,
                   createdAt: String(values[2]),
                 });
                 return { meta: { changes: 1 } };
@@ -273,6 +281,10 @@ function createDatabase() {
                   archiveBytes: Number(values[6]),
                   verifiedAt: values[7] === null ? null : String(values[7]),
                   createdAt: String(values[8]),
+                  gitCommit: values[9] === null ? null : String(values[9]),
+                  gitBranch: values[10] === null ? null : String(values[10]),
+                  gitSubject: values[11] === null ? null : String(values[11]),
+                  gitDirty: Number(values[12]),
                 });
                 return { meta: { changes: 1 } };
               }
@@ -283,14 +295,6 @@ function createDatabase() {
                 const bundle = bundles.get(bundleKey(appId, id));
                 if (!bundle || bundle.verifiedAt !== null) return { meta: { changes: 0 } };
                 bundle.verifiedAt = verifiedAt;
-                return { meta: { changes: 1 } };
-              }
-              if (query.includes('update apps set current_runtime_version')) {
-                const app = apps.get(String(values[3]));
-                if (!app) return { meta: { changes: 0 } };
-                app.currentRuntimeVersion = String(values[0]);
-                app.currentAppVersion = String(values[1]);
-                app.currentBuildNumber = String(values[2]);
                 return { meta: { changes: 1 } };
               }
               if (query.includes('insert or ignore into deployments')) {
@@ -345,13 +349,14 @@ function createDatabase() {
 
 const archive = new Uint8Array([80, 75, 3, 4, 1, 2, 3, 4]);
 const release: MiniAppRelease = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   appId: 'shop',
   feature: 'delivery',
   releaseId: 'delivery-20260901T011848990Z-ac8c0e',
   version: '2026.09.01',
   archiveSha256: await sha256Hex(archive),
   archiveBytes: archive.byteLength,
+  git: { commit: '1855147aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', branch: 'main', subject: 'chore: cut a release', dirty: false },
 };
 const apiKeyAuthorization = { Authorization: 'Bearer lynx_live_local_test_api_key_123456' };
 const storage = createDatabase();
@@ -516,7 +521,30 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     'delivery',
   );
   assert.equal(uploadedBundles.status, 200);
-  assert.equal((await uploadedBundles.json() as Array<{ id: string }>)[0]?.id, release.releaseId);
+  const uploadedBundlesBody = await uploadedBundles.json() as Array<{ id: string; git: unknown }>;
+  assert.equal(uploadedBundlesBody[0]?.id, release.releaseId);
+  assert.deepEqual(uploadedBundlesBody[0]?.git, release.git);
+}
+
+{
+  const response = await getApps(
+    environment,
+    new Request('http://127.0.0.1:8787/api/apps', { headers: sessionAuthorization }),
+  );
+  assert.equal(response.status, 200);
+  const [shop] = await response.json() as Array<{
+    id: string;
+    hostRuntimes: Array<{ platform: string; runtimeVersion: string; appVersion: string; buildNumber: string; updatedAt: string }>;
+  }>;
+  assert.equal(shop?.id, 'shop');
+  assert.equal(shop.hostRuntimes.length, 2);
+  for (const platform of ['ios', 'android'] as const) {
+    const runtime = shop.hostRuntimes.find((entry) => entry.platform === platform);
+    assert.equal(runtime?.runtimeVersion, `${platform}-runtime`);
+    assert.equal(runtime?.appVersion, '1.0.0');
+    assert.equal(runtime?.buildNumber, '1');
+    assert.ok(runtime?.updatedAt);
+  }
 }
 
 {
@@ -624,7 +652,7 @@ assert.equal(storage.deployments.get('shop/delivery/android/android-runtime')?.b
   assert.equal(storage.deployments.get('bs-one/merchant-home/ios/runtime-a')?.revision, 2);
 
   const independentRelease: MiniAppRelease = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     appId: 'bs-one',
     feature: 'merchant-home',
     releaseId: 'merchant-home-20260905T120000Z-a1b2c3',

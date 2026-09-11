@@ -185,21 +185,26 @@ export async function getApps(
 ): Promise<Response> {
   return handleConsoleRequest(environment, request, async () => {
     const database = createDeliveryDatabase(environment.DB);
-    const [registeredApps, registeredMiniApps] = await Promise.all([
+    const [registeredApps, registeredMiniApps, registeredHostRuntimes] = await Promise.all([
       database.select().from(apps).orderBy(apps.name),
       database.select().from(miniApps).orderBy(miniApps.name),
+      database.select().from(hostRuntimes),
     ]);
     return jsonResponse(
       200,
       registeredApps.map((app) => ({
         id: app.id,
         name: app.name,
-        currentHostBuild: app.currentRuntimeVersion
-          ? {
-              appVersion: app.currentAppVersion,
-              buildNumber: app.currentBuildNumber,
-            }
-          : null,
+        // One row per platform — the source of truth for "which runtime is current".
+        hostRuntimes: registeredHostRuntimes
+          .filter((runtime) => runtime.appId === app.id)
+          .map((runtime) => ({
+            platform: runtime.platform,
+            runtimeVersion: runtime.runtimeVersion,
+            appVersion: runtime.appVersion,
+            buildNumber: runtime.buildNumber,
+            updatedAt: runtime.updatedAt,
+          })),
         miniApps: registeredMiniApps
           .filter((miniApp) => miniApp.appId === app.id)
           .map((miniApp) => ({ id: miniApp.id, name: miniApp.name })),
@@ -366,18 +371,6 @@ export async function registerHostRuntime(
         input.buildNumber,
         updatedAt,
       ),
-      ...(input.platform === "ios"
-        ? [
-            environment.DB.prepare(
-              "UPDATE apps SET current_runtime_version = ?, current_app_version = ?, current_build_number = ? WHERE id = ?",
-            ).bind(
-              input.runtimeVersion,
-              input.appVersion,
-              input.buildNumber,
-              app,
-            ),
-          ]
-        : []),
       ...supplied.map((feature) =>
         environment.DB.prepare(
           // A missing runtime is represented publicly as signed disabled revision 1.
@@ -605,6 +598,10 @@ export async function registerUpload(
         archiveBytes: release.archiveBytes,
         verifiedAt: null,
         createdAt,
+        gitCommit: release.git?.commit ?? null,
+        gitBranch: release.git?.branch ?? null,
+        gitSubject: release.git?.subject ?? null,
+        gitDirty: release.git?.dirty ?? false,
       })
       .onConflictDoNothing()
       .run();
@@ -642,6 +639,10 @@ export async function registerUpload(
           archiveBytes: release.archiveBytes,
           verifiedAt: null,
           createdAt,
+          gitCommit: release.git?.commit ?? null,
+          gitBranch: release.git?.branch ?? null,
+          gitSubject: release.git?.subject ?? null,
+          gitDirty: release.git?.dirty ?? false,
         },
         uploaded,
       ),
@@ -1117,12 +1118,6 @@ function publicApp(app: AppRow) {
   return {
     id: app.id,
     name: app.name,
-    currentHostBuild: app.currentRuntimeVersion
-      ? {
-          appVersion: app.currentAppVersion,
-          buildNumber: app.currentBuildNumber,
-        }
-      : null,
   };
 }
 
@@ -1140,6 +1135,14 @@ function publicBundle(bundle: BundleRow) {
     archiveBytes: bundle.archiveBytes,
     verifiedAt: bundle.verifiedAt,
     createdAt: bundle.createdAt,
+    git: bundle.gitCommit
+      ? {
+          commit: bundle.gitCommit,
+          branch: bundle.gitBranch,
+          subject: bundle.gitSubject,
+          dirty: bundle.gitDirty,
+        }
+      : null,
   };
 }
 
@@ -1167,7 +1170,7 @@ function parseUploadRelease(input: unknown): UploadRelease {
   throw new ApiError(
     400,
     "invalid-request",
-    "Release metadata is invalid. Build it with the current Lynx CLI (schemaVersion 3).",
+    "Release metadata is invalid. Build it with the current Lynx CLI (schemaVersion 4).",
   );
 }
 

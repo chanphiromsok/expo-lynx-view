@@ -313,6 +313,80 @@ The CLI produces unsigned local `release.json` metadata plus `release.zip`;
 the Worker verifies the ZIP after direct R2 upload and signs the public
 deployment response when a device fetches it.
 
+## Database Schema (D1)
+
+This console uses Cloudflare D1 (SQLite-as-a-service) to track apps, bundles,
+deployments, and user access. The schema is defined in `worker/db/schema.ts`
+using Drizzle ORM and migrated via files in the `migrations/` directory.
+
+### Core Tables
+
+| Table | Purpose | Scope |
+| --- | --- | --- |
+| `apps` | Host applications (e.g., `shop`, `merchant`) | Global |
+| `mini_apps` | Mini-apps within a host app (e.g., `delivery` feature) | Per app |
+| `bundles` | Built releases, verified by SHA-256 | Per app, per feature |
+| `bundle_git_provenance` | Git metadata for each bundle (commit, branch, subject) | Per bundle |
+| `deployments` | Active release selections per platform/runtime combo | Per app, per feature |
+| `host_runtimes` | Current runtime version per platform | Per app, per platform |
+| `users` | Console login credentials (username, hashed password, API key) | Global |
+
+### Key Design Decisions
+
+- **Composite keys** for multi-tenancy: `(appId, platform)` ensures only one
+  current runtime per platform per app. `(appId, feature, platform, runtimeVersion)`
+  uniquely identifies a deployment.
+- **No channels/environments**: Each deployment is identified by app, feature,
+  platform, and native runtime version. The MVP treats all deployments as
+  production; future work may add environment tiers.
+- **Foreign keys with CASCADE**: Deleting an app removes all its bundles,
+  deployments, and mini-apps. Careful when cleaning up test data locally.
+- **Git provenance extraction** (migration 0009): Bundle git metadata is stored
+  separately to normalize the schema and reduce storage on D1.
+
+### Common Queries
+
+```sql
+-- Get current runtime for an app
+SELECT * FROM host_runtimes WHERE app_id = ? AND platform = ?;
+
+-- Get deployments for a feature
+SELECT * FROM deployments WHERE app_id = ? AND feature_id = ?;
+
+-- Get bundles for a feature, sorted by date
+SELECT b.*, pg.* FROM bundles b
+LEFT JOIN bundle_git_provenance pg ON b.app_id = pg.app_id AND b.id = pg.bundle_id
+WHERE b.app_id = ? AND b.feature_id = ?
+ORDER BY b.created_at DESC;
+
+-- Find all deployments using a specific bundle
+SELECT * FROM deployments WHERE app_id = ? AND bundle_id = ?;
+```
+
+### D1 Constraints & Validation
+
+- **Platform values**: Must be `ios` or `android` (enforced via CHECK constraint).
+- **Bundle IDs**: Match pattern `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` (validated
+  by CLI and Worker before insert).
+- **Foreign key integrity**: D1 enforces `ON DELETE CASCADE`, so removing an app
+  cascades to all related data. Test locally with `pnpm db:reset:local` when
+  needed.
+
+### Migrations
+
+Migrations are stored in `migrations/` and applied sequentially by D1. Each
+migration is an `.sql` file with a timestamp prefix. Apply them locally:
+
+```sh
+pnpm db:migrate:local
+```
+
+**Important for D1**: SQLite does not support `ALTER TABLE ... DROP COLUMN`.
+Migrations that remove columns require recreating the table. See migration
+0009 (`bundle_git_provenance`) for the pattern.
+
+---
+
 ## Testing Local
 
 Use three terminals from the repository root:
@@ -337,3 +411,46 @@ For a physical phone, copy the LAN address printed by Terminal 1 into the
 example app's `deliveryEndpoints.delivery` value. The endpoint change is
 native build configuration; it needs a new app binary only when that address
 or the embedded public key changes—not for each release.
+
+### Database Setup
+
+Local development uses a D1 database persisted in `.wrangler/delivery-worker-v2/`.
+By default, it's initialized with the schema and one default user:
+
+- **Username:** `admin`
+- **Password:** `123456`
+- **API Key:** Check `.dev.vars` under `INITIAL_ADMIN_API_KEY`
+
+To reset the local database to its default state:
+
+```sh
+pnpm db:reset:local
+```
+
+This removes all local data and re-applies migrations. Useful when testing
+cascade deletes or recovering from schema experiments.
+
+To see raw schema and data:
+
+```sh
+# Open SQLite browser (if installed)
+sqlite3 .wrangler/delivery-worker-v2/v3/d1/miniflare-D1DatabaseObject/*.sqlite
+
+# Or inspect via migration output
+pnpm db:migrate:local  # shows applied migrations
+```
+
+---
+
+## Schema Normalization & D1 Performance
+
+The schema has been reviewed for normalization (1NF/2NF/3NF) and D1-specific
+optimization. Key findings:
+
+- ✅ **No denormalization** in the core entity tables (`apps`, `host_runtimes`).
+- ✅ **Proper composite keys** for multi-tenant scoping and unique constraints.
+- ⚠️ **Git metadata extraction** (migration 0009) moves bundle git provenance
+  to its own table, reducing storage and preventing update anomalies.
+- ⚠️ **Missing FK on `deployments.bundleId`** — Queued for implementation.
+
+See `db-normalization.md` for the detailed schema audit and recommendations.

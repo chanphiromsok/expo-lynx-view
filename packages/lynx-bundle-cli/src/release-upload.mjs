@@ -122,11 +122,11 @@ function parseReleaseMetadata(bytes) {
   let value;
   try { value = JSON.parse(bytes.toString('utf8')); } catch { throw new Error('release.json must contain valid JSON.'); }
   const release = requireObject(value, 'release.json must contain an object.');
-  const allowed = ['schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'archiveSha256', 'archiveBytes'];
+  const allowed = ['schemaVersion', 'appId', 'feature', 'releaseId', 'version', 'archiveSha256', 'archiveBytes', 'git'];
   if (Object.keys(release).some((key) => !allowed.includes(key))) {
     throw new Error('release.json contains an unknown field.');
   }
-  if (release.schemaVersion !== 3) throw new Error('release.json schemaVersion must be 3. Rebuild with the current Lynx CLI.');
+  if (release.schemaVersion !== 4) throw new Error('release.json schemaVersion must be 4. Rebuild with the current Lynx CLI.');
   if (typeof release.appId !== 'string' || !appId.test(release.appId)) throw new Error('release.json appId is invalid.');
   if (typeof release.feature !== 'string' || !featureId.test(release.feature)) throw new Error('release.json feature is invalid.');
   if (typeof release.releaseId !== 'string' || !releaseId.test(release.releaseId)) throw new Error('release.json releaseId is invalid.');
@@ -134,6 +134,17 @@ function parseReleaseMetadata(bytes) {
   if (typeof release.archiveSha256 !== 'string' || !sha256.test(release.archiveSha256)) throw new Error('release.json archiveSha256 must be lowercase SHA-256.');
   if (!Number.isSafeInteger(release.archiveBytes) || release.archiveBytes <= 0 || release.archiveBytes > MAX_ARCHIVE_BYTES) {
     throw new Error(`release.json archiveBytes must be between 1 and ${MAX_ARCHIVE_BYTES}.`);
+  }
+  if (release.git !== undefined) {
+    const git = requireObject(release.git, 'release.json git provenance must be an object.');
+    const gitAllowed = ['commit', 'branch', 'subject', 'dirty'];
+    if (Object.keys(git).some((key) => !gitAllowed.includes(key))) {
+      throw new Error('release.json git provenance contains an unknown field.');
+    }
+    if (typeof git.commit !== 'string' || !/^[0-9a-f]{7,40}$/.test(git.commit)) throw new Error('release.json git.commit must be a lowercase hex SHA.');
+    if (typeof git.branch !== 'string' || git.branch.length === 0 || git.branch.length > 255) throw new Error('release.json git.branch is invalid.');
+    if (typeof git.subject !== 'string' || git.subject.length === 0 || git.subject.length > 512) throw new Error('release.json git.subject is invalid.');
+    if (typeof git.dirty !== 'boolean') throw new Error('release.json git.dirty must be a boolean.');
   }
   return release;
 }

@@ -10,7 +10,7 @@ import { uploadRelease } from '../src/release-upload.mjs';
 const archive = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const archiveSha256 = createHash('sha256').update(archive).digest('hex');
 const release = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   appId: 'bs-one',
   feature: 'delivery',
   releaseId: 'delivery-20260901T011848990Z-ac8c0e',

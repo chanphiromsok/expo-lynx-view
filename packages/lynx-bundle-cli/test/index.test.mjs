@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildEmbedded,
+  captureGitProvenance,
   checkEmbedded,
   loadConfigAsync,
   loadMiniAppConfigAsync,
@@ -115,4 +116,57 @@ test('produces deterministic ZIP bytes and the minimal unsigned release metadata
   writeFileSync(resolve(root, 'features/shopping/src/index.tsx'), "export const miniApp = 'shopping-v2';\n");
   const changed = packRelease(config, options);
   assert.notEqual(changed.release.archiveSha256, second.release.archiveSha256);
+});
+
+test('captureGitProvenance omits git entirely outside a work tree', () => {
+  const outside = mkdtempSync(resolve(tmpdir(), 'lynx-no-git-'));
+  assert.equal(captureGitProvenance(outside), undefined);
+});
+
+test('captureGitProvenance reports commit, branch, subject, and a dirty working tree', () => {
+  const repo = mkdtempSync(resolve(tmpdir(), 'lynx-git-provenance-'));
+  const git = (args) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+  git(['init']);
+  git(['checkout', '-b', 'feat/example']);
+  git(['config', 'user.email', 'test@example.com']);
+  git(['config', 'user.name', 'Test']);
+  writeFileSync(resolve(repo, 'a.txt'), 'hello\n');
+  git(['add', '.']);
+  git(['commit', '-m', 'feat: add a.txt']);
+
+  const clean = captureGitProvenance(repo);
+  assert.equal(clean.branch, 'feat/example');
+  assert.equal(clean.subject, 'feat: add a.txt');
+  assert.match(clean.commit, /^[0-9a-f]{40}$/);
+  assert.equal(clean.dirty, false);
+
+  writeFileSync(resolve(repo, 'a.txt'), 'changed\n');
+  const dirty = captureGitProvenance(repo);
+  assert.equal(dirty.commit, clean.commit);
+  assert.equal(dirty.dirty, true);
+});
+
+test('packRelease embeds git provenance in release.json when built from a work tree', async () => {
+  const { root, config } = await temporaryApp();
+  const git = (args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  git(['init']);
+  git(['checkout', '-b', 'main']);
+  git(['config', 'user.email', 'test@example.com']);
+  git(['config', 'user.name', 'Test']);
+  // Mirror this monorepo's own .gitignore so packRelease's build cache and
+  // packed output don't make the fixture spuriously "dirty".
+  writeFileSync(resolve(root, '.gitignore'), 'node_modules/\ndist/\n');
+  git(['add', '.']);
+  git(['commit', '-m', 'chore: initial fixture']);
+
+  const packed = packRelease(config, {
+    featureId: 'shopping',
+    releaseId: 'shopping-2026.08.29.3',
+    version: '2026.08.29.3',
+  });
+  assert.equal(packed.release.schemaVersion, 4);
+  assert.equal(packed.release.git.branch, 'main');
+  assert.equal(packed.release.git.subject, 'chore: initial fixture');
+  assert.equal(packed.release.git.dirty, false);
+  assert.match(packed.release.git.commit, /^[0-9a-f]{40}$/);
 });

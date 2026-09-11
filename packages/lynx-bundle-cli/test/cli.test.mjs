@@ -38,7 +38,7 @@ test('the public CLI packages one cross-platform release', () => {
   ]);
   assert.equal(secondResult.status, 0, secondResult.stderr);
   const secondRelease = JSON.parse(readFileSync(resolve(root, 'dist/lynx-releases/shopping/shopping-2026.08.29.2/release.json'), 'utf8'));
-  assert.equal(secondRelease.schemaVersion, 3);
+  assert.equal(secondRelease.schemaVersion, 4);
   assert.equal('platform' in secondRelease, false);
 });
 
@@ -67,6 +67,6 @@ writeFileSync(output + '/main.lynx.bundle', 'bundle');
   const release = JSON.parse(readFileSync(resolve(root, 'dist/lynx-releases/mart-test/release.json'), 'utf8'));
   assert.deepEqual(
     { schemaVersion: release.schemaVersion, appId: release.appId, feature: release.feature, platform: release.platform },
-    { schemaVersion: 3, appId: 'bs-one', feature: 'mart', platform: undefined },
+    { schemaVersion: 4, appId: 'bs-one', feature: 'mart', platform: undefined },
   );
 });

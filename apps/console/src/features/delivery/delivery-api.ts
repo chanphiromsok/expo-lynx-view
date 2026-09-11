@@ -1,5 +1,12 @@
 export type BundleStatus = 'active' | 'ready';
 
+export type GitProvenance = {
+  commit: string;
+  branch: string;
+  subject: string;
+  dirty: boolean;
+};
+
 export type Bundle = {
   id: string;
   appId: string;
@@ -9,6 +16,7 @@ export type Bundle = {
   archiveBytes: number;
   createdAt: string;
   status: BundleStatus;
+  git: GitProvenance | null;
 };
 
 export type DeploymentStatus = 'active' | 'disabled' | 'empty';
@@ -71,10 +79,19 @@ export type ConsoleUser = {
 
 export type RegisteredMiniApp = { id: string; name: string };
 
+export type HostRuntimeSummary = {
+  platform: 'ios' | 'android';
+  runtimeVersion: string;
+  appVersion: string;
+  buildNumber: string;
+  updatedAt: string;
+};
+
 export type RegisteredApp = {
   id: string;
   name: string;
-  currentHostBuild: { appVersion: string | null; buildNumber: string | null } | null;
+  // One row per platform — the source of truth for "which runtime is current".
+  hostRuntimes: HostRuntimeSummary[];
   miniApps: RegisteredMiniApp[];
 };
 

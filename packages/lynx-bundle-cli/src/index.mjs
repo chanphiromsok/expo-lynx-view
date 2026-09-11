@@ -135,6 +135,33 @@ export function readEmbeddedRuntimeVersion(config, platform = 'ios') {
   return runtime.runtimeVersion;
 }
 
+/**
+ * Best-effort git provenance for the release manifest: which commit, branch,
+ * and subject the archive was built from, and whether the tree was dirty.
+ * Returns undefined when configDirectory is not a git work tree at all, so
+ * the `git` field is omitted from release.json rather than sent empty.
+ */
+export function captureGitProvenance(cwd) {
+  const git = (args) => spawnSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const isRepo = git(['rev-parse', '--is-inside-work-tree']);
+  if (isRepo.status !== 0 || isRepo.stdout.trim() !== 'true') return undefined;
+  const commit = git(['rev-parse', 'HEAD']);
+  if (commit.status !== 0 || !/^[0-9a-f]{40}$/.test(commit.stdout.trim())) return undefined;
+  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const subject = git(['log', '-1', '--pretty=%s']);
+  const status = git(['status', '--porcelain']);
+  const sanitize = (value, maxLength, fallback) => {
+    const cleaned = value.trim().replace(/[^ -~]/g, '?').slice(0, maxLength);
+    return cleaned.length > 0 ? cleaned : fallback;
+  };
+  return {
+    commit: commit.stdout.trim(),
+    branch: sanitize(branch.status === 0 ? branch.stdout : '', 255, 'HEAD'),
+    subject: sanitize(subject.status === 0 ? subject.stdout.split('\n')[0] : '', 512, '(no commit message)'),
+    dirty: status.status === 0 && status.stdout.trim().length > 0,
+  };
+}
+
 export function packRelease(config, options) {
   const { featureId, releaseId, version } = options;
   const feature = getFeature(config, featureId);
@@ -150,14 +177,16 @@ export function packRelease(config, options) {
     const files = inspectRuntimeFiles(build.outputDirectory);
     const archive = createDeterministicZip(build.outputDirectory, files);
     const archiveHash = sha256(archive);
+    const git = captureGitProvenance(config.configDirectory);
     const release = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       appId: config.appId,
       feature: feature.id,
       releaseId,
       version,
       archiveSha256: archiveHash,
       archiveBytes: archive.byteLength,
+      ...(git ? { git } : {}),
     };
     writeFileSync(resolve(temporary, 'release.zip'), archive, { mode: 0o600 });
     writeJson(resolve(temporary, 'release.json'), release);
