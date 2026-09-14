@@ -697,10 +697,10 @@ assert.equal(storage.deployments.get('shop/delivery/android/android-runtime')?.b
 }
 
 {
-  // WORKER_PROXIED_UPLOADS is the opt-in production equivalent of
-  // LOCAL_UPLOADS: the signed-capability mechanism is identical, but it must
-  // work from a real (non-loopback) hostname, and must stay off unless a
-  // deployed Worker explicitly opts in.
+  // The local-upload proxy (LOCAL_UPLOADS) is gated to loopback hostnames —
+  // a deployed Worker serving a real hostname must never hand out a proxied
+  // upload instruction, regardless of LOCAL_UPLOADS, so production releases
+  // always fall back to the Wrangler CLI or a direct R2 upload instead.
   const prodStorage = createDatabase();
   const prodObjects = new Map<string, Uint8Array>();
   const prodEnvironment: ControlEnv = {
@@ -758,8 +758,6 @@ assert.equal(storage.deployments.get('shop/delivery/android/android-runtime')?.b
   };
 
   {
-    // Default (no WORKER_PROXIED_UPLOADS set): a real hostname never gets a
-    // proxied-upload instruction, so the CLI would fall back to direct R2.
     const registered = await registerUpload(
       prodEnvironment,
       new Request('https://lynx-delivery.example.workers.dev/api/uploads', { headers: apiKeyAuthorization }),
@@ -771,41 +769,29 @@ assert.equal(storage.deployments.get('shop/delivery/android/android-runtime')?.b
   }
 
   {
-    // Opted in: the same non-localhost request now gets a signed
-    // proxied-upload URL, and PUTting to it writes through the R2 binding.
+    // Even with LOCAL_UPLOADS on, a non-loopback hostname is refused both the
+    // registration instruction and a direct PUT to the local-upload route.
     const prodRelease: MiniAppRelease = { ...prodReleaseBase, releaseId: 'delivery-20260911T000000Z-prod02' };
     const registered = await registerUpload(
-      { ...prodEnvironment, WORKER_PROXIED_UPLOADS: 'true' },
+      { ...prodEnvironment, LOCAL_UPLOADS: 'true' },
       new Request('https://lynx-delivery.example.workers.dev/api/uploads', { headers: apiKeyAuthorization }),
       prodRelease,
     );
     assert.equal(registered.status, 200);
-    const registration = await registered.json() as {
-      upload: { method: 'PUT'; url: string; headers: Record<string, string> };
-    };
-    assert.equal(registration.upload.method, 'PUT');
-    assert.match(registration.upload.url, /^https:\/\/lynx-delivery\.example\.workers\.dev\/__local-r2\//);
+    const body = await registered.json() as { upload?: unknown };
+    assert.equal(body.upload, undefined);
 
-    const uploaded = await handleLocalUpload(
-      { ...prodEnvironment, WORKER_PROXIED_UPLOADS: 'true' },
-      new Request(registration.upload.url, {
+    const rejected = await handleLocalUpload(
+      { ...prodEnvironment, LOCAL_UPLOADS: 'true' },
+      new Request(`https://lynx-delivery.example.workers.dev/__local-r2/${prodRelease.appId}/${prodRelease.feature}/releases/${prodRelease.releaseId}/release.zip`, {
         method: 'PUT',
-        headers: registration.upload.headers,
         body: archive,
       }),
       prodRelease.appId,
       prodRelease.feature,
       prodRelease.releaseId,
     );
-    assert.equal(uploaded.status, 200);
-
-    const completed = await completeUpload(
-      { ...prodEnvironment, WORKER_PROXIED_UPLOADS: 'true' },
-      new Request(`https://lynx-delivery.example.workers.dev/api/uploads/${prodRelease.releaseId}/complete`, { headers: apiKeyAuthorization }),
-      prodRelease.releaseId,
-      prodRelease,
-    );
-    assert.equal(completed.status, 201);
+    assert.equal(rejected.status, 404);
   }
 }
 

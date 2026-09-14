@@ -2,6 +2,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { AwsClient } from 'aws4fetch';
 
+import { runWrangler } from './wrangler-cli.mjs';
+
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const featureId = /^[a-z][a-z0-9-]{0,63}$/;
 const appId = /^[a-z][a-z0-9-]{0,63}$/;
@@ -10,11 +12,14 @@ const sha256 = /^[a-f0-9]{64}$/;
 const protocolVersion = /^[\u0020-\u007e]{1,128}$/;
 
 /**
- * Registers release metadata, sends the ZIP directly to R2, then asks the
- * Worker to verify and register it. Local Worker development uses its local
- * upload capability instead.
+ * Registers release metadata, uploads the ZIP, then asks the Worker to
+ * verify and register it. The upload itself goes one of three ways: the
+ * Worker's own local-upload proxy when it offers one (local Miniflare dev
+ * only), the Wrangler CLI (`wrangler` config — same mechanism hot-updater
+ * uses, needs a Cloudflare API token), or directly to R2 with an S3
+ * credential (`r2` config).
  */
-export async function uploadRelease({ releaseDirectory, server, apiKey, r2, fetchImpl = fetch, r2FetchImpl }) {
+export async function uploadRelease({ releaseDirectory, server, apiKey, wrangler, r2, fetchImpl = fetch, r2FetchImpl }) {
   const endpoint = normalizeServer(server);
   if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
     throw new Error('A delivery API key is required. Set LYNX_DELIVERY_API_KEY or pass --api-key.');
@@ -55,6 +60,8 @@ export async function uploadRelease({ releaseDirectory, server, apiKey, r2, fetc
     if (registration.upload) {
       const upload = requireUpload(registration.upload);
       await uploadArchive(fetchImpl, upload, artifacts.archiveBytes);
+    } else if (wrangler) {
+      uploadViaWrangler(wrangler, artifacts, resolve(releaseDirectory, 'release.zip'));
     } else {
       await uploadDirectlyToR2(r2, artifacts, r2FetchImpl);
     }
@@ -78,6 +85,26 @@ export async function uploadRelease({ releaseDirectory, server, apiKey, r2, fetc
     typeof completion.created !== 'boolean'
   ) throw new Error('Completion returned metadata different from the uploaded release.');
   return { bundle, created: completion.created, alreadyComplete: false };
+}
+
+function uploadViaWrangler(wrangler, artifacts, archivePath) {
+  const configuration = requireWranglerConfiguration(wrangler);
+  const app = artifacts.release.appId ?? 'default';
+  const key = `${app}/${artifacts.release.feature}/releases/${artifacts.release.releaseId}/release.zip`;
+  const environment = {
+    ...process.env,
+    CLOUDFLARE_ACCOUNT_ID: configuration.accountId,
+    CLOUDFLARE_API_TOKEN: configuration.apiToken,
+  };
+  try {
+    runWrangler(
+      ['r2', 'object', 'put', `${configuration.bucketName}/${key}`, '--file', archivePath, '--content-type', 'application/zip', '--remote'],
+      undefined,
+      { env: environment },
+    );
+  } catch (error) {
+    throw new Error(`R2 upload via Wrangler failed: ${error instanceof Error ? error.message : error}`);
+  }
 }
 
 async function uploadDirectlyToR2(r2, artifacts, r2FetchImpl) {
@@ -180,6 +207,15 @@ async function r2ErrorCode(response) {
   const body = await response.text().catch(() => '');
   const match = body.match(/<Code>([A-Za-z]+)<\/Code>/);
   return match ? ` — R2 ${match[1]}` : '';
+}
+
+function requireWranglerConfiguration(value) {
+  const wrangler = requireObject(value, 'Wrangler-CLI upload requires Cloudflare credentials. Put them in .env.lynx or pass the matching flags.');
+  const fields = ['accountId', 'bucketName', 'apiToken'];
+  if (fields.some((field) => typeof wrangler[field] !== 'string' || wrangler[field].trim().length === 0)) {
+    throw new Error('Wrangler-CLI upload requires account ID, bucket name, and a Cloudflare API token. Source a mini-app .env.lynx.local (or pass the matching flags).');
+  }
+  return wrangler;
 }
 
 function requireR2Configuration(value) {

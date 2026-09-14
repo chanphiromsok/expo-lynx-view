@@ -25,7 +25,8 @@ pnpm lynx release
 ```
 
 The CLI builds `release.zip`, reserves its immutable ID with the Worker, and
-uploads directly to R2. The release is platform-neutral and contains no native
+uploads it (via the Wrangler CLI by default, or directly to R2 if the operator
+chose that mode). The release is platform-neutral and contains no native
 runtime identity. After verification, the operator can select the same release
 for any compatible platform/runtime scope registered by the host team.
 
@@ -35,6 +36,9 @@ release upload <directory>` to resume it. Uploading never enables a bundle—the
 operator selects and enables it in the Console.
 
 Mini-app CI needs `LYNX_DELIVERY_SERVER`, `LYNX_DELIVERY_API_KEY`,
-`CLOUDFLARE_ACCOUNT_ID`, `LYNX_DELIVERY_R2_BUCKET`, `R2_ACCESS_KEY_ID`, and
-`R2_SECRET_ACCESS_KEY`. Keep them in the ignored `.env.lynx`; the CLI loads the
-nearest file automatically without replacing values already set by CI.
+`CLOUDFLARE_ACCOUNT_ID`, and `LYNX_DELIVERY_R2_BUCKET`, plus whichever upload
+credential matches the operator's chosen `LYNX_DELIVERY_UPLOAD_MODE`:
+`CLOUDFLARE_API_TOKEN` for the default Wrangler-CLI mode, or
+`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` for direct-to-R2. Keep them in the
+ignored `.env.lynx`; the CLI loads the nearest file automatically without
+replacing values already set by CI.

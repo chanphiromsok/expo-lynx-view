@@ -11,6 +11,27 @@ function releaseVersion() {
   return new Date().toISOString().slice(0, 10).replaceAll('-', '.');
 }
 
+function uploadTarget(flags) {
+  const accountId = flags['r2-account-id'] ?? process.env.CLOUDFLARE_ACCOUNT_ID;
+  const bucketName = flags['r2-bucket-name'] ?? process.env.LYNX_DELIVERY_R2_BUCKET;
+  return flags['upload-mode'] === 'r2'
+    ? {
+      r2: {
+        accountId,
+        bucketName,
+        accessKeyId: flags['r2-access-key-id'],
+        secretAccessKey: flags['r2-secret-access-key'],
+      },
+    }
+    : {
+      wrangler: {
+        accountId,
+        bucketName,
+        apiToken: flags['cloudflare-api-token'],
+      },
+    };
+}
+
 export default class Release extends Command {
   static description = 'Mini-app command: build, package, upload, and register one immutable cross-platform release.';
 
@@ -34,10 +55,17 @@ export default class Release extends Command {
     version: Flags.string({ description: 'display version' }),
     server: Flags.url({ description: 'delivery Worker base URL', env: 'LYNX_DELIVERY_SERVER' }),
     'api-key': Flags.string({ description: 'delivery API key', env: 'LYNX_DELIVERY_API_KEY' }),
+    'upload-mode': Flags.string({
+      description: 'how release.zip uploads to R2',
+      options: ['wrangler', 'r2'],
+      env: 'LYNX_DELIVERY_UPLOAD_MODE',
+      default: 'wrangler',
+    }),
+    'cloudflare-api-token': Flags.string({ description: 'Cloudflare API token with R2 Edit permission (upload-mode wrangler)', env: 'CLOUDFLARE_API_TOKEN' }),
     'r2-account-id': Flags.string({ description: 'R2 account ID', env: 'R2_ACCOUNT_ID' }),
     'r2-bucket-name': Flags.string({ description: 'R2 bucket name', env: 'R2_BUCKET_NAME' }),
-    'r2-access-key-id': Flags.string({ description: 'R2 S3 access key ID', env: 'R2_ACCESS_KEY_ID' }),
-    'r2-secret-access-key': Flags.string({ description: 'R2 S3 secret access key', env: 'R2_SECRET_ACCESS_KEY' }),
+    'r2-access-key-id': Flags.string({ description: 'R2 S3 access key ID (upload-mode r2)', env: 'R2_ACCESS_KEY_ID' }),
+    'r2-secret-access-key': Flags.string({ description: 'R2 S3 secret access key (upload-mode r2)', env: 'R2_SECRET_ACCESS_KEY' }),
   };
 
   async run() {
@@ -48,12 +76,7 @@ export default class Release extends Command {
         releaseDirectory: args.releaseDirectory,
         server: flags.server,
         apiKey: flags['api-key'],
-        r2: {
-          accountId: flags['r2-account-id'] ?? process.env.CLOUDFLARE_ACCOUNT_ID,
-          bucketName: flags['r2-bucket-name'] ?? process.env.LYNX_DELIVERY_R2_BUCKET,
-          accessKeyId: flags['r2-access-key-id'],
-          secretAccessKey: flags['r2-secret-access-key'],
-        },
+        ...uploadTarget(flags),
       });
       return this.log(flags.json ? JSON.stringify(result, null, 2) : `Uploaded: ${result.bundle.id} (${result.bundle.version})`);
     }
@@ -68,12 +91,7 @@ export default class Release extends Command {
       releaseDirectory: packed.outputDirectory,
       server: flags.server,
       apiKey: flags['api-key'],
-      r2: {
-        accountId: flags['r2-account-id'] ?? process.env.CLOUDFLARE_ACCOUNT_ID,
-        bucketName: flags['r2-bucket-name'] ?? process.env.LYNX_DELIVERY_R2_BUCKET,
-        accessKeyId: flags['r2-access-key-id'],
-        secretAccessKey: flags['r2-secret-access-key'],
-      },
+      ...uploadTarget(flags),
     });
     this.log(flags.json ? JSON.stringify(result, null, 2) : `Uploaded: ${result.bundle.id} (${result.bundle.version})`);
   }

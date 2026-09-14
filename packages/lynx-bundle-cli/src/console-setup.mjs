@@ -1,37 +1,15 @@
 import { spawnSync } from 'node:child_process';
 import { createPrivateKey, createPublicKey, randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { configuredPublicKeyPath } from './signing-keys.mjs';
+import { run, runWrangler, wranglerPath } from './wrangler-cli.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const require = createRequire(import.meta.url);
 const placeholderDatabaseId = '00000000-0000-0000-0000-000000000000';
-
-function run(command, args, cwd, { env, input } = {}) {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', env, input });
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed.`);
-  return `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-}
-
-function wranglerPath() {
-  const manifestPath = require.resolve('wrangler/package.json');
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.wrangler;
-  if (!bin) throw new Error('The packaged Wrangler executable could not be found. Reinstall expo-lynx-bundle-cli.');
-  return resolve(dirname(manifestPath), bin);
-}
-
-function runWrangler(args, cwd, options) {
-  return run(process.execPath, [wranglerPath(), ...args], cwd, options);
-}
 
 function configured(value) {
   return Boolean(value && !value.startsWith('<'));
@@ -48,8 +26,8 @@ function resource(value, name) {
   return result;
 }
 
-function workerUploadsEnabled(environment) {
-  return environment.LYNX_DELIVERY_WORKER_UPLOADS === 'true';
+function uploadMode(environment) {
+  return environment.LYNX_DELIVERY_UPLOAD_MODE === 'r2' ? 'r2' : 'wrangler';
 }
 
 function credentials(username, password) {
@@ -120,8 +98,17 @@ function makeTemporaryConfig(values) {
   return { directory, path };
 }
 
-function d1Id(path) {
-  return readFileSync(path, 'utf8').match(/^database_id\s*=\s*"([^"]+)"/m)?.[1];
+/**
+ * `wrangler d1 create --update-config` does not reliably rewrite the exact
+ * file passed via --config on every Wrangler version, so a still-placeholder
+ * read from that file is treated the same as "no update happened" and falls
+ * back to parsing the id wrangler printed to stdout/stderr instead of being
+ * trusted as-is.
+ */
+export function resolveCreatedDatabaseId(configFileContent, wranglerOutput, placeholder) {
+  const fromConfig = configFileContent.match(/^database_id\s*=\s*"([^"]+)"/m)?.[1];
+  if (fromConfig && fromConfig !== placeholder) return fromConfig;
+  return wranglerOutput.match(/database_id\s*=\s*"([^"]+)"/)?.[1];
 }
 
 function existingD1Id(name, cwd, options) {
@@ -136,7 +123,7 @@ function deploymentUrl(output) {
   return output.match(/https:\/\/[^\s]+\.workers\.dev/)?.[0];
 }
 
-function upsertEnvironment(path, values) {
+export function upsertEnvironment(path, values) {
   const original = readFileSync(path, 'utf8');
   let output = original.endsWith('\n') ? original : `${original}\n`;
   for (const [name, value] of Object.entries(values)) {
@@ -182,17 +169,19 @@ export function setupConsole({ cwd = process.cwd(), environmentPath, dryRun = fa
   const values = valuesFromEnvironment(environment);
   const key = signingKey(cwd);
   const admin = credentials(environment.LYNX_CONSOLE_USERNAME, environment.LYNX_CONSOLE_PASSWORD);
-  const workerUploads = workerUploadsEnabled(environment);
-  if (!workerUploads) {
+  const mode = uploadMode(environment);
+  if (mode === 'r2') {
     required(environment.R2_ACCESS_KEY_ID, 'R2_ACCESS_KEY_ID');
     required(environment.R2_SECRET_ACCESS_KEY, 'R2_SECRET_ACCESS_KEY');
+  } else {
+    required(environment.CLOUDFLARE_API_TOKEN, 'CLOUDFLARE_API_TOKEN');
   }
   if (!environmentPath) throw new Error('Missing .env.lynx. Run `lynx console setup` once to create it.');
   if (dryRun) {
     process.stdout.write(`Configuration is valid. Would create or reuse D1 ${values.databaseName}, R2 ${values.bucketName}, and deploy ${values.workerName}.\n`);
-    process.stdout.write(workerUploads
-      ? 'Uploads: Worker-proxied (LYNX_DELIVERY_WORKER_UPLOADS=true) — no R2 S3 credential needed by the release CLI.\n'
-      : 'Uploads: direct to R2 with the configured R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY.\n');
+    process.stdout.write(mode === 'r2'
+      ? 'Uploads: direct to R2 with the configured R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY.\n'
+      : 'Uploads: via the Wrangler CLI with the configured CLOUDFLARE_API_TOKEN — same mechanism as hot-updater.\n');
     return;
   }
 
@@ -205,7 +194,7 @@ export function setupConsole({ cwd = process.cwd(), environmentPath, dryRun = fa
       if (values.databaseId) process.stdout.write(`Using D1 ${values.databaseName} (${values.databaseId}).\n`);
       else {
         const output = runWrangler(['d1', 'create', values.databaseName, '--update-config', '--binding', 'DB', '--config', temporary.path], cwd, runOptions);
-        values.databaseId = d1Id(temporary.path) ?? output.match(/database_id\s*=\s*"([^"]+)"/)?.[1];
+        values.databaseId = resolveCreatedDatabaseId(readFileSync(temporary.path, 'utf8'), output, placeholderDatabaseId);
       }
       if (!values.databaseId || values.databaseId === placeholderDatabaseId) throw new Error('Wrangler created D1 but did not return its database ID.');
       writeFileSync(temporary.path, toml({ ...values, templateRoot }), { mode: 0o600 });
@@ -221,9 +210,6 @@ export function setupConsole({ cwd = process.cwd(), environmentPath, dryRun = fa
       INITIAL_ADMIN_API_KEY: admin.apiKey,
       AUTH_SESSION_SECRET: admin.sessionSecret,
       DELIVERY_SIGNING_PRIVATE_KEY: key,
-      // Re-synced every run from LYNX_DELIVERY_WORKER_UPLOADS, so flipping
-      // that value in .env.lynx and re-running setup toggles it live.
-      WORKER_PROXIED_UPLOADS: workerUploads ? 'true' : 'false',
     })) runWrangler(['secret', 'put', name, '--config', temporary.path], cwd, { ...runOptions, input: value });
     runWrangler(['d1', 'migrations', 'apply', 'DB', '--remote', '--config', temporary.path], cwd, runOptions);
     upsertEnvironment(environmentPath, {
@@ -232,9 +218,7 @@ export function setupConsole({ cwd = process.cwd(), environmentPath, dryRun = fa
       LYNX_DELIVERY_SERVER: url,
       LYNX_DELIVERY_API_KEY: admin.apiKey,
     });
-    process.stdout.write(workerUploads
-      ? `Cloudflare delivery is ready: ${url}\nWorker-proxied uploads are on — \`lynx release\` needs no R2 credentials.\n`
-      : `Cloudflare delivery is ready: ${url}\nSource .env.lynx before \`lynx release upload\`.\n`);
+    process.stdout.write(`Cloudflare delivery is ready: ${url}\nSource .env.lynx before \`lynx release upload\`.\n`);
   } finally {
     rmSync(temporary.directory, { recursive: true, force: true });
   }

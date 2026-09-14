@@ -48,12 +48,12 @@ One Worker, one D1 database, one R2 bucket — created once, shared by every min
    pnpm lynx keys generate
    ```
 
-2. Decide how release uploads reach R2 — this changes what setup needs from you next:
+2. Decide how release uploads reach R2 — setup asks interactively, so this is optional prep, not a blocker:
 
-   - **Direct to R2** (default): in the Cloudflare dashboard, under **R2 → Manage R2 API Tokens**, create an **Object Read & Write** token scoped to one bucket. Keep the access-key ID and secret — setup asks for them next.
-   - **Worker-proxied**: skip the token entirely. Set `LYNX_DELIVERY_WORKER_UPLOADS="true"` in the `.env.lynx` template (next step) instead — the Worker writes to R2 itself via its own binding, so `lynx release` never needs an R2 credential. Tradeoff: the Worker gains R2 write access.
+   - **Wrangler CLI** (recommended, preselected): in the Cloudflare dashboard, under **My Profile → API Tokens**, create a token with **Workers R2 Storage: Edit** permission. This is the same mechanism [hot-updater](https://github.com/gronxb/hot-updater) uses — `lynx release` shells out to the bundled Wrangler CLI with this token, so no R2 S3 key pair is needed.
+   - **Direct to R2**: in the Cloudflare dashboard, under **R2 → Manage R2 API Tokens**, create an **Object Read & Write** token scoped to one bucket. Keep the access-key ID and secret — setup asks for them if you pick this mode.
 
-3. Run setup. The first run writes an ignored `.env.lynx` and stops; fill in the placeholders it created, then run the same command again:
+3. Run setup — it creates an ignored `.env.lynx` on first run, then walks you through everything else with interactive prompts (Worker/D1/bucket names, the upload mode from above, a matching credential, and a Console username/password):
 
    ```sh
    pnpm lynx console setup
@@ -130,12 +130,13 @@ In the mini-app's own repository (no Expo checkout, no signing key):
    | --- | --- |
    | `LYNX_DELIVERY_SERVER` | The Worker URL to upload to |
    | `LYNX_DELIVERY_API_KEY` | Authenticates the upload |
-   | `CLOUDFLARE_ACCOUNT_ID` | R2 account — only if uploading direct to R2 |
-   | `LYNX_DELIVERY_R2_BUCKET` | Target R2 bucket — only if uploading direct to R2 |
-   | `R2_ACCESS_KEY_ID` | R2 S3 credential — only if uploading direct to R2 |
-   | `R2_SECRET_ACCESS_KEY` | R2 S3 credential — only if uploading direct to R2 |
+   | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account (both upload modes) |
+   | `LYNX_DELIVERY_R2_BUCKET` | Target R2 bucket (both upload modes) |
+   | `CLOUDFLARE_API_TOKEN` | Wrangler-CLI upload (the default) |
+   | `R2_ACCESS_KEY_ID` | Direct-to-R2 upload only |
+   | `R2_SECRET_ACCESS_KEY` | Direct-to-R2 upload only |
 
-   The last four are skipped whenever the Worker offers an upload URL of its own: that's always true testing locally against `pnpm lynx console`, and true in production too if the Console operator set `LYNX_DELIVERY_WORKER_UPLOADS="true"` during [setup](../../managed-delivery/cloudflare-worker/#2-create-the-r2-s3-upload-credential--or-skip-it). Otherwise, set them.
+   Which pair you need (`CLOUDFLARE_API_TOKEN` or the two `R2_*` variables) depends on the upload mode the Console operator chose during [setup](../../managed-delivery/cloudflare-worker/#2-create-the-upload-credential--or-skip-it) (`LYNX_DELIVERY_UPLOAD_MODE` in their `.env.lynx`). Testing locally against `pnpm lynx console`, neither pair is needed — the local Worker offers its own upload URL.
 
    Build and upload a release:
 

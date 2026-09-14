@@ -45,16 +45,6 @@ export interface ControlEnv extends AuthEnv {
   DELIVERY_SIGNING_PRIVATE_KEY: string;
   /** Set only by the local Wrangler configuration. Never set in production. */
   LOCAL_UPLOADS?: string | boolean;
-  /**
-   * Opt-in production equivalent of LOCAL_UPLOADS: the Worker verifies a
-   * short-lived signed capability and writes the release archive itself via
-   * its native R2 binding, so the CLI never needs an R2 S3 access key.
-   * Off by default — the Worker gains R2 write access once this is set,
-   * which is a deliberate operator choice, not a silent behavior change on
-   * redeploy. Set by `lynx console setup` only when LYNX_DELIVERY_WORKER_UPLOADS
-   * is "true" in .env.lynx.
-   */
-  WORKER_PROXIED_UPLOADS?: string | boolean;
 }
 
 type UpdateDeployment =
@@ -656,7 +646,7 @@ export async function registerUpload(
         },
         uploaded,
       ),
-      ...(proxiedUploadsEnabled(environment, request) && !uploaded
+      ...(localUploadsEnabled(environment, request) && !uploaded
         ? {
             expiresIn: UPLOAD_EXPIRY_SECONDS,
             upload: await createLocalUploadInstruction(
@@ -819,9 +809,9 @@ export async function getCurrentUser(
 
 /**
  * Verifies a short-lived signed capability and writes the release archive
- * via the Worker's own R2 binding — the CLI PUTs here directly instead of to
- * R2 with an S3 credential. Used both for local Miniflare dev (LOCAL_UPLOADS)
- * and, when explicitly opted in, for production (WORKER_PROXIED_UPLOADS).
+ * via the Worker's own R2 binding. Local Miniflare dev only (LOCAL_UPLOADS,
+ * loopback-restricted) — production releases upload with the Wrangler CLI
+ * (see release-upload.mjs) or directly to R2 with an S3 credential.
  */
 export async function handleLocalUpload(
   environment: ControlEnv,
@@ -830,7 +820,7 @@ export async function handleLocalUpload(
   featureOrReleaseId: string,
   releaseId?: string,
 ): Promise<Response> {
-  if (request.method !== "PUT" || !proxiedUploadsEnabled(environment, request))
+  if (request.method !== "PUT" || !localUploadsEnabled(environment, request))
     return notFound();
   try {
     const [app, feature, bundle] = releaseId
@@ -1336,19 +1326,12 @@ async function handleApiKeyRequest(
   }
 }
 
-function proxiedUploadsEnabled(
+function localUploadsEnabled(
   environment: ControlEnv,
   request: Request,
 ): boolean {
-  if (
-    environment.WORKER_PROXIED_UPLOADS === "true" ||
-    environment.WORKER_PROXIED_UPLOADS === true
-  ) {
-    return true;
-  }
-  // Local-dev-only fallback: same signed-capability mechanism, but gated to
-  // loopback so a Worker without WORKER_PROXIED_UPLOADS set never accepts it
-  // from a real client, even if LOCAL_UPLOADS were mistakenly left on.
+  // Gated to loopback so a Worker never accepts this from a real client, even
+  // if LOCAL_UPLOADS were mistakenly left on in a deployed configuration.
   const hostname = new URL(request.url).hostname;
   return (
     (environment.LOCAL_UPLOADS === "true" ||
