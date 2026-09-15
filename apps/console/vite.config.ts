@@ -1,6 +1,7 @@
 import tailwindcss from '@tailwindcss/postcss';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { visualizer } from 'rollup-plugin-visualizer';
 import { fileURLToPath, URL } from 'node:url';
 
 // The `dev` script runs Wrangler on port 8787 alongside Vite. Keeping API
@@ -8,7 +9,12 @@ import { fileURLToPath, URL } from 'node:url';
 // local proxy preserve that contract with Vite HMR.
 export default defineConfig({
   css: { postcss: { plugins: [tailwindcss()] } },
-  plugins: [react()],
+  plugins: [
+    react(),
+    // ANALYZE=1 pnpm build opens a treemap of dist/stats.html after the
+    // build — off by default so it never runs in CI/deploy.
+    process.env.ANALYZE ? visualizer({ filename: 'dist/stats.html', gzipSize: true, brotliSize: true, template: 'treemap' }) : null,
+  ],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./', import.meta.url)),

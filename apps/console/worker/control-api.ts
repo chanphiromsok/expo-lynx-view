@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lt, or } from "drizzle-orm";
 import { Value } from "@sinclair/typebox/value";
 
 import { hexToBase64, sha256Hex } from "./protocol.ts";
@@ -144,6 +144,28 @@ export async function getDeploymentScopes(
   });
 }
 
+const DEFAULT_BUNDLES_PAGE_SIZE = 20;
+const MAX_BUNDLES_PAGE_SIZE = 100;
+
+type BundleCursor = { createdAt: string; id: string };
+
+// Opaque to the client on purpose — an implementation detail of keyset
+// pagination, not a value callers should construct or inspect themselves.
+function encodeBundleCursor(row: BundleCursor): string {
+  return btoa(JSON.stringify({ c: row.createdAt, i: row.id }));
+}
+
+function decodeBundleCursor(value: string): BundleCursor | null {
+  try {
+    const parsed = JSON.parse(atob(value)) as { c?: unknown; i?: unknown };
+    if (typeof parsed.c !== "string" || typeof parsed.i !== "string")
+      return null;
+    return { createdAt: parsed.c, id: parsed.i };
+  } catch {
+    return null;
+  }
+}
+
 export async function getMiniAppBundles(
   environment: ControlEnv,
   request: Request,
@@ -160,6 +182,20 @@ export async function getMiniAppBundles(
         "This mini app is not registered.",
       );
     }
+    const url = new URL(request.url);
+    const requestedLimit = Number(url.searchParams.get("limit"));
+    const limit =
+      Number.isInteger(requestedLimit) && requestedLimit > 0
+        ? Math.min(requestedLimit, MAX_BUNDLES_PAGE_SIZE)
+        : DEFAULT_BUNDLES_PAGE_SIZE;
+    const cursorParam = url.searchParams.get("cursor");
+    const cursor = cursorParam ? decodeBundleCursor(cursorParam) : null;
+    if (cursorParam && !cursor)
+      throw new ApiError(400, "invalid-request", "cursor is invalid.");
+
+    // Keyset pagination on (createdAt, id) — id is the tiebreaker so two
+    // bundles created in the same millisecond still get a stable total
+    // order, not because id itself is chronological.
     const rows = await createDeliveryDatabase(environment.DB)
       .select()
       .from(bundles)
@@ -168,14 +204,26 @@ export async function getMiniAppBundles(
           eq(bundles.appId, app),
           eq(bundles.featureId, feature),
           isNotNull(bundles.verifiedAt),
+          cursor
+            ? or(
+                lt(bundles.createdAt, cursor.createdAt),
+                and(
+                  eq(bundles.createdAt, cursor.createdAt),
+                  lt(bundles.id, cursor.id),
+                ),
+              )
+            : undefined,
         ),
       )
-      .orderBy(desc(bundles.createdAt))
-      .limit(50);
-    return jsonResponse(
-      200,
-      rows.map((bundle) => ({ ...publicBundle(bundle), status: "ready" })),
-    );
+      .orderBy(desc(bundles.createdAt), desc(bundles.id))
+      .limit(limit + 1);
+    const page = rows.slice(0, limit);
+    const nextCursor =
+      rows.length > limit ? encodeBundleCursor(page[page.length - 1]) : null;
+    return jsonResponse(200, {
+      bundles: page.map((bundle) => ({ ...publicBundle(bundle), status: "ready" })),
+      nextCursor,
+    });
   });
 }
 

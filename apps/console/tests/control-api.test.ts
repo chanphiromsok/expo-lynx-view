@@ -79,6 +79,34 @@ type StoredUser = {
   createdAt: string;
 };
 
+/**
+ * Applies the bundles table's optional keyset-pagination cursor, sort, and
+ * limit to an already appId/featureId-filtered row set, by inspecting the
+ * lowercased SQL text and matching bound values — this mock matches on SQL
+ * shape rather than executing real SQL, so query features new endpoints
+ * start relying on (here: ORDER BY, LIMIT, and the cursor's nested OR/AND)
+ * have to be taught to it explicitly.
+ */
+function filterSortAndLimitBundles(query: string, values: unknown[], rows: StoredBundle[]): StoredBundle[] {
+  let result = rows;
+  // "(created_at < ? or (created_at = ? and id < ?))", bound as
+  // [cursorCreatedAt, cursorCreatedAt, cursorId] right after appId/featureId.
+  if (query.includes('"bundles"."created_at" < ?')) {
+    const cursorCreatedAt = String(values[2]);
+    const cursorId = String(values[4]);
+    result = result.filter((bundle) =>
+      bundle.createdAt < cursorCreatedAt || (bundle.createdAt === cursorCreatedAt && bundle.id < cursorId));
+  }
+  if (query.includes('order by "bundles"."created_at" desc')) {
+    result = [...result].sort((a, b) =>
+      a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+  }
+  if (query.includes('limit ?')) {
+    result = result.slice(0, Number(values[values.length - 1]));
+  }
+  return result;
+}
+
 function createDatabase() {
   const bundles = new Map<string, StoredBundle>();
   const deployments = new Map<string, StoredDeployment>();
@@ -157,7 +185,13 @@ function createDatabase() {
                   const bundle = bundles.get(bundleKey(String(values[0]), String(values[1])));
                   return { results: bundle ? [bundle] : [] };
                 }
-                return { results: [...bundles.values()].filter((bundle) => bundle.appId === String(values[0]) && bundle.featureId === String(values[1])) };
+                return {
+                  results: filterSortAndLimitBundles(
+                    query,
+                    values,
+                    [...bundles.values()].filter((bundle) => bundle.appId === String(values[0]) && bundle.featureId === String(values[1])),
+                  ),
+                };
               }
               return { results: [] };
             },
@@ -217,7 +251,11 @@ function createDatabase() {
                 }
                 const rows = query.includes('"bundles"."id" = ?')
                   ? [bundles.get(bundleKey(String(values[0]), String(values[1])))].filter(Boolean) as StoredBundle[]
-                  : [...bundles.values()].filter((bundle) => bundle.appId === String(values[0]) && bundle.featureId === String(values[1]));
+                  : filterSortAndLimitBundles(
+                      query,
+                      values,
+                      [...bundles.values()].filter((bundle) => bundle.appId === String(values[0]) && bundle.featureId === String(values[1])),
+                    );
                 return rows.map((bundle) => [
                   bundle.appId,
                   bundle.id,
@@ -521,9 +559,105 @@ assert.match(registration.upload.url, /^http:\/\/127\.0\.0\.1:8787\/__local-r2\/
     'delivery',
   );
   assert.equal(uploadedBundles.status, 200);
-  const uploadedBundlesBody = await uploadedBundles.json() as Array<{ id: string; git: unknown }>;
-  assert.equal(uploadedBundlesBody[0]?.id, release.releaseId);
-  assert.deepEqual(uploadedBundlesBody[0]?.git, release.git);
+  const uploadedBundlesBody = await uploadedBundles.json() as {
+    bundles: Array<{ id: string; git: unknown }>;
+    nextCursor: string | null;
+  };
+  assert.equal(uploadedBundlesBody.bundles[0]?.id, release.releaseId);
+  assert.deepEqual(uploadedBundlesBody.bundles[0]?.git, release.git);
+  assert.equal(uploadedBundlesBody.nextCursor, null);
+}
+
+{
+  // getMiniAppBundles pagination: keyset on (createdAt, id) across pages of
+  // 2 for 5 bundles created back-to-back (so some may share a millisecond,
+  // exercising the id tiebreaker) — every id appears exactly once, in
+  // pages no larger than the requested limit, terminating in a null cursor.
+  assert.equal((await createApp(
+    environment,
+    new Request('http://127.0.0.1:8787/api/apps', { headers: sessionAuthorization }),
+    { id: 'pager', name: 'Pager' },
+  )).status, 201);
+  assert.equal((await createMiniApp(
+    environment,
+    new Request('http://127.0.0.1:8787/api/apps/pager/mini-apps', { headers: sessionAuthorization }),
+    'pager',
+    { id: 'releases', name: 'Releases' },
+  )).status, 201);
+
+  const pagedReleaseIds = ['a', 'b', 'c', 'd', 'e'].map((suffix) => `releases-20260901T000000Z-page${suffix}`);
+  for (const releaseId of pagedReleaseIds) {
+    const pagedRelease: MiniAppRelease = {
+      schemaVersion: 4,
+      appId: 'pager',
+      feature: 'releases',
+      releaseId,
+      version: '1.0.0',
+      archiveSha256: await sha256Hex(archive),
+      archiveBytes: archive.byteLength,
+    };
+    const registeredPage = await registerUpload(
+      environment,
+      new Request('http://127.0.0.1:8787/api/uploads', { headers: apiKeyAuthorization }),
+      pagedRelease,
+    );
+    assert.equal(registeredPage.status, 200);
+    const pageRegistration = await registeredPage.json() as {
+      upload: { method: 'PUT'; url: string; headers: Record<string, string> };
+    };
+    assert.equal((await handleLocalUpload(
+      environment,
+      new Request(pageRegistration.upload.url, {
+        method: 'PUT',
+        headers: pageRegistration.upload.headers,
+        body: archive,
+      }),
+      pagedRelease.appId,
+      pagedRelease.feature,
+      pagedRelease.releaseId,
+    )).status, 200);
+    assert.equal((await completeUpload(
+      environment,
+      new Request(`http://127.0.0.1:8787/api/uploads/${releaseId}/complete`, { headers: apiKeyAuthorization }),
+      releaseId,
+      pagedRelease,
+    )).status, 201);
+  }
+
+  const seenIds: string[] = [];
+  const pageSizes: number[] = [];
+  let cursor: string | null = null;
+  let safety = 0;
+  do {
+    const url = new URL('http://127.0.0.1:8787/api/apps/pager/mini-apps/releases/bundles');
+    url.searchParams.set('limit', '2');
+    if (cursor) url.searchParams.set('cursor', cursor);
+    const response = await getMiniAppBundles(
+      environment,
+      new Request(url, { headers: sessionAuthorization }),
+      'pager',
+      'releases',
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json() as { bundles: Array<{ id: string }>; nextCursor: string | null };
+    pageSizes.push(body.bundles.length);
+    seenIds.push(...body.bundles.map((bundle) => bundle.id));
+    cursor = body.nextCursor;
+    safety += 1;
+    assert.ok(safety <= 10, 'pagination did not terminate');
+  } while (cursor);
+
+  assert.deepEqual(pageSizes, [2, 2, 1]);
+  assert.deepEqual(new Set(seenIds), new Set(pagedReleaseIds));
+  assert.equal(seenIds.length, pagedReleaseIds.length);
+
+  const invalidCursor = await getMiniAppBundles(
+    environment,
+    new Request('http://127.0.0.1:8787/api/apps/pager/mini-apps/releases/bundles?cursor=not-valid-base64%20json', { headers: sessionAuthorization }),
+    'pager',
+    'releases',
+  );
+  assert.equal(invalidCursor.status, 400);
 }
 
 {

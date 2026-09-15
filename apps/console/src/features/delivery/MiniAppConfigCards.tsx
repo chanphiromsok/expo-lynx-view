@@ -1,8 +1,14 @@
 import { useState } from 'react';
-import { Check, Copy } from 'lucide-react';
+import { Check, Code2, Copy } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 function hostConfig(appId: string, feature: string) {
   const origin = window.location.hostname === '127.0.0.1' && window.location.port !== '8787'
@@ -16,14 +22,14 @@ function miniAppConfig(appId: string, feature: string) {
   return `import { defineMiniApp } from 'expo-lynx-bundle-cli';\n\nexport default defineMiniApp({\n  appId: '${appId}',\n  feature: '${feature}',\n});`;
 }
 
-function ConfigCard({
+function ConfigRow({
   code,
-  description,
-  title,
+  hint,
+  label,
 }: {
   code: string;
-  description: string;
-  title: string;
+  hint: string;
+  label: string;
 }) {
   const [state, setState] = useState<'idle' | 'copied' | 'error'>('idle');
 
@@ -38,37 +44,51 @@ function ConfigCard({
   }
 
   return (
-    <Card className="min-w-0">
-      <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
-        <div>
-          <CardTitle className="text-base">{title}</CardTitle>
-          <CardDescription className="mt-1">{description}</CardDescription>
-        </div>
-        <Button aria-label={`Copy ${title}`} onClick={() => void copy()} size="sm" type="button" variant="outline">
-          {state === 'copied' ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-          {state === 'copied' ? 'Copied' : state === 'error' ? 'Copy failed' : 'Copy'}
-        </Button>
-      </CardHeader>
-      <CardContent>
-        <pre className="overflow-x-auto rounded-lg border bg-muted/50 p-3 font-mono text-xs leading-5 text-foreground"><code>{code}</code></pre>
-      </CardContent>
-    </Card>
+    <div className="flex items-start gap-2 p-3">
+      <div className="min-w-0 flex-1">
+        <p className="font-mono text-xs font-medium">
+          {label} <span className="font-sans font-normal text-muted-foreground">— {hint}</span>
+        </p>
+        <pre className="mt-1.5 overflow-x-auto rounded-md bg-muted/50 p-2 font-mono text-xs leading-5 text-foreground"><code>{code}</code></pre>
+      </div>
+      <Button
+        aria-label={state === 'error' ? `Copy ${label} failed` : `Copy ${label}`}
+        onClick={() => void copy()}
+        size="icon-sm"
+        title={state === 'error' ? 'Copy failed' : 'Copy'}
+        type="button"
+        variant="ghost"
+      >
+        {state === 'copied' ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+      </Button>
+    </div>
   );
 }
 
+/** A single button that opens a modal with both integration snippets, rather
+ * than two permanently-visible cards — the config is needed once per setup,
+ * not on every visit to this page. */
 export function MiniAppConfigCards({ appId, feature }: { appId: string; feature: string }) {
+  const [open, setOpen] = useState(false);
   return (
-    <section aria-label="Integration configuration" className="grid gap-4 lg:grid-cols-2">
-      <ConfigCard
-        code={hostConfig(appId, feature)}
-        description="Merge this entry into the existing expo-lynx-view plugin in the host app."
-        title="Host app · app.json"
-      />
-      <ConfigCard
-        code={miniAppConfig(appId, feature)}
-        description="Use this complete config file in the independent mini-app repository."
-        title="Mini app · lynx-miniapp.config.ts"
-      />
-    </section>
+    <>
+      <Button onClick={() => setOpen(true)} size="sm" type="button" variant="outline">
+        <Code2 aria-hidden="true" /> Integration config
+      </Button>
+      <Dialog onOpenChange={setOpen} open={open}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Integration config</DialogTitle>
+            <DialogDescription>
+              Copy these into the host app and the independent mini-app repository.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="divide-y rounded-lg border">
+            <ConfigRow code={hostConfig(appId, feature)} hint="merge into the host's expo-lynx-view plugin" label="app.json" />
+            <ConfigRow code={miniAppConfig(appId, feature)} hint="complete file, mini-app repo" label="lynx-miniapp.config.ts" />
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

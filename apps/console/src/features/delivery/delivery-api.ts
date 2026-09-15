@@ -39,6 +39,11 @@ export type DeliveryOverview = {
   bundles: Bundle[];
 };
 
+export type BundlePage = {
+  bundles: Bundle[];
+  nextCursor: string | null;
+};
+
 export type DeliveryScope = Pick<
   Deployment,
   'appId' | 'feature' | 'platform' | 'runtimeVersion'
@@ -68,8 +73,12 @@ export const deliveryQueryKeys = {
       runtimeVersion,
       sessionRevision,
     ] as const,
-  bundles: (appId: string, feature: string, sessionRevision: number) =>
-    ['delivery', 'bundles', appId, feature, sessionRevision] as const,
+  bundles: (
+    appId: string,
+    feature: string,
+    cursor: string | null,
+    sessionRevision: number,
+  ) => ['delivery', 'bundles', appId, feature, cursor, sessionRevision] as const,
 };
 
 export type ConsoleUser = {
@@ -171,9 +180,17 @@ export const deliveryApi = {
     return request<DeliveryScope[]>('/api/deployments');
   },
 
-  getMiniAppBundles(appId: string, feature: string): Promise<Bundle[]> {
-    return request<Bundle[]>(
-      `/api/apps/${encodeURIComponent(appId)}/mini-apps/${encodeURIComponent(feature)}/bundles`,
+  getMiniAppBundles(
+    appId: string,
+    feature: string,
+    options?: { cursor?: string | null; limit?: number },
+  ): Promise<BundlePage> {
+    const params = new URLSearchParams();
+    if (options?.cursor) params.set('cursor', options.cursor);
+    if (options?.limit) params.set('limit', String(options.limit));
+    const query = params.toString();
+    return request<BundlePage>(
+      `/api/apps/${encodeURIComponent(appId)}/mini-apps/${encodeURIComponent(feature)}/bundles${query ? `?${query}` : ''}`,
     );
   },
 

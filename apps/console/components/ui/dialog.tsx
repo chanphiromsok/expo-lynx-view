@@ -31,7 +31,16 @@ function DialogOverlay({
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
       className={cn(
-        'fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0',
+        // No backdrop-blur here: animating backdrop-filter at the same time
+        // DialogContent's zoom-in-95 transform runs is a known Chromium
+        // compositing bug — the blurred layer doesn't always recomposite
+        // every frame while a sibling is mid-transform, leaving stale
+        // ("ghosted") blurred pixels of whatever was behind it visible
+        // through the overlay for the ~100ms transition. bg-black/50 (not
+        // the original /10) carries the "obscure the background" job that
+        // the blur used to — at /10 alone, background text stays fully
+        // legible and reads as leaking out from behind the dialog.
+        'fixed inset-0 isolate z-50 bg-black/50 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0',
         className,
       )}
       {...props}
