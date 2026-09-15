@@ -22,11 +22,8 @@ Pod::Spec.new do |s|
   # Do not add LynxService/Devtool or LynxService/Log here. CocoaPods applies
   # podspec dependencies to every build configuration, so a "Debug" option
   # would still link DebugRouter into production hosts.
-
-  # Backs the <x-lynx-fast-image> element (ios/FastImage/). Shared range with
-  # Expo Image 57.x so the host resolves one SDWebImage for the whole target.
-  s.dependency 'SDWebImage', '~> 5.21.0'
-
+  s.static_framework = true
+  s.dependency 'SDWebImage'
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
