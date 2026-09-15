@@ -33,6 +33,39 @@ test('upgrades the legacy generated Podfile hook without duplicating it', () => 
   assert.equal((updated.match(/expo_lynx_post_install\(installer\)/g) ?? []).length, 2);
 });
 
+test('prefers precompiled ExpoImage in both app configurations without changing sibling targets', () => {
+  const expoImagePath = '"$(PODS_XCFRAMEWORKS_BUILD_DIR)/ExpoImage"';
+  const debug = { buildSettings: { FRAMEWORK_SEARCH_PATHS: ['$(inherited)', expoImagePath] } };
+  const release = { buildSettings: { FRAMEWORK_SEARCH_PATHS: '$(inherited)' } };
+  const extension = { buildSettings: { FRAMEWORK_SEARCH_PATHS: ['$(inherited)'] } };
+  const project = {
+    pbxNativeTargetSection: () => ({
+      APP: { productType: '"com.apple.product-type.application"', buildConfigurationList: 'APP_LIST' },
+      EXTENSION: { productType: '"com.apple.product-type.app-extension"', buildConfigurationList: 'EXTENSION_LIST' },
+    }),
+    pbxXCConfigurationList: () => ({
+      APP_LIST: { buildConfigurations: [{ value: 'DEBUG' }, { value: 'RELEASE' }] },
+      EXTENSION_LIST: { buildConfigurations: [{ value: 'EXTENSION_DEBUG' }] },
+    }),
+    pbxXCBuildConfigurationSection: () => ({ DEBUG: debug, RELEASE: release, EXTENSION_DEBUG: extension }),
+  };
+
+  _internal.prioritizeExpoImageFramework(project);
+  _internal.prioritizeExpoImageFramework(project);
+  assert.deepEqual(debug.buildSettings.FRAMEWORK_SEARCH_PATHS, [expoImagePath, '$(inherited)']);
+  assert.deepEqual(release.buildSettings.FRAMEWORK_SEARCH_PATHS, [expoImagePath, '$(inherited)']);
+  assert.deepEqual(extension.buildSettings.FRAMEWORK_SEARCH_PATHS, ['$(inherited)']);
+});
+
+test('resolves expo-image from the consuming app when available', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'expo-lynx-image-'));
+  assert.equal(_internal.hasExpoImage(root), false);
+  const imageDirectory = path.join(root, 'node_modules/expo-image');
+  fs.mkdirSync(imageDirectory, { recursive: true });
+  fs.writeFileSync(path.join(imageDirectory, 'package.json'), '{"name":"expo-image"}');
+  assert.equal(_internal.hasExpoImage(root), true);
+});
+
 function makeTemporaryEmbeddedTree() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'expo-lynx-plugin-'));
   const embedded = path.join(root, 'generated/expo-lynx/embedded');

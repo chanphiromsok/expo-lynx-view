@@ -650,6 +650,38 @@ function withV2AndroidResources(config, v2Options) {
   ]);
 }
 
+function prioritizeExpoImageFramework(project) {
+  // ExpoImage bundles SDWebImage; its framework must beat CocoaPods' stub framework.
+  const [, target] = IOSConfig.Target.findFirstNativeTarget(project);
+  const list = project.pbxXCConfigurationList()[target.buildConfigurationList];
+  const configurations = project.pbxXCBuildConfigurationSection();
+  const expoImagePath = '"$(PODS_XCFRAMEWORKS_BUILD_DIR)/ExpoImage"';
+  for (const { value } of list.buildConfigurations) {
+    const settings = configurations[value].buildSettings;
+    const existing = settings.FRAMEWORK_SEARCH_PATHS;
+    const paths = Array.isArray(existing) ? existing : existing ? [existing] : ['$(inherited)'];
+    settings.FRAMEWORK_SEARCH_PATHS = [expoImagePath, ...paths.filter((path) => path !== expoImagePath)];
+  }
+  return project;
+}
+
+function hasExpoImage(projectRoot) {
+  try {
+    require.resolve('expo-image/package.json', { paths: [projectRoot] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function withExpoImageFrameworkSearchPath(config) {
+  return withXcodeProject(config, (projectConfig) => {
+    if (!hasExpoImage(projectConfig.modRequest.projectRoot)) return projectConfig;
+    projectConfig.modResults = prioritizeExpoImageFramework(projectConfig.modResults);
+    return projectConfig;
+  });
+}
+
 function withBundledResources(config, bundledResources) {
   if (!bundledResources.length) return config;
   config = withXcodeProject(config, (projectConfig) => {
@@ -703,6 +735,7 @@ const withExpoLynx = (config, options = {}) => {
   config = withV2EmbeddedResources(config, v2Options);
   config = withV2TrustConfiguration(config, v2Options);
   config = withV2AndroidResources(config, v2Options);
+  config = withExpoImageFrameworkSearchPath(config);
   return withBundledResources(config, bundledResources);
 };
 
@@ -718,6 +751,8 @@ module.exports._internal = {
   ANDROID_EMBEDDED_DIRECTORY,
   addExpoLynxPostInstall,
   addResource,
+  hasExpoImage,
+  prioritizeExpoImageFramework,
   applyV2InfoPlist,
   materializeV2Resources,
   materializeV2AndroidResources,
