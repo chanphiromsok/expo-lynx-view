@@ -1,0 +1,354 @@
+// Copyright 2019 The Lynx Authors. All rights reserved.
+// Licensed under the Apache License Version 2.0 that can be found in the
+// LICENSE file in the root directory of this source tree.
+#ifndef CORE_RUNTIME_LEPUS_VM_CONTEXT_H_
+#define CORE_RUNTIME_LEPUS_VM_CONTEXT_H_
+
+#include <list>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "base/include/value/base_string.h"
+#include "base/include/value/base_value.h"
+#include "base/include/vector.h"
+#include "base/trace/native/trace_event.h"
+#include "core/base/lynx_export.h"
+#include "core/runtime/lepus/function.h"
+#include "core/runtime/lepus/heap.h"
+#include "core/runtime/lepus/marco.h"
+#include "core/runtime/lepus/restricted_value.h"
+#include "core/runtime/mts_context.h"
+#include "core/runtime/trace/runtime_trace_event_def.h"
+
+namespace lynx {
+namespace tasm {
+class TemplateEntry;
+class TemplateBinaryReader;
+}  // namespace tasm
+
+namespace lepus {
+class OutputStream;
+class VMContextBundle;
+
+struct VMContextRawBindingFunction {
+  const char* name;
+  CFunctionBuiltin function;
+};
+
+class VMContext : public runtime::MTSContext {
+ public:
+  explicit VMContext(runtime::MTSRuntime* runtime_private)
+      : runtime::MTSContext(runtime_private),
+        current_frame_(nullptr),
+        enable_strict_check_(false),
+        enable_top_var_strict_mode_(true),
+        closures_(),
+        block_context_() {
+    TRACE_EVENT(LYNX_TRACE_CATEGORY, VM_CONTEXT_CONSTRUCTION);
+  }
+
+  // for encoder
+  VMContext() : VMContext(nullptr) { Initialize(); }
+
+  ~VMContext() = default;
+  virtual void Initialize() override;
+  virtual runtime::ContextType Type() const override {
+    return runtime::ContextType::VMContextType;
+  }
+  virtual std::string GetDebugDescription() const override { return "lepus"; }
+
+  void RegisterGlobalFunction(const runtime::RenderBindingFunction* funcs,
+                              size_t size) override;
+  void RegisterObjectFunction(lepus::Value& obj,
+                              const runtime::RenderBindingFunction* funcs,
+                              size_t size) override;
+  void RegisterGlobalFunction(const VMContextRawBindingFunction* funcs,
+                              size_t size);
+
+  virtual bool UpdateTopLevelVariableByPath(base::Vector<std::string>& path,
+                                            const Value& value) override;
+  virtual bool CheckTableShadowUpdatedWithTopLevelVariable(
+      const lepus::Value& update) override;
+
+  virtual void ResetTopLevelVariable() override;
+  virtual void ResetTopLevelVariableByVal(const Value& val) override;
+
+  virtual lepus::Value GetTopLevelVariable(
+      bool ignore_callable = false) override;
+  virtual bool GetTopLevelVariableByName(const base::String& name,
+                                         lepus::Value* ret) override;
+
+  LEPUS_INLINE long GetParamsSize() {
+    return heap().top_ - current_frame_->register_;
+  }
+
+  LEPUS_INLINE RestrictedValue* GetParam(long index) {
+    return current_frame_->register_ + index;
+  }
+
+  void OnReload() override;
+  int32_t CallFunction(RestrictedValue* function, size_t argc,
+                       RestrictedValue* ret);
+
+  LYNX_EXPORT_FOR_DEVTOOL Frame* GetCurrentFrame();
+  LYNX_EXPORT_FOR_DEVTOOL fml::RefPtr<Function> GetRootFunction();
+  // for deserialize
+  void SetRootFunction(fml::RefPtr<Function> func) {
+    root_function_ = std::move(func);
+  }
+
+  const std::unordered_map<base::String, long>& GetToplevelVariables() const;
+  void UpdateToplevelVarReg(const base::String& key, long new_reg);
+  void UpdateToplevelVarRegToOffset(long reg, long offset);
+  long GetToplevelVarOffset(long reg) const;
+
+#ifdef LEPUS_TEST
+  void Dump();
+#endif
+
+  void PushCurrentContext(long current_context) {
+    current_context_.push(current_context);
+  }
+
+  long PopCurrentContextReg() {
+    DCHECK(!current_context_.empty());
+    long last_context = current_context_.top();
+    current_context_.pop();
+    return last_context;
+  }
+
+  long GetCurrentContextReg() {
+    if (current_context_.empty()) {
+      return -1;
+    }
+    return current_context_.top();
+  }
+
+  void SetEnableStrictCheck(bool val) { enable_strict_check_ = val; }
+
+  void SetEnableTopVarStrictMode(bool val) {
+    enable_top_var_strict_mode_ = val;
+  }
+
+  void SetNullPropAsUndef(bool val) { enable_null_prop_as_undef_ = val; }
+  bool GetNullPropAsUndef() { return enable_null_prop_as_undef_; }
+
+  void SetClosureFix(bool val) { closure_fix_ = val; }
+  bool GetClosureFix() { return closure_fix_; }
+
+  void SetOptBytecode(bool val) { opt_bytecode_ = val; }
+  bool GetOptBytecode() { return opt_bytecode_; }
+
+  inline Global* global() { return &global_; }
+  inline Global* builtin() { return &builtin_; }
+  void SetGlobalData(const base::String& name, Value value) override;
+  void ResetGlobalData(const base::String& name, Value value) override;
+  lepus::Value GetGlobalData(const base::String& name) override;
+
+  void SetBuiltinData(const base::String& name, Value value) {
+    builtin_.Add(name, std::move(value));
+  }
+  Value* SearchGlobalData(const base::String& name) {
+    return global_.Find(name);
+  }
+
+  bool DeSerialize(const runtime::ContextBundle& bundle, bool, Value* ret,
+                   const char* file_name = nullptr) override;
+  bool MoveContextBundle(VMContextBundle& bundle);
+
+  void ApplyConfig(const std::shared_ptr<tasm::PageConfig>&,
+                   const tasm::CompileOptions&) override;
+
+  lepus::Value ReportFatalError(const std::string& error_message, bool exit,
+                                int32_t code) override;
+
+  virtual lepus::Value GetCurrentThis(lepus::Value* argv,
+                                      int32_t offset) override;
+
+  virtual Value CallArgs(const base::String& name, const Value* args[],
+                         size_t args_count,
+                         bool pause_suppression_mode) override;
+  virtual Value CallClosureArgs(const Value& closure, const Value* args[],
+                                size_t args_count) override;
+
+  // TODO(wangboyong): refact this
+  bool Execute();
+  bool ExecuteBinaryWithBundle(const runtime::ContextBundle* bundle,
+                               Value* ret_val) override;
+
+  void BindCurrentThread() override{};
+
+  class DebugDelegate {
+   public:
+    virtual ~DebugDelegate() = default;
+    virtual void UpdateCurrentPC(int32_t current_pc) = 0;
+    virtual void OnRootFunctionReady() = 0;
+    virtual int32_t GenerateDebuggerFrameId() { return 0; }
+  };
+  void SetDebugDelegate(const std::shared_ptr<DebugDelegate>& debug_delegate) {
+    is_debug_enabled_ = true;
+    debug_delegate_ = debug_delegate;
+  }
+  void PrepareInspector(const char* file_name) override;
+
+ private:
+  // used to control closure context
+  class ContextScope {
+   public:
+    ContextScope(VMContext* ctx, const fml::RefPtr<lepus::Closure>& closure)
+        : ctx_(ctx) {
+      last_closure_context_ = ctx->PrepareClosureContext(closure);
+    }
+    ~ContextScope() { ctx_->closure_context_ = last_closure_context_; }
+
+   private:
+    VMContext* ctx_;
+    RestrictedValue last_closure_context_;
+  };
+
+  class ClosureManager {
+   public:
+    void AddClosure(fml::RefPtr<lepus::Closure>& closure,
+                    bool context_executed);
+    ~ClosureManager();
+    ClosureManager() : itr_(0){};
+    void CleanUpClosuresCreatedAfterExecuted();
+
+   private:
+    void ClearClosure();
+    std::vector<fml::RefPtr<lepus::Closure>> all_closures_before_executed_;
+    std::vector<fml::RefPtr<lepus::Closure>> all_closures_after_executed_;
+    std::vector<fml::RefPtr<lepus::Closure>>::size_type itr_;
+  };
+
+  Heap& heap() { return heap_; }
+
+  RestrictedValue* CallPrologue(const base::String& name);
+  RestrictedValue CallEpilogue(RestrictedValue* function, size_t arg_count);
+
+  void RunFrame();
+  void GenerateClosure(RestrictedValue* value, long index);
+  RestrictedValue PrepareClosureContext(const fml::RefPtr<lepus::Closure>& clo);
+  // Returns true if the exception is caught by a `catch` label.
+  bool ReportException(const std::string& exception_info, int& pc,
+                       int& instruction_length,
+                       fml::RefPtr<Closure>& current_frame_closure,
+                       Function*& current_frame_function,
+                       const Instruction*& current_frame_base,
+                       RestrictedValue*& current_frame_regs, bool report_logbox,
+                       int32_t err_code = error::E_MTS_RUNTIME_ERROR);
+  void ReportLogBox(const std::string& exception_info, int& pc);
+
+  std::string BuildBackTrace(const base::Vector<int>& pcs,
+                             Frame* exception_frame_);
+
+  void SetDebugInfoURL(const std::string& url,
+                       const std::string& file_name) override;
+
+  void RegisterLepusVerion();
+
+  Heap heap_;
+  Frame* current_frame_;
+  base::Stack<long> current_context_;  // Used by code generator only.
+
+  // for debug
+  std::weak_ptr<DebugDelegate> debug_delegate_;
+  bool is_debug_enabled_{false};
+  std::string debug_info_url_;
+
+  friend class CodeGenerator;
+  friend class ContextBinaryWriter;
+  friend class LexicalFunction;
+  friend class ContextScope;
+
+  friend class tasm::TemplateEntry;
+  friend class tasm::TemplateBinaryReader;
+
+  Global global_;
+  Global builtin_;
+
+  std::unordered_map<base::String, long> top_level_variables_;
+  // key: vreg for toplevel variable; value: first bytecode offset that writes
+  // it. Used by the IR pipeline to keep toplevel vregs stable across
+  // transforms.
+  std::unordered_map<long, long> top_level_reg_to_offset_;
+  fml::RefPtr<Function> root_function_;
+  base::InlineStack<RestrictedValue, 32> context_;
+  RestrictedValue closure_context_;
+  std::string exception_info_;
+  bool enable_strict_check_;
+  bool enable_top_var_strict_mode_;
+  bool enable_null_prop_as_undef_ = false;
+  bool closure_fix_ = false;
+  bool opt_bytecode_ = false;
+
+  bool executed_ = false;
+
+  ClosureManager closures_;
+  base::InlineStack<RestrictedValue, 16> block_context_;
+
+  std::optional<std::string> current_exception_{};
+  int32_t err_code_ = error::E_MTS_RUNTIME_ERROR;
+
+  // To reduce arguments need to be passed.
+  struct RunFrameContext {
+    RestrictedValue*& regs;
+    Instruction i;
+  };
+
+  // Extract unlike paths of RunFrame for PGO to reduce binary size expansion.
+  void RunFrame_Op_Neg_UnlikelyPath(RestrictedValue* a);
+  void RunFrame_Op_Pos(RestrictedValue* a);
+  void RunFrame_Op_Add_UnlikelyPath_B_Number(RestrictedValue* a,
+                                             RestrictedValue* b,
+                                             RestrictedValue* c);
+  void RunFrame_Op_Add_UnlikelyPath_C_Number(RestrictedValue* a,
+                                             RestrictedValue* b,
+                                             RestrictedValue* c);
+  void RunFrame_Op_Mod(RunFrameContext& ctx);
+  void RunFrame_Op_Pow(RunFrameContext& ctx);
+  void RunFrame_Op_BitOr(RunFrameContext& ctx);
+  void RunFrame_Op_BitAnd(RunFrameContext& ctx);
+  void RunFrame_Op_BitXor(RunFrameContext& ctx);
+  void RunFrame_Op_GetTable_UnlikelyPath_String(RestrictedValue* a,
+                                                RestrictedValue* b,
+                                                RestrictedValue* c);
+  void RunFrame_Op_CreateBlockContext(RunFrameContext& ctx);
+  void RunFrame_Label_EnterBlock(fml::RefPtr<Closure>& closure);
+  void RunFrame_Label_LeaveBlock();
+};
+
+class VMContextBundle final : public runtime::ContextBundle {
+ public:
+  VMContextBundle() = default;
+  virtual ~VMContextBundle() override = default;
+  virtual bool IsLepusNG() const override;
+  virtual bool IsRTS() const override;
+  virtual bool IsRTSNative() const override;
+
+  std::unordered_map<base::String, lepus::Value>& lepus_root_global() {
+    return lepus_root_global_;
+  }
+  std::unordered_map<base::String, long>& lepus_top_variables() {
+    return lepus_top_variables_;
+  }
+  fml::RefPtr<lepus::Function>& lepus_root_function() {
+    return lepus_root_function_;
+  }
+
+ private:
+  std::unordered_map<base::String, lepus::Value> lepus_root_global_{};
+  std::unordered_map<base::String, long> lepus_top_variables_{};
+  fml::RefPtr<lepus::Function> lepus_root_function_{Function::Create()};
+
+  friend class VMContextDecoder;
+  friend class VMContext;
+};
+
+}  // namespace lepus
+}  // namespace lynx
+
+#endif  // CORE_RUNTIME_LEPUS_VM_CONTEXT_H_

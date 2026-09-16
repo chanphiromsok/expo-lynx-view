@@ -1,0 +1,48 @@
+// Copyright 2019 The Lynx Authors. All rights reserved.
+// Licensed under the Apache License Version 2.0 that can be found in the
+// LICENSE file in the root directory of this source tree.
+
+#ifndef CORE_RUNTIME_JS_BINDINGS_JAVA_SCRIPT_ELEMENT_H_
+#define CORE_RUNTIME_JS_BINDINGS_JAVA_SCRIPT_ELEMENT_H_
+
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "core/base/memory/unsafe_owning_ptr.h"
+#include "core/runtime/js/jsi/jsi.h"
+
+namespace lynx {
+namespace runtime {
+namespace js {
+class App;
+class Runtime;
+
+class JavaScriptElement : public HostObject {
+ public:
+  enum AnimationOperation : int32_t { START = 0, PLAY, PAUSE, CANCEL, FINISH };
+
+  JavaScriptElement(base::UnsafeWeakPtr<App> app, const std::string& root_id,
+                    const std::string& selector_id)
+      : native_app_(std::move(app)),
+        root_id_(root_id),
+        selector_id_(selector_id){};
+  virtual ~JavaScriptElement() override {
+    LOGI("LYNX ~NativeElement destroy");
+  };
+
+  virtual Value get(Runtime*, const PropNameID& name) override;
+  virtual void set(Runtime*, const PropNameID& name,
+                   const Value& value) override;
+  virtual std::vector<PropNameID> getPropertyNames(Runtime& rt) override;
+
+ private:
+  base::UnsafeWeakPtr<App> native_app_;
+  std::string root_id_;
+  std::string selector_id_;
+};
+}  // namespace js
+}  // namespace runtime
+}  // namespace lynx
+#endif  // CORE_RUNTIME_JS_BINDINGS_JAVA_SCRIPT_ELEMENT_H_

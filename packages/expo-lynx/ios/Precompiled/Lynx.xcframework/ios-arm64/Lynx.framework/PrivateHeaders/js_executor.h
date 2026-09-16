@@ -1,0 +1,111 @@
+// Copyright 2023 The Lynx Authors. All rights reserved.
+// Licensed under the Apache License Version 2.0 that can be found in the
+// LICENSE file in the root directory of this source tree.
+#ifndef CORE_RUNTIME_JS_JS_EXECUTOR_H_
+#define CORE_RUNTIME_JS_JS_EXECUTOR_H_
+
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "core/base/lynx_export.h"
+#include "core/base/memory/unsafe_owning_ptr.h"
+#include "core/public/page_options.h"
+#include "core/runtime/js/bindings/global.h"
+#include "core/runtime/js/bindings/js_app.h"
+#include "core/runtime/js/bindings/modules/lynx_jsi_module_binding.h"
+#include "core/runtime/js/bindings/modules/lynx_jsi_module_callback.h"
+#include "core/runtime/js/bindings/modules/lynx_module_manager.h"
+#include "core/runtime/js/jsi/jsi.h"
+#include "third_party/rapidjson/document.h"
+#if ENABLE_TESTBENCH_REPLAY
+#include "core/services/replay/lynx_module_manager_testbench.h"
+#endif
+
+namespace lynx {
+
+namespace runtime {
+class RuntimeManager;
+class TemplateDelegate;
+class LynxApiHandler;
+class RuntimeManagerDelegate;
+}  // namespace runtime
+
+namespace runtime {
+
+namespace js {
+class LYNX_EXPORT_FOR_DEVTOOL JSExecutor {
+ public:
+  JSExecutor(
+      const std::string& group_id,
+      const std::shared_ptr<LynxModuleManager>& module_manager,
+      const std::shared_ptr<InspectorRuntimeObserverNG>& runtime_observer,
+      bool forceUseLightweightJSEngine = false);
+  ~JSExecutor();
+  JSExecutor(const JSExecutor&) = delete;
+  JSExecutor& operator=(const JSExecutor&) = delete;
+
+  void Destroy();
+
+  void loadPreJSBundle(
+      base::MoveOnlyClosure<
+          std::vector<std::pair<std::string, std::shared_ptr<Buffer>>>>
+          js_pre_sources_getter,
+      bool ensure_console, JSRuntimeExternalParams create_params,
+      const tasm::PageOptions& page_options);
+
+  void SetObserver(JSIObserver* observer);
+
+  void invokeCallback(std::shared_ptr<ModuleCallback> callback,
+                      ModuleCallbackFunctionHolder* holder);
+
+  runtime::RuntimeManager* runtimeManagerInstance();
+
+  base::UnsafeOwningPtr<App> createNativeAppInstance(
+      int64_t rt_id, runtime::TemplateDelegate*,
+      std::shared_ptr<JSRuntimeDelegate> runtime_delegate,
+      std::unique_ptr<lynx::runtime::LynxApiHandler> api_handler,
+      const tasm::PageOptions& page_options);
+
+  JSRuntimeCreatedType getJSRuntimeType();
+
+  base::UnsafeWeakPtr<Runtime> GetJSRuntime();
+
+  void SetUrl(const std::string& url);
+
+  std::shared_ptr<ConsoleMessagePostMan> CreateConsoleMessagePostMan();
+
+  static runtime::RuntimeManager* GetCurrentRuntimeManagerInstance();
+
+  const std::shared_ptr<InspectorRuntimeObserverNG> GetRuntimeObserver() {
+    return runtime_observer_ng_;
+  }
+
+  std::shared_ptr<LynxModuleManager>& GetModuleManager() {
+    return module_manager_;
+  }
+  void TriggerVmGC() {
+    if (js_runtime_) {
+      js_runtime_->RequestGC();
+    }
+  }
+
+ private:
+  std::string group_id_;
+  std::shared_ptr<InspectorRuntimeObserverNG> runtime_observer_ng_;
+  std::shared_ptr<LynxModuleManager> module_manager_;
+  bool force_use_light_weight_js_engine_;
+#if ENABLE_TESTBENCH_REPLAY
+  std::shared_ptr<ModuleManagerTestBench> module_manager_testBench_;
+#endif
+
+  // set by  the child class
+  base::UnsafeOwningPtr<Runtime> js_runtime_;
+};
+
+}  // namespace js
+
+}  // namespace runtime
+}  // namespace lynx
+#endif  // CORE_RUNTIME_JS_JS_EXECUTOR_H_

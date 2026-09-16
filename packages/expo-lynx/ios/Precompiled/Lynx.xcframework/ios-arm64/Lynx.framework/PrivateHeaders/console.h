@@ -1,0 +1,65 @@
+// Copyright 2019 The Lynx Authors. All rights reserved.
+// Licensed under the Apache License Version 2.0 that can be found in the
+// LICENSE file in the root directory of this source tree.
+
+#ifndef CORE_RUNTIME_JS_BINDINGS_CONSOLE_H_
+#define CORE_RUNTIME_JS_BINDINGS_CONSOLE_H_
+
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "base/include/closure.h"
+#include "core/inspector/console_message_postman.h"
+#include "core/runtime/js/jsi/jsi.h"
+#include "core/runtime/js/utils.h"
+
+namespace lynx {
+namespace runtime {
+namespace js {
+class Runtime;
+
+class Console : public HostObject {
+ public:
+  Console(std::shared_ptr<ConsoleMessagePostMan> post_man, bool debuggable);
+
+  // void RegFunctionToJs(Runtime& rt, Object& jsbridge);
+
+  virtual Value get(Runtime*, const PropNameID& name) override;
+  virtual void set(Runtime*, const PropNameID& name,
+                   const Value& value) override;
+  virtual std::vector<PropNameID> getPropertyNames(Runtime& rt) override;
+
+  // for debug
+  static std::string LogObject(Runtime* rt,
+                               // const int level,
+                               const Value* value);
+  static std::string LogObject(Runtime* rt, const Object* obj);
+
+ private:
+  void Init();
+  Value LogWithLevel(Runtime* rt, const int level, const Value* args,
+                     size_t count, const std::string& func_name);
+  Value CallJSEngineConsole(Runtime* rt, const Value* args, size_t count,
+                            const std::string& func_name);
+  Value Assert(Runtime* rt, const int level, const Value* args, size_t count,
+               const std::string& func_name);
+  static std::string LogObject_(Runtime* rt,
+                                // const int level,
+                                const Value* value);
+  static std::string LogObject_(Runtime* rt, const Value* value,
+                                JSValueCircularArray& pre_object_vector,
+                                int depth);
+  base::logging::LogChannel GetChannelType(Runtime* rt, const Value* args);
+
+ private:
+  std::weak_ptr<ConsoleMessagePostMan> post_man_;
+  std::unordered_map<std::string, base::MoveOnlyClosure<Function, Runtime*>>
+      methods_map_;
+  bool debuggable_;
+};
+}  // namespace js
+}  // namespace runtime
+}  // namespace lynx
+#endif  // CORE_RUNTIME_JS_BINDINGS_CONSOLE_H_

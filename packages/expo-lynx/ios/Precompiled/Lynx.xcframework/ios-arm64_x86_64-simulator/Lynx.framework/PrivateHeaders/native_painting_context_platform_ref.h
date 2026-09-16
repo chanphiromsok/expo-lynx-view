@@ -1,0 +1,194 @@
+// Copyright 2025 The Lynx Authors. All rights reserved.
+// Licensed under the Apache License Version 2.0 that can be found in the
+// LICENSE file in the root directory of this source tree.
+
+#ifndef CORE_RENDERER_UI_WRAPPER_PAINTING_NATIVE_PAINTING_CONTEXT_PLATFORM_REF_H_
+#define CORE_RENDERER_UI_WRAPPER_PAINTING_NATIVE_PAINTING_CONTEXT_PLATFORM_REF_H_
+
+#include <atomic>
+#include <memory>
+#include <string>
+#include <unordered_set>
+#include <vector>
+
+#include "base/include/fml/task_runner.h"
+#include "base/include/value/base_string.h"
+#include "base/include/vector.h"
+#include "core/public/painting_ctx_platform_impl.h"
+#include "core/public/prop_bundle.h"
+#include "core/renderer/dom/fragment/event/platform_event_bundle.h"
+#include "core/renderer/dom/fragment/event/platform_event_emitter.h"
+#include "core/renderer/dom/fragment/event/platform_event_handler.h"
+#include "core/renderer/dom/fragment/event/platform_event_target_helper.h"
+#include "core/renderer/ui_wrapper/painting/platform_renderer.h"
+
+namespace lynx {
+
+namespace shell {
+class LynxEngine;
+}
+
+namespace event {
+class Event;
+}
+
+namespace tasm {
+
+class DisplayList;
+class PlatformEventTargetExposure;
+
+class NativePaintingCtxPlatformRef
+    : public PaintingCtxPlatformRef,
+      public std::enable_shared_from_this<NativePaintingCtxPlatformRef> {
+ public:
+  explicit NativePaintingCtxPlatformRef(
+      std::unique_ptr<PlatformRendererFactory> view_factory);
+  ~NativePaintingCtxPlatformRef() override = default;
+
+  void Destroy();
+  void ScheduleDestroyImage(int32_t image_key);
+
+  void CreatePlatformRenderer(int id, PlatformRendererType type,
+                              const fml::RefPtr<PropBundle> &init_data,
+                              const PlatformRendererInitConfig &init_config =
+                                  PlatformRendererInitConfig());
+  void CreatePlatformExtendedRenderer(
+      int id, const base::String &tag_name,
+      const fml::RefPtr<PropBundle> &init_data,
+      const PlatformRendererInitConfig &init_config =
+          PlatformRendererInitConfig());
+  void UpdateDisplayList(int id, DisplayList &&display_list);
+  void UpdateLayoutMetrics(int id, float left, float top, float width,
+                           float height, const float *paddings,
+                           const float *margins, const float *borders);
+
+  void RemovePaintingNode(int parent, int child, int index,
+                          bool is_move) override;
+  void DestroyPaintingNode(int parent, int child, int index) override;
+  void UpdateAttributes(int id, const fml::RefPtr<PropBundle> &attributes,
+                        bool tend_to_flatten);
+  void UpdateNodeReadyPatching(std::vector<int32_t> ready_ids,
+                               std::vector<int32_t> remove_ids) override;
+
+  // Set the engine actor for the painting context ref.
+  void SetLynxEngineActorForPlatformContextRef(
+      std::shared_ptr<shell::LynxActor<shell::LynxEngine>> engine_actor);
+  // The event data from the platform layer is forwarded to PlatformEventHandler
+  // for subsequent event processing.
+  bool DispatchPlatformInputEvent(int int_event_data[],
+                                  float float_event_data[],
+                                  int32_t event_target_root_id);
+  // Dispatch a longpress recognized by the platform layer. The event payload is
+  // derived from the active platform pointer state in PlatformEventHandler.
+  void DispatchPlatformLongPress();
+  // Dispatch a tap recognized by the platform layer. The event payload is
+  // derived from the pending platform pointer state in PlatformEventHandler.
+  void DispatchPlatformTap();
+  // Hit-tests inside the given platform event root and returns whether the hit
+  // target lets the event pass through.
+  bool IsPlatformEventTargetEventThrough(int32_t event_target_root_id,
+                                         float point_x, float point_y);
+  // The current state of PlatformEventHandler is obtained to determine the
+  // gesture handling at the platform layer.
+  int GetPlatformEventHandlerState();
+  // Send event to the target element.
+  void SendEvent(int32_t target_id, fml::RefPtr<event::Event> event);
+  // Update the pseudo status of the target element.
+  void UpdatePseudoStatusStatus(int32_t target_id, uint32_t pre_status,
+                                uint32_t current_status);
+  // Get PlatformEventEmitter instance.
+  PlatformEventEmitter *GetEventEmitter();
+  // Get PlatformEventTargetHelper instance.
+  PlatformEventTargetHelper *GetEventTargetHelper();
+  // Update the platform event bundle of the target element.
+  void UpdatePlatformEventBundle(int32_t id, PlatformEventBundle bundle);
+  // Get the platform event bundle of the target element.
+  const PlatformEventBundle *GetPlatformEventBundle(int32_t id) const;
+  // Ensure the event target tree for the given root is available. It rebuilds
+  // only when the cached tree is missing or dirty, and refreshes scroll
+  // offsets.
+  fml::RefPtr<PlatformEventTarget> EnsureEventTargetTree(int32_t root_id);
+  void ScheduleEnsureEventTargetTree(int32_t root_id);
+  bool HasScheduledEventTargetTreeUpdate() const {
+    return scheduled_event_target_tree_update_.load();
+  }
+  fml::RefPtr<PlatformEventTarget> ReconstructEventTargetTreeRecursively();
+  bool IsEventTargetRootDirty(int32_t root_id) const;
+  std::vector<int32_t> CollectMeaningfulPaintingAreaRecords();
+  // Add the target element to the exposure target map.
+  void AddPlatformEventTargetToExposure(
+      const fml::RefPtr<PlatformEventTarget> &target,
+      const lepus::Value &option);
+  // Remove the target element from the exposure target map.
+  void RemovePlatformEventTargetFromExposure(
+      const fml::RefPtr<PlatformEventTarget> &target,
+      const lepus::Value &option);
+  void SetPlatformEventRootActive(int32_t root_id, bool active);
+  void SetPlatformEventRootOffset(int32_t root_id, float offset_x,
+                                  float offset_y);
+  void StopExposure(const lepus::Value &options);
+  void ResumeExposure();
+  // Invoke the method of the ui element.
+  void InvokeUIMethod(
+      int32_t id, const std::string &method, const lepus::Value &params,
+      base::MoveOnlyClosure<void, int32_t, const pub::Value &> callback);
+
+  // Get the location of the root view on the screen.
+  virtual void GetRootViewLocationOnScreen(float location[2]) {}
+
+  // Get the size of the screen.
+  virtual void GetScreenSize(float size[2]) {}
+
+  // Get the scroll offset of the platform renderer host.
+  virtual void GetPlatformRendererScrollOffset(int32_t sign, float offset[2]) {}
+
+  // Whether the platform renderer host is scrollable.
+  virtual bool IsPlatformRendererScrollable(int32_t sign) { return false; }
+
+  bool IsNativePaintingCtxPlatformRef() override { return true; }
+
+ protected:
+  virtual void NotifyNodeReady(const std::vector<int32_t> &) {}
+
+  bool TryInvokePlatformRendererUIMethod(
+      int32_t id, const std::string &method, const lepus::Value &params,
+      base::MoveOnlyClosure<void, int32_t, const pub::Value &> &callback);
+
+  virtual void InvokePlatformViewUIMethod(
+      int32_t id, const std::string &method, const lepus::Value &params,
+      base::MoveOnlyClosure<void, int32_t, const pub::Value &> callback);
+  virtual void DestroyImageOnPlatformThread(int32_t image_key) {}
+
+  void RebuildSubLayers(const fml::RefPtr<PlatformRenderer> &renderer,
+                        const base::InlineVector<int, 16> &new_children);
+  bool EnsureEventTargetTreeForTarget(int32_t target_id);
+  int32_t GetEventTargetRootIdForRenderer(int32_t renderer_id);
+  void MarkEventTargetTreeDirty(int32_t renderer_id);
+  void MarkEventTargetRootDirty(int32_t root_id);
+  void ClearEventTargetRootDirty(int32_t root_id);
+  fml::RefPtr<PlatformEventTarget> ReconstructEventTargetTreeForRoot(
+      int32_t root_id);
+
+  std::unique_ptr<PlatformRendererFactory> view_factory_;
+  base::InlineOrderedFlatMap<int32_t, fml::RefPtr<PlatformRenderer>, 64>
+      renderers_;
+  std::shared_ptr<shell::LynxActor<shell::LynxEngine>> engine_actor_{nullptr};
+  std::unique_ptr<PlatformEventHandler> event_handler_ =
+      std::make_unique<PlatformEventHandler>(this);
+  std::unique_ptr<PlatformEventEmitter> event_emitter_ =
+      std::make_unique<PlatformEventEmitter>(this);
+  std::unique_ptr<PlatformEventTargetHelper> event_target_helper_ =
+      std::make_unique<PlatformEventTargetHelper>(this);
+  fml::RefPtr<fml::TaskRunner> event_target_task_runner_;
+  std::shared_ptr<PlatformEventTargetExposure> event_target_exposure_;
+  base::InlineOrderedFlatMap<int32_t, PlatformEventBundle, 64>
+      platform_event_bundles_;
+  std::atomic_bool scheduled_event_target_tree_update_{false};
+  std::atomic_bool destroyed_{false};
+  std::unordered_set<int32_t> dirty_event_root_ids_;
+};
+
+}  // namespace tasm
+}  // namespace lynx
+
+#endif  // CORE_RENDERER_UI_WRAPPER_PAINTING_NATIVE_PAINTING_CONTEXT_PLATFORM_REF_H_

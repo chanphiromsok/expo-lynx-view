@@ -1,0 +1,68 @@
+// Copyright 2019 The Lynx Authors. All rights reserved.
+// Licensed under the Apache License Version 2.0 that can be found in the
+// LICENSE file in the root directory of this source tree.
+#ifndef CORE_RUNTIME_JS_BINDINGS_GLOBAL_H_
+#define CORE_RUNTIME_JS_BINDINGS_GLOBAL_H_
+
+#include <memory>
+#include <mutex>
+#include <string>
+
+#include "core/base/memory/unsafe_owning_ptr.h"
+#include "core/runtime/js/jsi/jsi.h"
+
+namespace lynx {
+namespace runtime {
+namespace js {
+class ConsoleMessagePostMan;
+
+class Global : public HostGlobal {
+ public:
+  Global() = default;
+  ~Global() override;
+
+  void Init(base::UnsafeOwningPtr<Runtime>& js_runtime_,
+            std::shared_ptr<ConsoleMessagePostMan>& post_man,
+            const tasm::PageOptions& page_options) override;
+  void Release() override;
+  void EnsureConsole(std::shared_ptr<ConsoleMessagePostMan>& post_man,
+                     const tasm::PageOptions& page_options);
+
+ private:
+  virtual void SetJSRuntime(base::UnsafeOwningPtr<Runtime>& js_runtime_) = 0;
+  virtual Runtime* GetJSRuntime() = 0;
+};
+
+class SharedContextGlobal : public Global {
+ public:
+  SharedContextGlobal() = default;
+  ~SharedContextGlobal() override = default;
+
+  void Release() override;
+
+ private:
+  virtual void SetJSRuntime(
+      base::UnsafeOwningPtr<Runtime>& js_runtime_) override;
+  virtual Runtime* GetJSRuntime() override;
+  base::UnsafeOwningPtr<Runtime> js_runtime_;
+};
+
+class SingleGlobal : public Global {
+ public:
+  SingleGlobal() {}
+  virtual ~SingleGlobal();
+
+  void Release() override;
+
+ private:
+  virtual void SetJSRuntime(
+      base::UnsafeOwningPtr<Runtime>& js_runtime_) override;
+  virtual Runtime* GetJSRuntime() override;
+  base::UnsafeWeakPtr<Runtime> js_runtime_;
+};
+
+}  // namespace js
+
+}  // namespace runtime
+}  // namespace lynx
+#endif  // CORE_RUNTIME_JS_BINDINGS_GLOBAL_H_

@@ -122,6 +122,19 @@ function addExpoLynxPostInstall(contents) {
   return `${rubyHelper}\n${contents.slice(0, closingIndex + 1)}\n\n    expo_lynx_post_install(installer)${contents.slice(closingIndex + 1)}`;
 }
 
+function addPrecompiledLynxPod(contents, projectRoot) {
+  if (/^\s*pod ['"]Lynx['"], :path =>/m.test(contents)) return contents;
+  const index = contents.indexOf('use_expo_modules!');
+  if (index === -1)
+    throw new Error('expo-lynx-view could not find use_expo_modules! in the iOS Podfile.');
+  const relativePath = path.relative(
+    path.join(projectRoot, 'ios'),
+    path.join(__dirname, 'ios', 'Precompiled')
+  );
+  const rubyPath = relativePath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return `${contents.slice(0, index)}pod 'Lynx', :path => File.expand_path('${rubyPath}', __dir__)\n  ${contents.slice(index)}`;
+}
+
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -735,6 +748,10 @@ const withExpoLynx = (config, options = {}) => {
     throw new Error('expo-lynx-view bundledResources must be a string array.');
   config = withPodfile(config, (podfileConfig) => {
     podfileConfig.modResults.contents = addExpoLynxPostInstall(podfileConfig.modResults.contents);
+    podfileConfig.modResults.contents = addPrecompiledLynxPod(
+      podfileConfig.modResults.contents,
+      podfileConfig.modRequest.projectRoot
+    );
     return podfileConfig;
   });
   config = withV2EmbeddedResources(config, v2Options);
@@ -755,6 +772,7 @@ module.exports._internal = {
   ANDROID_DELIVERY_CONFIGURATION,
   ANDROID_EMBEDDED_DIRECTORY,
   addExpoLynxPostInstall,
+  addPrecompiledLynxPod,
   addResource,
   hasExpoImage,
   prioritizeExpoImageFramework,

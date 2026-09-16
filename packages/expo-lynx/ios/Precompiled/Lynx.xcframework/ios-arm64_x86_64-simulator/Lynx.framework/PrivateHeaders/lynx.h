@@ -1,0 +1,40 @@
+// Copyright 2019 The Lynx Authors. All rights reserved.
+// Licensed under the Apache License Version 2.0 that can be found in the
+// LICENSE file in the root directory of this source tree.
+
+#ifndef CORE_RUNTIME_JS_BINDINGS_LYNX_H_
+#define CORE_RUNTIME_JS_BINDINGS_LYNX_H_
+
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include "core/base/memory/unsafe_owning_ptr.h"
+#include "core/runtime/js/bindings/js_app.h"
+#include "core/runtime/js/jsi/jsi.h"
+
+namespace lynx {
+namespace runtime {
+namespace js {
+class LynxProxy : public HostObject {
+ public:
+  LynxProxy(base::UnsafeWeakPtr<App> app) : native_app_(std::move(app)){};
+  ~LynxProxy() = default;
+
+  virtual Value get(Runtime*, const PropNameID& name) override;
+  virtual void set(Runtime*, const PropNameID& name,
+                   const Value& value) override;
+  virtual std::vector<PropNameID> getPropertyNames(Runtime& rt) override;
+
+ private:
+  base::UnsafeWeakPtr<App> native_app_;
+
+  Value GetCustomSectionSync(Runtime& rt, const char* prop_name);
+  Value LoadScript(Runtime& rt);
+
+  Value FetchBundle(Runtime& rt);
+};
+}  // namespace js
+}  // namespace runtime
+}  // namespace lynx
+#endif  // CORE_RUNTIME_JS_BINDINGS_LYNX_H_

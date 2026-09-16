@@ -1,0 +1,161 @@
+// Copyright 2023 The Lynx Authors. All rights reserved.
+// Licensed under the Apache License Version 2.0 that can be found in the
+// LICENSE file in the root directory of this source tree.
+#ifndef CORE_RUNTIME_JS_RUNTIME_MANAGER_H_
+#define CORE_RUNTIME_JS_RUNTIME_MANAGER_H_
+
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "base/include/closure.h"
+#include "base/include/fml/task_runner.h"
+#include "base/include/memory/memory_pressure_level.h"
+#include "base/include/notification_center.h"
+#include "core/base/lynx_export.h"
+#include "core/base/memory/unsafe_owning_ptr.h"
+#include "core/public/page_options.h"
+#include "core/runtime/js/js_context_wrapper.h"
+#include "core/runtime/js/jsi/jsi.h"
+
+namespace lynx {
+
+namespace runtime {
+
+namespace js {
+class JSExecutor;
+}
+}  // namespace runtime
+namespace runtime {
+
+class LYNX_EXPORT_FOR_DEVTOOL RuntimeManagerDelegate {
+ public:
+  using ReleaseContextCallback =
+      std::function<void(const std::string& group_str)>;
+  using ReleaseVMCallback = std::function<void()>;
+
+  virtual ~RuntimeManagerDelegate() = default;
+
+  virtual void BeforeRuntimeCreate(bool force_use_lightweight_js_engine) = 0;
+  virtual void OnRuntimeReady(runtime::js::JSExecutor& executor,
+                              runtime::js::Runtime& current_runtime,
+                              const std::string& group_id) = 0;
+  virtual void AfterSharedContextCreate(const std::string& group_id,
+                                        runtime::js::JSRuntimeType type) = 0;
+  virtual void OnRelease(const std::string& group_id) = 0;
+  // In production environment, we use the parameter
+  // "force_use_lightweight_js_engine" to determine the type of the Runtime
+  // needs to be created.
+  // Previously, LynxDevtool use the "debug_type_" gets from
+  // InspectorJavaScriptDebugger to determine the type. After refactoring,
+  // LynxDevtool will use the switch "enable_v8" together with this parameter to
+  // determine the type.
+  virtual std::unique_ptr<runtime::js::Runtime> MakeRuntime(
+      bool force_use_lightweight_js_engine, bool use_shared_context,
+      const tasm::PageOptions& page_options) = 0;
+#if ENABLE_TRACE_PERFETTO
+  virtual std::shared_ptr<profile::RuntimeProfiler> MakeRuntimeProfiler(
+      std::shared_ptr<runtime::js::JSIContext> js_context,
+      bool force_use_lightweight_js_engine,
+      const tasm::PageOptions& page_options) = 0;
+#endif
+
+  virtual void SetReleaseContextCallback(
+      runtime::js::JSRuntimeType type, const ReleaseContextCallback& callback) {
+  }
+  virtual void SetReleaseVMCallback(runtime::js::JSRuntimeType type,
+                                    const ReleaseVMCallback& callback) {}
+};
+
+class LYNX_EXPORT_FOR_DEVTOOL RuntimeManager
+    : public SharedJSContextWrapper::ReleaseListener {
+ public:
+  static RuntimeManager* Instance();
+  typedef std::unordered_map<std::string, std::shared_ptr<JSContextWrapper>>
+      Shared_Context_Map;
+  typedef std::vector<std::shared_ptr<NoneSharedJSContextWrapper>>
+      None_Shared_Context_List;
+
+  ~RuntimeManager() override;
+
+  static bool IsSingleJSContext(const std::string& group_id);
+
+  base::UnsafeOwningPtr<runtime::js::Runtime> CreateJSRuntime(
+      base::MoveOnlyClosure<std::vector<
+          std::pair<std::string, std::shared_ptr<runtime::js::Buffer>>>>
+          js_pre_sources_getter,
+      bool forceUseLightweightJSEngine, bool ensure_console,
+      runtime::js::JSExecutor& executor,
+      runtime::js::JSRuntimeExternalParams create_params,
+      const tasm::PageOptions& page_options);
+
+  void OnRelease(const std::string& group_id) override;
+
+  RuntimeManagerDelegate* GetRuntimeManagerDelegate() {
+    return runtime_manager_delegate_.get();
+  }
+
+  void SetRuntimeManagerDelegate(
+      std::unique_ptr<RuntimeManagerDelegate> runtime_manager_delegate) {
+    runtime_manager_delegate_ = std::move(runtime_manager_delegate);
+  }
+
+  JSContextWrapper* GetContextWrapper(const std::string& group_id);
+
+ private:
+  RuntimeManager();
+  base::UnsafeOwningPtr<runtime::js::Runtime> CreateRuntime(
+      bool force_use_lightweight_js_engine,
+      const tasm::PageOptions& page_options, bool use_shared_context,
+      runtime::js::JSRuntimeExternalParams external_params = {});
+
+  std::shared_ptr<runtime::js::JSIContext> GetSharedJSContext(
+      const std::string& group_id);
+
+  std::shared_ptr<runtime::js::JSIContext> CreateJSIContext(
+      runtime::js::Runtime& rt, const std::string& group_id);
+
+  std::unique_ptr<runtime::js::Runtime> MakeRuntime(
+      bool force_use_lightweight_js_engine, bool use_shared_context,
+      const tasm::PageOptions& page_options);
+#if ENABLE_TRACE_PERFETTO
+  std::shared_ptr<profile::RuntimeProfiler> MakeRuntimeProfiler(
+      std::shared_ptr<runtime::js::JSIContext> js_context,
+      bool force_use_lightweight_js_engine,
+      const tasm::PageOptions& page_options);
+#endif
+
+  bool EnsureVM(runtime::js::Runtime& rt);
+  void EnsureConsolePostMan(std::shared_ptr<runtime::js::JSIContext>& context,
+                            runtime::js::JSExecutor& executor,
+                            bool force_use_lightweight_js_engine,
+                            const tasm::PageOptions& page_options);
+
+  void InitJSRuntimeCreatedType(bool need_create_vm, runtime::js::Runtime& rt);
+
+  bool IsInspectEnabled(bool force_use_lightweight_js_engine,
+                        const tasm::PageOptions& page_options);
+
+  void TrackRuntimeForMemoryPressure(
+      base::UnsafeWeakPtr<runtime::js::Runtime> runtime);
+  void CompactWeakRuntimes();
+
+  void OnMemoryPressure(base::MemoryPressureLevel level);
+
+  Shared_Context_Map shared_context_map_;
+  std::unordered_map<runtime::js::JSRuntimeType,
+                     std::shared_ptr<runtime::js::VMInstance>>
+      mVMContainer_;
+  std::unique_ptr<RuntimeManagerDelegate> runtime_manager_delegate_;
+
+  // for memory pressure callback
+  std::vector<base::UnsafeWeakPtr<runtime::js::Runtime>> weak_runtimes_;
+  fml::RefPtr<fml::TaskRunner> memory_task_runner_;
+  base::NotificationCallback memory_pressure_callback_;
+};
+
+}  // namespace runtime
+}  // namespace lynx
+#endif  // CORE_RUNTIME_JS_RUNTIME_MANAGER_H_

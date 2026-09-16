@@ -1,0 +1,72 @@
+// Copyright 2024 The Lynx Authors. All rights reserved.
+// Licensed under the Apache License Version 2.0 that can be found in the
+// LICENSE file in the root directory of this source tree.
+
+#ifndef CORE_RUNTIME_JS_BINDINGS_MODULES_LYNX_JSI_MODULE_H_
+#define CORE_RUNTIME_JS_BINDINGS_MODULES_LYNX_JSI_MODULE_H_
+
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/include/compiler_specific.h"
+#include "base/include/vector.h"
+#include "core/public/jsb/lynx_native_module.h"
+#include "core/runtime/js/bindings/modules/lynx_module.h"
+#include "core/value_wrapper/value_impl_lepus.h"
+
+namespace lynx {
+namespace runtime {
+class JsCallNativeFrequencyMonitor;
+namespace js {
+struct InvokeInfo;
+
+class LynxJSIModule : public LynxModule, public LynxNativeModule::Delegate {
+ public:
+  LynxJSIModule(const std::string& name,
+                const std::shared_ptr<ModuleDelegate>& delegate,
+                const std::shared_ptr<LynxNativeModule>& native_module);
+  ~LynxJSIModule() override;
+
+  void Destroy() override;
+
+  base::expected<Value, JSINativeException> invokeMethod(
+      const MethodMetadata& method, Runtime* rt, const Value* args,
+      size_t count) override;
+
+  // LynxNativeModule::Delegate
+  void InvokeCallback(
+      const std::shared_ptr<LynxModuleCallback>& callback,
+      base::MoveOnlyClosure<bool> invoke_pre_func = nullptr) override;
+  void RunOnJSThread(base::closure func) override;
+  void RunOnPlatformThread(base::closure func) override;
+  const std::shared_ptr<pub::PubValueFactory>& GetValueFactory() override;
+  void OnErrorOccurred(const std::string& module_name,
+                       const std::string& method_name,
+                       base::LynxError error) override;
+  // TODO(zhangqun.29): remove this method later
+#if OS_ANDROID
+  std::shared_ptr<LynxNativeModule> GetNativeModule() { return native_module_; }
+#endif
+
+  Value getAttributeValue(Runtime* rt, std::string propName) override;
+
+ private:
+  void SetMethodMetadata();
+  InvokeInfo* CurrentInvokeInfo();
+
+  std::shared_ptr<LynxNativeModule> native_module_ = nullptr;
+  std::shared_ptr<pub::PubValueFactory> value_factory_;
+  std::unique_ptr<::lynx::runtime::JsCallNativeFrequencyMonitor>
+      invoke_method_frequency_monitor_;
+
+  std::vector<InvokeInfo*> invoke_scopes_;
+};
+
+}  // namespace js
+
+}  // namespace runtime
+}  // namespace lynx
+
+#endif  // CORE_RUNTIME_JS_BINDINGS_MODULES_LYNX_JSI_MODULE_H_

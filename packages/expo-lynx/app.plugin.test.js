@@ -33,6 +33,13 @@ test('upgrades the legacy generated Podfile hook without duplicating it', () => 
   assert.equal((updated.match(/expo_lynx_post_install\(installer\)/g) ?? []).length, 2);
 });
 
+test('uses the packaged Lynx binary pod once in the app target', () => {
+  const podfile = "target 'Example' do\n  use_expo_modules!\nend\n";
+  const updated = _internal.addPrecompiledLynxPod(podfile, '/app');
+  assert.match(updated, /pod 'Lynx', :path => File\.expand_path\('[^']*ios\/Precompiled', __dir__\)\n  use_expo_modules!/);
+  assert.equal(_internal.addPrecompiledLynxPod(updated, '/app'), updated);
+});
+
 test('prefers precompiled ExpoImage in both app configurations without changing sibling targets', () => {
   const expoImagePath = '"$(PODS_XCFRAMEWORKS_BUILD_DIR)/ExpoImage"';
   const debug = { buildSettings: { FRAMEWORK_SEARCH_PATHS: ['$(inherited)', expoImagePath] } };

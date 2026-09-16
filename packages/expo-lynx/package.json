@@ -37,6 +37,7 @@
     "expo-module.config.json",
     "ios/ExpoLynx.h",
     "ios/*.podspec",
+    "ios/Precompiled",
     "ios/Module/*.swift",
     "ios/View/*.swift",
     "ios/Delivery/*.swift",
