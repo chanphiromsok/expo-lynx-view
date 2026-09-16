@@ -660,7 +660,12 @@ function prioritizeExpoImageFramework(project) {
     const settings = configurations[value].buildSettings;
     const existing = settings.FRAMEWORK_SEARCH_PATHS;
     const paths = Array.isArray(existing) ? existing : existing ? [existing] : ['$(inherited)'];
-    settings.FRAMEWORK_SEARCH_PATHS = [expoImagePath, ...paths.filter((path) => path !== expoImagePath)];
+    settings.FRAMEWORK_SEARCH_PATHS = [
+      expoImagePath,
+      ...paths.filter((path) => path !== expoImagePath).map((path) =>
+        path === '$(inherited)' ? '"$(inherited)"' : path
+      ),
+    ];
   }
   return project;
 }

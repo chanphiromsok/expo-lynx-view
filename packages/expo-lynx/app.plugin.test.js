@@ -52,8 +52,8 @@ test('prefers precompiled ExpoImage in both app configurations without changing 
 
   _internal.prioritizeExpoImageFramework(project);
   _internal.prioritizeExpoImageFramework(project);
-  assert.deepEqual(debug.buildSettings.FRAMEWORK_SEARCH_PATHS, [expoImagePath, '$(inherited)']);
-  assert.deepEqual(release.buildSettings.FRAMEWORK_SEARCH_PATHS, [expoImagePath, '$(inherited)']);
+  assert.deepEqual(debug.buildSettings.FRAMEWORK_SEARCH_PATHS, [expoImagePath, '"$(inherited)"']);
+  assert.deepEqual(release.buildSettings.FRAMEWORK_SEARCH_PATHS, [expoImagePath, '"$(inherited)"']);
   assert.deepEqual(extension.buildSettings.FRAMEWORK_SEARCH_PATHS, ['$(inherited)']);
 });
 
