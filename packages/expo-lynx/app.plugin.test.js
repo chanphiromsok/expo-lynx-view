@@ -33,6 +33,44 @@ test('upgrades the legacy generated Podfile hook without duplicating it', () => 
   assert.equal((updated.match(/expo_lynx_post_install\(installer\)/g) ?? []).length, 2);
 });
 
+test('adds LynxService/Devtool scoped to Debug only, right before use_expo_modules!', () => {
+  const podfile = `target 'Example' do\n  pod 'Lynx'\n  use_expo_modules!\n\n  config = use_native_modules!\nend\n`;
+  const updated = _internal.addExpoLynxDevtoolPod(podfile);
+
+  assert.match(updated, /pod 'LynxService\/Devtool', '4\.1\.0', :configurations => \['Debug'\]/);
+  assert.ok(updated.indexOf("pod 'LynxService/Devtool'") < updated.indexOf('use_expo_modules!'));
+});
+
+test('does not duplicate the devtool pod on a second, non-clean prebuild', () => {
+  const podfile = `target 'Example' do\n  use_expo_modules!\nend\n`;
+  const once = _internal.addExpoLynxDevtoolPod(podfile);
+  const twice = _internal.addExpoLynxDevtoolPod(once);
+
+  assert.equal(once, twice);
+  assert.equal((twice.match(/pod 'LynxService\/Devtool'/g) ?? []).length, 1);
+});
+
+test('re-merges the devtool pod when the pinned version changes on a later prebuild', () => {
+  // Simulate what an older plugin version would have generated (a real
+  // Podfile carried over from a non-clean prebuild before a version bump),
+  // by merging with an old pin instead of hand-editing the generated block.
+  const podfile = `target 'Example' do\n  use_expo_modules!\nend\n`;
+  const { contents: stale } = _internal.mergeContents({
+    tag: 'expo-lynx-view-devtool',
+    src: podfile,
+    newSrc: "  pod 'LynxService/Devtool', '4.0.0', :configurations => ['Debug']",
+    anchor: /use_expo_modules!/,
+    offset: 0,
+    comment: '#',
+  });
+
+  const updated = _internal.addExpoLynxDevtoolPod(stale);
+
+  assert.match(updated, /pod 'LynxService\/Devtool', '4\.1\.0'/);
+  assert.doesNotMatch(updated, /'4\.0\.0'/);
+  assert.equal((updated.match(/pod 'LynxService\/Devtool'/g) ?? []).length, 1);
+});
+
 test('prefers precompiled ExpoImage in both app configurations without changing sibling targets', () => {
   const expoImagePath = '"$(PODS_XCFRAMEWORKS_BUILD_DIR)/ExpoImage"';
   const debug = { buildSettings: { FRAMEWORK_SEARCH_PATHS: ['$(inherited)', expoImagePath] } };
