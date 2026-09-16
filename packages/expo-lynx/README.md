@@ -28,6 +28,8 @@ npx expo run:ios
 
 This module contains native code and does not work in Expo Go. The iOS deployment target is 16.4 or newer.
 
+The iOS package includes a precompiled Lynx XCFramework. To rebuild it or change Lynx/PrimJS versions, follow [the precompile guide](PRECOMPILED_LYNX.md).
+
 > **Current limitation — Lynx images are unavailable on iOS and Android.** The
 > package excludes the native Lynx image services because iOS pins an
 > incompatible SDWebImage version and Android's Fresco integration conflicts

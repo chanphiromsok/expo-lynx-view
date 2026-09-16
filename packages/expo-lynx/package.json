@@ -33,6 +33,8 @@
     "android/src",
     "android/build.gradle",
     "app.plugin.js",
+    "precompile-lynx-ios.sh",
+    "PRECOMPILED_LYNX.md",
     "build",
     "expo-module.config.json",
     "ios/ExpoLynx.h",
