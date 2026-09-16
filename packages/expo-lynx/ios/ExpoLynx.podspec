@@ -15,14 +15,13 @@ Pod::Spec.new do |s|
   # it does not share an MMKV instance with React Native. Keep this range on
   # 2.x so the host resolves one compatible MMKVCore for the whole app target.
   s.dependency 'MMKV', '>= 2.4.0', '< 3.0'
-  s.dependency 'Lynx/Framework', '4.0.0'
-  s.dependency 'PrimJS/quickjs', '4.0.0'
-  s.dependency 'PrimJS/napi', '4.0.0'
-  s.dependency 'LynxService/Http', '4.0.0'
+  s.dependency 'Lynx/Framework', '4.1.0'
+  s.dependency 'PrimJS/quickjs', '4.1.1'
+  s.dependency 'PrimJS/napi', '4.1.1'
+  s.dependency 'LynxService/Http', '4.1.0'
   # Do not add LynxService/Devtool or LynxService/Log here. CocoaPods applies
   # podspec dependencies to every build configuration, so a "Debug" option
   # would still link DebugRouter into production hosts.
-  s.static_framework = true
   s.dependency 'SDWebImage'
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {

@@ -11,6 +11,7 @@ android {
   defaultConfig {
     versionCode 1
     versionName "0.1.0"
+    consumerProguardFiles "proguard-rules.pro"
   }
   lintOptions {
     abortOnError false
@@ -21,17 +22,20 @@ dependencies {
   // Lynx runtime + the XElement Behaviors required for <input> / <textarea> and
   // other extended elements (without these: RuntimeException: "No BehaviorController
   // defined for class input"). Mirrors lynx-expo-demo/packages/lynx-view.
-  implementation "org.lynxsdk.lynx:lynx:4.0.0"
-  implementation "org.lynxsdk.lynx:lynx-jssdk:4.0.0"
-  implementation "org.lynxsdk.lynx:lynx-trace:4.0.0"
-  implementation "org.lynxsdk.lynx:primjs:4.0.0"
-  implementation "org.lynxsdk.lynx:xelement:4.0.0"
-  implementation "org.lynxsdk.lynx:xelement-input:4.0.0"
+  implementation "org.lynxsdk.lynx:xelement:4.1.0"
+  implementation "org.lynxsdk.lynx:xelement-input:4.1.0"
 
-  // Log and HTTP services used by LynxEnv.init.
-  implementation "org.lynxsdk.lynx:lynx-service-log:4.0.0"
-  implementation "org.lynxsdk.lynx:lynx-service-http:4.0.0"
+  implementation "org.lynxsdk.lynx:lynx:4.1.0"
+  implementation "org.lynxsdk.lynx:lynx-jssdk:4.1.0"
+  implementation "org.lynxsdk.lynx:lynx-trace:4.1.0"
+  implementation "org.lynxsdk.lynx:primjs:4.1.1"
+  
+
   implementation "com.squareup.okhttp3:okhttp:4.9.0"
+  // integrating log-service
+  implementation "org.lynxsdk.lynx:lynx-service-log:4.1.0"
+  // integrating http-service
+  implementation "org.lynxsdk.lynx:lynx-service-http:4.1.0"
 
   // Managed delivery reads one tiny synchronous launch-state blob before the
   // first Lynx render. Keep ARMv7 support until the host drops that ABI.
