@@ -11,7 +11,8 @@
           "publicKeyPath": "./keys/lynx/updates.public.pem",
           "deliveryEndpoints": {
             "delivery": "https://lynx-delivery.chanphiromsok2109.workers.dev/v1/default/delivery"
-          }
+          },
+          "devTool": true
         }
       ]
     ],

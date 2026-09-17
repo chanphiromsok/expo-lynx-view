@@ -48,7 +48,10 @@ export default function App() {
           feature: "delivery",
         }
       : sourceKind === "dev"
-        ? { kind: "development", url: DEV_BUNDLE }
+        ? {
+            kind: "development",
+            url: "http://192.168.28.170:3000/main.lynx.bundle",
+          }
         : { kind: "embedded", feature: "delivery" };
 
   const selectSource = (nextSource: SourceKind) => {

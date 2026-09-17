@@ -36,8 +36,23 @@ public final class ExpoLynxModule: Module {
       SetMinimumLoggingLevel(.error)
 #endif
 
+#if DEBUG
+      // DevToolSettings.bootstrap gates DevTool at LynxEnv init time (LynxEnv reads
+      // it once, inside `initDevToolComponentAttachSwitch`), so it must be set
+      // before the first `LynxEnv.sharedInstance()` call below. `devtoolEnabled` /
+      // `logBoxEnabled` on LynxEnv itself are deprecated pass-throughs to
+      // DevToolSettings and are no-ops until this bootstrap flag is already on.
+      // https://lynxjs.org/guide/start/integrate-lynx-devtool.html?platform=ios
+      DevToolSettings.sharedInstance().bootstrap.applyDevelopmentDefaultsIfUnset()
+#endif
+
       // Lynx requires the shared environment to exist before any other Lynx API is used.
       let lynxEnv = LynxEnv.sharedInstance()
+
+#if DEBUG
+      lynxEnv.devtoolEnabled = true
+      lynxEnv.logBoxEnabled = true
+#endif
 
       // Match Lynx Explorer's setupEnvironment: prepare one global config
       // before constructing any LynxView. The view creates a per-view config

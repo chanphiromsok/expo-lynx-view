@@ -33,6 +33,100 @@ test('upgrades the legacy generated Podfile hook without duplicating it', () => 
   assert.equal((updated.match(/expo_lynx_post_install\(installer\)/g) ?? []).length, 2);
 });
 
+test('adds the lynx-family Specs source before platform :ios', () => {
+  const podfile = `require 'json'\nplatform :ios, '16.4'\n\nprepare_react_native_project!\n`;
+  const updated = _internal.addExpoLynxSpecsSource(podfile);
+
+  assert.match(updated, /source 'https:\/\/cdn\.cocoapods\.org\/'/);
+  assert.match(updated, /source 'https:\/\/github\.com\/lynx-family\/Specs\.git'/);
+  assert.ok(updated.indexOf("source 'https://github.com/lynx-family/Specs.git'") < updated.indexOf('platform :ios'));
+});
+
+test('does not duplicate the Specs source on a second, non-clean prebuild', () => {
+  const podfile = `platform :ios, '16.4'\n`;
+  const once = _internal.addExpoLynxSpecsSource(podfile);
+  const twice = _internal.addExpoLynxSpecsSource(once);
+
+  assert.equal(once, twice);
+  assert.equal((twice.match(/source 'https:\/\/github\.com\/lynx-family\/Specs\.git'/g) ?? []).length, 1);
+});
+
+test('allows non-modular includes in framework modules project-wide, for the precompiled Lynx.xcframework', () => {
+  // Regression test: the precompiled Lynx.xcframework (devTool: false) has
+  // its own baked-in module.modulemap, so Xcode explicit-modules-builds it,
+  // and its umbrella header imports LynxServiceAPI's plain (non-modular)
+  // headers. Confirmed with a real `xcodebuild`: PrecompileModule for Lynx
+  // failed with "[-Werror,-Wnon-modular-include-in-framework-module]" until
+  // this setting was applied to every target in the Pods project (the
+  // module can be triggered by whichever target imports Lynx first).
+  const podfile = `target 'Example' do\n  post_install do |installer|\n    react_native_post_install(\n      installer,\n      '../node_modules/react-native',\n    )\n  end\nend\n`;
+  const updated = _internal.addExpoLynxPostInstall(podfile);
+
+  assert.match(updated, /pods_project\.targets\.each/);
+  assert.match(updated, /CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'\] = 'YES'/);
+});
+
+test('restores gnu++20 for XElement, undoing react_native_post_install\'s global c++20', () => {
+  // Regression test: react_native_post_install forces
+  // CLANG_CXX_LANGUAGE_STANDARD='c++20' (strict ISO) project-wide,
+  // overriding XElement's own xcconfig-declared 'gnu++17'. Strict C++20
+  // breaks Clang's `typeof` GNU extension in ObjC++ ARC code — confirmed
+  // with a real `xcodebuild`: LynxSVGRenderer.mm's
+  // `__weak typeof(self) weakSelf = self;` failed with "expected
+  // unqualified-id" under -std=c++20 and compiled clean under -std=gnu++20.
+  const podfile = `target 'Example' do\n  post_install do |installer|\n    react_native_post_install(\n      installer,\n      '../node_modules/react-native',\n    )\n  end\nend\n`;
+  const updated = _internal.addExpoLynxPostInstall(podfile);
+
+  assert.match(updated, /\['Lynx', 'BaseDevtool', 'LynxDevtool', 'LynxService', 'XElement'\]/);
+  assert.match(updated, /CLANG_CXX_LANGUAGE_STANDARD'\] = 'gnu\+\+20'/);
+});
+
+test('disables the header map for ServalSVG and ServalMarkdown in the post-install hook', () => {
+  // Regression test: without USE_HEADERMAP=NO, ServalSVG's / ServalMarkdown's
+  // plain `#include "stdlib.h"` / `#include "stdio.h"` resolves through
+  // Xcode's project-wide header map to ReactNativeDependencies' bundled
+  // folly/portability/{Stdlib,Stdio}.h instead of the real system header —
+  // confirmed by a real `xcodebuild`, which failed with "'folly/CPortability.h'
+  // file not found" (then "'cstdio' file not found") from inside that shim
+  // until this setting was added to each target in turn.
+  const podfile = `target 'Example' do\n  post_install do |installer|\n    react_native_post_install(\n      installer,\n      '../node_modules/react-native',\n    )\n  end\nend\n`;
+  const updated = _internal.addExpoLynxPostInstall(podfile);
+
+  assert.match(updated, /\['ServalSVG', 'ServalMarkdown'\]/);
+  assert.match(updated, /USE_HEADERMAP'\] = 'NO'/);
+});
+
+test('adds the precompiled Lynx :path pod, right before use_expo_modules!', () => {
+  const podfile = `target 'Example' do\n  use_expo_modules!\nend\n`;
+  const updated = _internal.addExpoLynxPrecompiledPod(podfile);
+
+  const precompiledPath = path.join(__dirname, 'ios', 'Precompiled');
+  assert.ok(updated.includes(`pod 'Lynx', :path => '${precompiledPath}'`));
+  assert.ok(updated.indexOf("pod 'Lynx'") < updated.indexOf('use_expo_modules!'));
+});
+
+test('does not duplicate the precompiled Lynx pod on a second, non-clean prebuild', () => {
+  const podfile = `target 'Example' do\n  use_expo_modules!\nend\n`;
+  const once = _internal.addExpoLynxPrecompiledPod(podfile);
+  const twice = _internal.addExpoLynxPrecompiledPod(once);
+
+  assert.equal(once, twice);
+  assert.equal((twice.match(/pod 'Lynx', :path/g) ?? []).length, 1);
+});
+
+test('removes the precompiled Lynx :path pod when devTool is toggled on', () => {
+  // Regression test: LynxDevtool is source-built and needs Lynx's full
+  // nested C++ header tree (see addExpoLynxPrecompiledPod's comment) — a
+  // stale :path override from a prior devTool:false prebuild must not
+  // survive into a devTool:true one.
+  const podfile = `target 'Example' do\n  use_expo_modules!\nend\n`;
+  const withPrecompiled = _internal.addExpoLynxPrecompiledPod(podfile);
+  const removed = _internal.removeExpoLynxPrecompiledPod(withPrecompiled);
+
+  assert.doesNotMatch(removed, /pod 'Lynx', :path/);
+  assert.match(removed, /use_expo_modules!/);
+});
+
 test('adds LynxService/Devtool scoped to Debug only, right before use_expo_modules!', () => {
   const podfile = `target 'Example' do\n  pod 'Lynx'\n  use_expo_modules!\n\n  config = use_native_modules!\nend\n`;
   const updated = _internal.addExpoLynxDevtoolPod(podfile);
@@ -41,13 +135,34 @@ test('adds LynxService/Devtool scoped to Debug only, right before use_expo_modul
   assert.ok(updated.indexOf("pod 'LynxService/Devtool'") < updated.indexOf('use_expo_modules!'));
 });
 
-test('does not duplicate the devtool pod on a second, non-clean prebuild', () => {
+test('also scopes LynxDevtool, BaseDevtool, and DebugRouter to Debug — :configurations does not propagate to transitive deps', () => {
+  // Regression test: CocoaPods only restricts the exact pod line it's
+  // attached to. Scoping LynxService/Devtool alone still links its
+  // dependencies (LynxDevtool, BaseDevtool, DebugRouter) into Release —
+  // confirmed by inspecting a real `pod install`'s generated
+  // Pods-*.release.xcconfig, which had `-lLynxDevtool -lBaseDevtool
+  // -lDebugRouter` in OTHER_LDFLAGS despite the Debug-only devtool line.
+  const podfile = `target 'Example' do\n  use_expo_modules!\nend\n`;
+  const updated = _internal.addExpoLynxDevtoolPod(podfile);
+
+  for (const line of [
+    "pod 'LynxDevtool', '4.1.0', :configurations => ['Debug']",
+    "pod 'BaseDevtool', '4.1.0', :configurations => ['Debug']",
+    "pod 'DebugRouter', '5.0.15', :configurations => ['Debug']",
+  ]) {
+    assert.ok(updated.includes(line), `expected Podfile to include: ${line}`);
+  }
+});
+
+test('does not duplicate the devtool pods on a second, non-clean prebuild', () => {
   const podfile = `target 'Example' do\n  use_expo_modules!\nend\n`;
   const once = _internal.addExpoLynxDevtoolPod(podfile);
   const twice = _internal.addExpoLynxDevtoolPod(once);
 
   assert.equal(once, twice);
-  assert.equal((twice.match(/pod 'LynxService\/Devtool'/g) ?? []).length, 1);
+  for (const name of ['LynxService/Devtool', 'LynxDevtool', 'BaseDevtool', 'DebugRouter']) {
+    assert.equal((twice.match(new RegExp(`pod '${name}'`, 'g')) ?? []).length, 1, name);
+  }
 });
 
 test('re-merges the devtool pod when the pinned version changes on a later prebuild', () => {
@@ -69,6 +184,41 @@ test('re-merges the devtool pod when the pinned version changes on a later prebu
   assert.match(updated, /pod 'LynxService\/Devtool', '4\.1\.0'/);
   assert.doesNotMatch(updated, /'4\.0\.0'/);
   assert.equal((updated.match(/pod 'LynxService\/Devtool'/g) ?? []).length, 1);
+});
+
+test('removes a previously injected devtool pod when devTool is toggled off', () => {
+  const podfile = `target 'Example' do\n  use_expo_modules!\nend\n`;
+  const withDevtool = _internal.addExpoLynxDevtoolPod(podfile);
+  const removed = _internal.removeExpoLynxDevtoolPod(withDevtool);
+
+  assert.doesNotMatch(removed, /pod 'LynxService\/Devtool'/);
+  assert.match(removed, /use_expo_modules!/);
+});
+
+test('removing the devtool pod is a no-op when it was never injected', () => {
+  const podfile = `target 'Example' do\n  use_expo_modules!\nend\n`;
+  const removed = _internal.removeExpoLynxDevtoolPod(podfile);
+
+  assert.equal(removed, podfile);
+});
+
+test('devTool is accepted alongside V2 embeddedBundlesPath options', () => {
+  assert.doesNotThrow(() =>
+    _internal.validateV2Options({
+      embeddedBundlesPath: './embedded',
+      publicKeyPath: './updates.public.pem',
+      devTool: false,
+    })
+  );
+});
+
+test('resolveDevToolOption defaults to true and validates the type', () => {
+  assert.equal(_internal.resolveDevToolOption({}), true);
+  assert.equal(_internal.resolveDevToolOption({ devTool: true }), true);
+  assert.equal(_internal.resolveDevToolOption({ devTool: false }), false);
+  assert.throws(() => _internal.resolveDevToolOption({ devTool: 'yes' }), {
+    message: 'expo-lynx-view devTool must be a boolean.',
+  });
 });
 
 test('prefers precompiled ExpoImage in both app configurations without changing sibling targets', () => {

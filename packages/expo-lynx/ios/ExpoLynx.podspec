@@ -9,19 +9,19 @@ Pod::Spec.new do |s|
   s.source         = { git: '' }
   s.static_framework = true
 
-
   s.dependency 'ExpoModulesCore'
-  # Managed delivery uses MMKV for its tiny synchronous boot-state snapshot;
-  # it does not share an MMKV instance with React Native. Keep this range on
-  # 2.x so the host resolves one compatible MMKVCore for the whole app target.
   s.dependency 'MMKV', '>= 2.4.0', '< 3.0'
   s.dependency 'Lynx/Framework', '4.1.0'
   s.dependency 'PrimJS/quickjs', '4.1.1'
   s.dependency 'PrimJS/napi', '4.1.1'
   s.dependency 'LynxService/Http', '4.1.0'
-  # Do not add LynxService/Devtool or LynxService/Log here. CocoaPods applies
-  # podspec dependencies to every build configuration, so a "Debug" option
-  # would still link DebugRouter into production hosts.
+  s.dependency 'XElement', '4.1.0'
+  # Do not add LynxService/Devtool, LynxDevtool, or DebugRouter here. CocoaPods
+  # applies podspec dependencies to every build configuration, so even a
+  # "Debug"-labeled option would still link DebugRouter into Release hosts.
+  # DevTool is wired up Debug-only in the consuming app's Podfile instead, via
+  # app.plugin.js's addExpoLynxDevtoolPod (see LynxEnv devtool setup in
+  # ExpoLynxModule.swift). https://lynxjs.org/guide/start/integrate-lynx-devtool.html?platform=ios
   s.dependency 'SDWebImage'
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {
@@ -39,7 +39,16 @@ Pod::Spec.new do |s|
   s.module_name = 'ExpoLynx'
   s.header_dir = 'ExpoLynx'
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
-  s.exclude_files = "tests/**/*"
+  # Precompiled/ ships Lynx.xcframework's own bundled headers (e.g.
+  # LynxPerformanceController.h) alongside this podspec's real sources, at
+  # this same podspec's root. The unscoped glob above sweeps them in too,
+  # so ExpoLynx's own target ends up compiling a second copy of every Lynx
+  # framework header — "duplicate interface definition for class
+  # LynxPerformanceController" — regardless of whether the Podfile points
+  # `Lynx` at this same xcframework or resolves it from source. Confirmed
+  # with a real `xcodebuild`: the duplicate only stopped once Precompiled/**
+  # was excluded here.
+  s.exclude_files = ["tests/**/*", "Precompiled/**/*"]
   s.public_header_files = [
     'ExpoLynx.h',
     'FastImage/LynxFastImageViewProtocol.h',

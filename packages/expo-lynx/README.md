@@ -37,6 +37,20 @@ This module contains native code and does not work in Expo Go. The iOS deploymen
 
 The config plugin keeps Lynx's CocoaPods target on its required GNU C++ dialect, applies the Xcode 26 warning compatibility flags, and can copy static Lynx bundles into the iOS application bundle. Run prebuild again after changing the plugin configuration.
 
+By default the plugin adds `LynxService/Devtool` to the iOS Podfile, scoped to `:configurations => ['Debug']` — it's compiled into Debug builds only and excluded from Release, so [Lynx DevTool](https://lynxjs.org/guide/start/integrate-lynx-devtool.html?platform=ios) works out of the box in development. Set `devTool: false` to opt out entirely (e.g. to skip DebugRouter/LynxDevtool even in Debug builds):
+
+```json
+{
+  "expo": {
+    "plugins": [["expo-lynx-view", { "devTool": false }]]
+  }
+}
+```
+
+Run `npx expo prebuild --platform ios` again after changing this — it takes effect on the next `pod install`, not retroactively on an existing `Pods/` install.
+
+`devTool` also decides how `Lynx` itself is resolved on iOS. With `devTool: false` (default), `Lynx` is pinned to the prebuilt `ios/Precompiled/Lynx.xcframework` for fast builds. `LynxDevtool` is built from source and reaches into Lynx's internal C++ headers by their nested source path (e.g. `#include "base/include/value/base_value.h"`) — a compiled `.framework` flattens headers into one directory and can't provide that, so with `devTool: true` the plugin skips the `:path` override and lets `Lynx` resolve from source instead, satisfying those includes at the cost of a slower Debug build. Release builds are unaffected either way.
+
 ## Use
 
 ```tsx
